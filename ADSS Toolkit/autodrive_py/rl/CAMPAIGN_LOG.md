@@ -139,6 +139,11 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - Overnight already Continue-restored and learning (~376k @ ~04:15; lock ~19244 / parent ~53852) — no new Continue this tick.
 - Nested tick handler cannot `resume` standing Researcher/personalities (parent mismatch); **parent** must resume board + Orchestrator for this wake (Orchestrator may already be mid-run).
 
+### ~04:26 — Tick #2 (PID 12004)
+
+- Sentinel fired again; loop alive; overnight still **53852/19244**.
+- Spawned fresh board+orchestrator wave agent (standing resume blocked by parent mismatch from nested handler).
+
 ### ~04:22 — Continuous commit+push mandate (orchestrator note)
 
 - User: **commit+push continuously through the night when stable** — not only once.
@@ -158,6 +163,13 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Shipped / Tests
+
+### ~04:25 — Tick 0 MUST ships (audit / refuse / A/B / Continue)
+- **Overnight lock audit:** code+preset+live config sacred floors PASS (select≥220, eval≥50k, warmup≥2, min_ts≥100k; allow flags false). Soak left running (~495k validating).
+- **Holdout refuse:** `assert_train_safe` + CLI `train_ppo` map2/map3 exit=2 + `start_guard` Refuse Start; seals OK.
+- **Collision-first A/B:** disposable `tick0_ab2_{base,cf}_20260917_040725` Dummy/cpu 24 576; flag wired; crash_rate mid-run 0.0 both → no crashΔ yet at this budget.
+- **Continue proof:** disposable base resume same `run_id` 24576→48128; overnight not used for demo.
+- **FTGΔ:** official_v2 PPO eval of overnight `best_model.zip` still running (read-only); will append leaderboard + Δ vs FTG 198.16 when complete.
 
 ### ~04:20 — W7 UI bot allowlist + B0.1 wrong-map refuse
 - **Board:** `20260917-W7-ui-bot` behind MUST/bugfix P0.

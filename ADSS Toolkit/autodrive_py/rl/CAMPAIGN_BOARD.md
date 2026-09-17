@@ -11,6 +11,24 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — Tick 0 MUST ships (orchestrator implementer) — 2026-09-17 ~04:25 America/Chicago
+- **id:** `20260917-tick0-must-ships`
+- **type:** result / implement
+- **amends:** Tick 0 board MUST 1–5 + W2 SHIP order
+- **overnight:** observe-only — did **not** kill `overnight_soak_20260917_082739`; left Continue PIDs ~53852/19244; live ~495k validating @ ~04:24
+
+| # | Item | Result |
+| - | ---- | ------ |
+| 1 | Overnight lock audit | **PASS** — `ui_ops` select=220, eval floor=50k, warmup=2, min_ts=100k; live `config.json` mirrors (unlimited, patience=5, allow_holdout/validation=false, collision_first=false). `AUDIT_PASS`. |
+| 2 | Holdout refuse smoke | **PASS** — `assert_train_safe` map2/map3 raises; `train_ppo --map map2|map3` exit=2; `start_guard` Refuse Start; seals intact. |
+| 3 | Collision-first A/B | **PASS (wiring)** / **inconclusive crashΔ** — disposable Dummy CPU twins `tick0_ab2_base_20260917_040725` vs `tick0_ab2_cf_*` @ 24 576 ts; `collision_first` false/true in config; mid-run `crash_rate_estimate=0.0` both (stall-heavy early policy). No overnight morph. |
+| 4 | Official FTGΔ | **IN FLIGHT** — read-only `eval_cli --official --policy ppo --model …/best_model.zip` (best @ 50k val finisher 181.75 s map3); stdout buffered until exit; FTG pin 198.16 s. Append PPO `official_v2` row + Δ when process exits. |
+| 5 | Continue soak proof | **PASS (disposable)** — `tick0_ab2_base_*` Stop→`--resume` same `run_id`: timesteps **24576 → 48128**; overnight untouched. |
+
+**Do not:** treat mid-train 220 s val as official; Quiet `--allow-holdout`; kill overnight to demo Continue.
+
+---
+
 ## W8 — Multi-run Control UI (soft) — ~04:22 America/Chicago
 - **id:** `20260917-W8-multi-run-ui`
 - **type:** tick / wave (user soft suggestion)
