@@ -136,6 +136,15 @@ obs_dim = N + 6 = 186 (default)
 
 **v1 LiDAR-only (+prev action) zips are obsolete** — do not load them into a v2 env. Reward shaping may still use map GT / collisions **during training only**; that does not change the observation vector.
 
+### Bridge-readiness (observe — Phase 3 later)
+
+Gym work must stay bridge-compatible (see `CAMPAIGN_RESEARCH.md` §5). This window: **document only** — no Jetson / latency / `:4567` product until sealed holdout beat-FTG.
+
+- Freeze contracts `2.0.0` (obs dim / beams) — refuse-load on mismatch.
+- Shaping may use GT; **race obs may not** (no IPS/pose/progress channels “for gym wins”).
+- Keep light LiDAR DR; do not invent a second DR stack.
+- Bridge `:4567` = Phase 3 after holdout podium — not overnight chrome.
+
 ## Phase index
 
 | Phase | Goal | Pass criteria |

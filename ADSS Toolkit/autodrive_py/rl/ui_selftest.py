@@ -593,7 +593,8 @@ def test_http_surface() -> None:
         check("index has soft-stop Continue hint", "Soft-stop" in html or "complete" in html.lower())
         check(
             "index build stamp bumped",
-            'id="ui_build"' in html and ("w4-auto-train" in html or "w3-ux-soft" in html or "20260917" in html),
+            'id="ui_build"' in html
+            and ("w6-sug-wave1" in html or "w4-auto-train" in html or "w3-ux-soft" in html or "20260917" in html),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
         )
         check(
@@ -602,7 +603,17 @@ def test_http_surface() -> None:
             and "timesteps" in html
             and "adjusted_time" in html
             and "holdout" in html.lower()
-            and "Validating" in html,
+            and "Validating" in html
+            and "collision-first" in html
+            and "speed-gate" in html
+            and "train_ok" in html
+            and "400s" in html,
+        )
+        check(
+            "index has bridge-readiness card",
+            'id="bridge_card"' in html
+            and "2.0.0" in html
+            and ("RESEARCH" in html or "Phase 3" in html or "P3" in html),
         )
 
         st = _http(base, "/api/status")

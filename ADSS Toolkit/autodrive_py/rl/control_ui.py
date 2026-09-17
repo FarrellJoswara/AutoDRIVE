@@ -632,11 +632,76 @@ def _invalidate_ext_train_cache() -> None:
     _ext_train_cache_val = None
 
 
+def _preferred_operator_run_id() -> str | None:
+    """Optional operator pin (logs/CURRENT_RUN.txt) — used when several trains run."""
+    pin = LOGS_DIR / "CURRENT_RUN.txt"
+    try:
+        text = pin.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
+def _live_timesteps_for_run(run_id: str | None) -> int:
+    if not run_id:
+        return -1
+    live = read_live_status(RUNS_DIR / run_id / "live_status.json") or {}
+    try:
+        return int(live.get("timesteps") or -1)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _score_external_train_hit(
+    *,
+    pid: int,
+    run_guess: str | None,
+    cmd: str,
+    is_leaf: bool,
+    preferred_run: str | None,
+) -> tuple:
+    """Rank competing train_ppo PIDs so short A/B smokes don't eclipse overnight.
+
+    Higher tuple wins. Prefer: CURRENT_RUN pin → highest live timesteps →
+    --resume / --unlimited → leaf worker (skip VecEnv parents) → lower pid.
+    """
+    pin_hit = 1 if preferred_run and run_guess == preferred_run else 0
+    ts = _live_timesteps_for_run(run_guess)
+    resume = 1 if "--resume" in cmd else 0
+    unlimited = 1 if "--unlimited-timesteps" in cmd else 0
+    leaf = 1 if is_leaf else 0
+    return (pin_hit, ts, resume, unlimited, leaf, -pid)
+
+
+def _pick_best_external_hit(
+    hits: list[tuple[int, str | None, str, bool]],
+) -> tuple[int, str | None] | None:
+    """hits: (pid, run_guess, cmd, is_leaf)."""
+    if not hits:
+        return None
+    preferred = _preferred_operator_run_id()
+    best = max(
+        hits,
+        key=lambda h: _score_external_train_hit(
+            pid=h[0],
+            run_guess=h[1],
+            cmd=h[2],
+            is_leaf=h[3],
+            preferred_run=preferred,
+        ),
+    )
+    return best[0], best[1]
+
+
 def _find_external_train(*, force: bool = False) -> tuple[int, str | None] | None:
     """Return (pid, run_id_guess) for a live train_ppo not owned by this UI, else None.
 
     Cached briefly so /api/status (0.75s poll) does not spawn PowerShell every time
     when psutil is missing — that was stalling the UI and aborting responses.
+
+    When several train_ppo processes exist (overnight + short A/B smokes), prefer the
+    operator pin / highest live_status timesteps / --resume rather than arbitrary
+    process-iteration order (which previously made the UI look like a ~6k reset).
     """
     global _ext_train_cache_ts, _ext_train_cache_val
     now = time.time()
@@ -657,7 +722,7 @@ def _find_external_train(*, force: bool = False) -> tuple[int, str | None] | Non
         psutil = None  # type: ignore[assignment]
 
     if psutil is not None:
-        hits: list[tuple[int, str | None, object]] = []
+        hits_raw: list[tuple[int, str | None, str, object]] = []
         for p in psutil.process_iter(["pid", "cmdline"]):
             try:
                 cmd_list = p.info.get("cmdline") or []
@@ -679,20 +744,20 @@ def _find_external_train(*, force: bool = False) -> tuple[int, str | None] | Non
                     run_guess = cmd_list[cmd_list.index("--run_id") + 1]
                 except (ValueError, IndexError):
                     pass
-            hits.append((pid, run_guess, p))
-        if hits:
-            hit_pids = {h[0] for h in hits}
-            for pid, run_guess, p in hits:
+            hits_raw.append((pid, run_guess, cmd, p))
+        if hits_raw:
+            hit_pids = {h[0] for h in hits_raw}
+            scored: list[tuple[int, str | None, str, bool]] = []
+            for pid, run_guess, cmd, p in hits_raw:
+                is_leaf = True
                 try:
                     child_pids = {c.pid for c in p.children(recursive=False)}
                     if child_pids & hit_pids:
-                        continue
+                        is_leaf = False
                 except (psutil.Error, TypeError):
                     pass
-                result = (pid, run_guess)
-                break
-            else:
-                result = (hits[0][0], hits[0][1])
+                scored.append((pid, run_guess, cmd, is_leaf))
+            result = _pick_best_external_hit(scored)
         _ext_train_cache_ts = time.time()
         _ext_train_cache_val = result
         return result
@@ -714,7 +779,9 @@ def _find_external_train(*, force: bool = False) -> tuple[int, str | None] | Non
                     "  $_.CommandLine -like '*rl.train_ppo*' -and "
                     "  $_.CommandLine -notlike '*control_ui*' -and "
                     "  $_.CommandLine -notlike '*spawn_main*' "
-                    "} | Select-Object -ExpandProperty ProcessId"
+                    "} | ForEach-Object { "
+                    "  \"$($_.ProcessId)`t$($_.CommandLine)\" "
+                    "}"
                 ),
             ],
             capture_output=True,
@@ -725,43 +792,25 @@ def _find_external_train(*, force: bool = False) -> tuple[int, str | None] | Non
         _ext_train_cache_ts = time.time()
         _ext_train_cache_val = None
         return None
-    pids: list[int] = []
+    scored: list[tuple[int, str | None, str, bool]] = []
     for line in (ps.stdout or "").splitlines():
         line = line.strip()
-        if line.isdigit():
-            pid = int(line)
-            if owned is not None and pid == owned:
-                continue
-            pids.append(pid)
-    if not pids:
-        _ext_train_cache_ts = time.time()
-        _ext_train_cache_val = None
-        return None
-    # Prefer largest PID group member with highest WorkingSet if possible; else first.
-    pid = pids[-1] if len(pids) > 1 else pids[0]
-    run_guess = None
-    try:
-        detail = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        cl = (detail.stdout or "").strip()
-        if "--run_id" in cl:
-            parts = cl.split()
-            for i, tok in enumerate(parts):
-                if tok == "--run_id" and i + 1 < len(parts):
-                    run_guess = parts[i + 1].strip("\"'")
-                    break
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    result = (pid, run_guess)
+        if not line or "\t" not in line:
+            continue
+        pid_s, cl = line.split("\t", 1)
+        if not pid_s.isdigit():
+            continue
+        pid = int(pid_s)
+        if owned is not None and pid == owned:
+            continue
+        run_guess = None
+        parts = cl.split()
+        for i, tok in enumerate(parts):
+            if tok == "--run_id" and i + 1 < len(parts):
+                run_guess = parts[i + 1].strip("\"'")
+                break
+        scored.append((pid, run_guess, cl, True))
+    result = _pick_best_external_hit(scored)
     _ext_train_cache_ts = time.time()
     _ext_train_cache_val = result
     return result
@@ -1406,7 +1455,7 @@ def _track_timesteps(timesteps: int | None) -> tuple[int | None, float | None]:
 
 
 def _status_payload() -> dict:
-    global _last_exit_code
+    global _last_exit_code, _train_run_id, _train_log
 
     with _state_lock:
         proc = _train_proc
@@ -1428,13 +1477,21 @@ def _status_payload() -> dict:
     train_alive = bool(proc is not None and proc.poll() is None)
     train_pid = proc.pid if proc and train_alive else None
     # UI may have been restarted while train_ppo kept going — still report RUNNING.
+    # Always sync run_id to the preferred external train (highest timesteps /
+    # CURRENT_RUN pin) so a short A/B smoke cannot stick the banner on ~6k.
     if not train_alive:
         ext = _find_external_train()
         if ext is not None:
             train_alive = True
             train_pid, run_guess = ext
-            if run_id is None and run_guess:
+            if run_guess:
                 run_id = run_guess
+                with _state_lock:
+                    _train_run_id = run_guess
+                    cand = LOGS_DIR / f"{run_guess}.log"
+                    if cand.is_file():
+                        _train_log = cand
+                        log = str(cand)
 
     tb_ui = bool(tb is not None and tb.poll() is None)
     tb_port = _port_in_use(TB_HOST, TB_PORT)
@@ -1600,7 +1657,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w4-auto-train-thin-20260917"
+UI_BUILD = "w7-ui-bot-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1612,7 +1669,9 @@ body{font-family:Consolas,monospace;margin:16px;background:#111;color:#ddd;max-w
 h1{font-size:18px;color:#8f8;letter-spacing:0.02em} button{margin:4px 4px 4px 0;padding:8px 12px;font:inherit;cursor:pointer;border-radius:3px;border:1px solid #555;background:#2a2a2a;color:#eee}
 button:hover{border-color:#7a7;background:#303830}
 input,select{font:inherit;padding:4px;margin:2px 8px 2px 0;background:#222;color:#eee;border:1px solid #555;border-radius:2px}
-.row{margin:10px 0} .box{border:1px solid #444;padding:12px;margin:12px 0;background:#1a1a1a;border-radius:3px}
+.row{margin:10px 0} .box{border:1px solid #444;padding:12px;margin:14px 0;background:#1a1a1a;border-radius:3px}
+.sec{font-size:13px;font-weight:bold;color:#cde;margin:0 0 8px 0;padding-bottom:4px;border-bottom:1px solid #333;letter-spacing:0.01em}
+.sec .small{font-weight:normal;letter-spacing:0}
 .budget-row{border:1px solid #485;background:#152018;padding:8px 10px;margin:12px 0;border-radius:3px}
 .ok{color:#8f8} .bad{color:#f88} .warn{color:#fc8} label{display:inline-block;min-width:220px}
 .hint{color:#888;font-size:12px;margin:4px 0 0 0} input[type=range]{width:260px;vertical-align:middle}
@@ -1625,10 +1684,18 @@ input,select{font:inherit;padding:4px;margin:2px 8px 2px 0;background:#222;color
 a.tb{color:#8cf;font-size:15px;font-weight:bold}
 #train_toggle.running{background:#522;color:#fcc;border:1px solid #a44}
 #train_toggle.stopped{background:#253;color:#cfc;border:1px solid #484}
-#banner{font-size:16px;font-weight:bold;padding:8px 10px;border:1px solid #444;background:#181818;border-radius:3px}
+#banner{font-size:16px;font-weight:bold;padding:10px 12px;border:1px solid #444;background:#181818;border-radius:3px;border-left:4px solid #666}
+#banner_reason{font-size:13px;color:#ccc;margin-top:4px;padding-left:2px}
 .state-Learning{color:#8f8} .state-Idle{color:#aaa} .state-Saving{color:#8cf}
 .state-Validating{color:#8cf} .state-EarlyStop{color:#8cf}
 .state-Stopping{color:#fc8} .state-Stale{color:#fc8} .state-Crashed{color:#f88}
+#banner.state-Learning{background:#142018;border-left-color:#4a8;border-color:#355}
+#banner.state-Validating{background:#121820;border-left-color:#48c;border-color:#346}
+#banner.state-EarlyStop{background:#121820;border-left-color:#48c;border-color:#346}
+#banner.state-Saving{background:#121820;border-left-color:#48c;border-color:#346}
+#banner.state-Stopping,#banner.state-Stale{background:#1c1810;border-left-color:#c84;border-color:#543}
+#banner.state-Crashed{background:#201414;border-left-color:#c44;border-color:#533}
+#banner.state-Idle{background:#181818;border-left-color:#666}
 ul.coach{margin:6px 0 0 18px;padding:0;color:#cc9;font-size:13px}
 table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px}
 td,th{border:1px solid #333;padding:3px 5px;text-align:left;vertical-align:top}
@@ -1653,31 +1720,51 @@ details.glossary summary::before{content:"? ";color:#8cf}
     <dt>early-stop</dt>
     <dd>Quit when validation race score stops improving for N checks (patience). Patience 0 = only stop at timesteps / manual Stop.</dd>
     <dt>patience</dt>
-    <dd>How many no-improvement validation checks before EarlyStop. Overnight uses 5.</dd>
+    <dd>How many no-improvement validation checks before EarlyStop. Overnight uses 5. With budget OFF you <b>must</b> set patience &gt; 0 (otherwise nothing stops the run except the 50M hard abort).</dd>
+    <dt>budget OFF</dt>
+    <dd>Ignore timesteps as a stop — early-stop only. Pair with patience 3–5 + eval every ≥50k overnight. Not “train forever with no eval.”</dd>
+    <dt>collision-first</dt>
+    <dd>Heavier terminal collision penalty. Use short crash-first Starts before unlocking speed / long budgets. Does not morph a live overnight — new disposable run for A/B.</dd>
+    <dt>speed-gate</dt>
+    <dd>Hold speed reward until rolling crash rate is under the gate. Pair with collision-first on smokes; do not morph overnight mid-run.</dd>
+    <dt>race_eval_every</dt>
+    <dd>Mid-train validation cadence (timesteps). Sparse (e.g. 50k) = more learning, shorter Validating pauses. This is <b>not</b> official protocol (official stays 400s × 5 seeds). Do not densify overnight “to use the GPU.”</dd>
     <dt>adjusted_time</dt>
     <dd>Official race score: lap time + 10×collisions (seconds). Lower is better. Never use ep_rew for ranking.</dd>
+    <dt>train_ok</dt>
+    <dd>Map role safe to Start. Checklist: role=train_ok (not validation/holdout), pack fingerprint present, <code>assert_train_safe</code> would pass. Never auto-Start overnight from a checklist.</dd>
     <dt>holdout</dt>
     <dd>Sealed map reserved for fair final tests. Start refuses it unless you tick “allow sealed.”</dd>
     <dt>validation</dt>
-    <dd>Pinned mid-train race map / score used for early-stop. Banner <b>Validating</b> = this race is running (timesteps freeze briefly — not stuck).</dd>
+    <dd>Pinned mid-train race map / score used for early-stop. Banner <b>Validating</b> = scheduled race eval — not hung (timesteps freeze briefly).</dd>
     <dt>n_envs</dt>
     <dd>Parallel practice sims (CPU workers). Higher = faster data, more CPU. Watch shows this many twin cars.</dd>
     <dt>rollouts</dt>
     <dd>How many PPO data-collection batches finished. Rough “iteration” counter — not lap count.</dd>
     <dt>Validating</dt>
-    <dd>Mid-train official-style race eval. Freezes timesteps while it runs; promotes best_model / ticks patience.</dd>
+    <dd>Scheduled mid-train race eval (select≈220s spirit, 1 seed / validation map). Freezes timesteps; promotes best_model / ticks patience. Official leaderboard stays 400s × 5 seeds — never shorten those to “go faster.”</dd>
     <dt>EarlyStop</dt>
     <dd>Clean exit because learning plateaued (patience). Exit code 0 with a reason — not a crash.</dd>
     <dt>Watch lag-behind</dt>
-    <dd>Separate window replaying latest weights. Not live train poses; KPIs are unofficial.</dd>
+    <dd>Separate window replaying latest weights. Not live train poses; KPIs are unofficial. Compact strip = phase / crash% / ts|/s + race KPIs.</dd>
     <dt>fast probe</dt>
     <dd>Optional short NON-OFFICIAL progress sniff. Never promotes / never ticks patience. Leave off overnight.</dd>
   </dl>
 </details>
+<details class="glossary" id="bridge_card">
+  <summary>Bridge-readiness (observe only — P3)</summary>
+  <p class="hint" style="margin:8px 0 4px 0">Gym→AutoDRIVE transfer constraint (RESEARCH §5) — <b>document only this 9h</b>; no Jetson/latency/bridge code.</p>
+  <ul class="hint" style="margin:4px 0 8px 18px;padding:0">
+    <li>Freeze contracts <code>2.0.0</code> ABI (obs dim / beams) — refuse-load on mismatch.</li>
+    <li>Shaping may use map GT; <b>race obs may not</b> (no IPS/pose/progress-in-obs shortcuts).</li>
+    <li>Keep light LiDAR DR; do not invent a second DR stack for gym wins.</li>
+    <li>Bridge <code>:4567</code> = Phase 3 <b>after</b> sealed holdout beat-FTG — not this overnight.</li>
+  </ul>
+</details>
 <div class="box">
-  <div id="banner" class="state-Idle" title="What’s happening now: Idle / Learning / Validating / EarlyStop / Stopping / Crashed">Idle</div>
-  <div class="small" id="banner_reason">no trainer</div>
-  <div style="margin-top:8px"><b>Live train status</b> (from live_status.json — auto-refresh 0.75s)</div>
+  <div id="banner" class="state-Idle" title="Idle / Learning / Validating (= scheduled race eval — not hung) / EarlyStop / Stopping / Crashed. Mid-train Validating ≠ official 400s×5.">Idle</div>
+  <div class="small" id="banner_reason" title="When Validating: scheduled race eval — not hung. Official protocol stays 400s / 5 seeds — do not densify overnight.">no trainer</div>
+  <div class="sec" style="margin-top:8px">Live train status <span class="small">(from live_status.json — auto-refresh 0.75s)</span></div>
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
   <div>run_id: <b id="rid">-</b></div>
@@ -1698,10 +1785,11 @@ details.glossary summary::before{content:"? ";color:#8cf}
   Watch follow defaults: <code>--every 8 --compact</code> (snappier on weak machines; denser overlay via <code>--no-compact</code>).</p>
 </div>
 <div class="box">
-  <div><b>Coach / health</b> <span class="small">(heuristics — official ranking is <span class="term" title="Lap time + 10×collisions; lower is better.">adjusted_time</span>, never ep_rew)</span></div>
+  <div class="sec">Coach / health <span class="small">(heuristics — official ranking is <span class="term" title="Lap time + 10×collisions; lower is better.">adjusted_time</span>, never ep_rew)</span></div>
   <ul class="coach" id="coach"><li>—</li></ul>
 </div>
 <div class="box">
+  <div class="sec">Train controls</div>
   <div class="row"><label>Map</label></div>
   <div class="maprow">
     <div class="mapsel">
@@ -1767,15 +1855,16 @@ details.glossary summary::before{content:"? ";color:#8cf}
   </div>
   <div class="row">
     <label for="race_eval_every"
-           title="Run a validation race-eval (and patience check) every N timesteps. 0 = auto (~10% of budget, floor 25k; ~25k when budget off) when patience &gt; 0; end-only when patience is 0. Higher N = fewer mid-train pauses. Banner Validating = mid-train race (not stuck).">Eval every N timesteps</label>
+           title="Run a validation race-eval (and patience check) every N timesteps. 0 = auto (~10% of budget, floor 25k; ~25k when budget off) when patience &gt; 0; end-only when patience is 0. Higher N = fewer mid-train pauses. Banner Validating = scheduled race eval — not hung. Official stays 400s×5 — do not densify overnight.">Eval every N timesteps</label>
     <input id="race_eval_every" type="number" value="0" min="0" step="1000" style="width:120px"
            oninput="schedulePreview()"
-           title="0 = auto when early-stop is on (~25k when budget off). Explicit e.g. 50000 = fewer pauses. Each eval briefly freezes timesteps (banner: Validating).">
+           title="0 = auto when early-stop is on (~25k when budget off). Overnight prefer 50000 (sparse). Each eval freezes timesteps (Validating ≠ hung). Official protocol still 400s × 5 seeds — never shorten those.">
   </div>
   <p class="hint">Stop when done learning: after N validation race-score checks with no <b>meaningful</b> improvement
   (finishers: ≥ Min improvement s; DNFs: any progress-first key gain). Overnight: patience <b>5</b>, eval every <b>50k</b>,
   mid-train timeout <b>~220s</b> (laps need ~180–210s), warmup so first validations never abort.
-  Banner <b>Validating</b> = mid-train race (not stuck); <b>EarlyStop</b> = clean exit 0 with reason.</p>
+  Banner <b>Validating</b> = scheduled race eval — not hung; <b>EarlyStop</b> = clean exit 0 with reason.
+  Official leaderboard stays <b>400s × 5 seeds</b> — denser mid-train eval starves learning; never lower official timeouts.</p>
 
   <div class="row">
     <label for="n_envs" title="How many parallel practice sims (CPU workers). Higher = faster data collection, more CPU. Watch follow opens this many colored twin cars.">Parallel sims / CPU workers</label>
@@ -1838,7 +1927,7 @@ details.glossary summary::before{content:"? ";color:#8cf}
   If it ignores keys (Windows focus quirk), press <b>Stop Watch</b> here to kill all watch processes.</p>
 </div>
 <div class="box">
-  <div><b>Models</b> <span class="small">(Continue resumes the last complete checkpoint under the same run_id)</span></div>
+  <div class="sec">Models <span class="small">(Continue resumes the last complete checkpoint under the same run_id)</span></div>
   <div id="race_candidate" class="small">recommended: -</div>
   <div class="row">
     <button type="button" onclick="loadModels()">Refresh models</button>
@@ -1847,8 +1936,8 @@ details.glossary summary::before{content:"? ";color:#8cf}
   <div id="models_tbl">loading…</div>
 </div>
 <div class="box">
-  <div>TensorBoard: <span id="tbst">?</span>
-    <span id="tbpid"></span></div>
+  <div class="sec">TensorBoard <span id="tbst">?</span>
+    <span id="tbpid" class="small"></span></div>
   <div class="row">
     <a class="tb" id="tburl" href="http://127.0.0.1:6006/" target="_blank" rel="noopener"
        onclick="return openTensorBoard(event)">Open TensorBoard</a>

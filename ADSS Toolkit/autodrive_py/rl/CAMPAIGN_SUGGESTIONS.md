@@ -46,7 +46,7 @@
   - Default `compact` overlay to race KPIs + honesty banners only; hide dense timestep/FPS rows behind expand.
   - Keep train headless; Watch stays separate process; `test_watch_overlay` must stay green.
 - **risks / refuse:** No embed-in-Control; no ghost/seasons; no auto-open on Start.
-- **triage:** SHIP (bundle W3 Watch compact / `--every`; free hands)
+- **triage:** DONE (W3 compact/`--every` + W6 polish: compact train line = phase|ts|/s|crash%)
 - **board:** `20260917-W6-suggestion-bot`
 
 #### S-20260917-W6-02 — Reward / curriculum plain-language clarity
@@ -57,7 +57,7 @@
   - Extend Control `title=` / glossary drawer: collision-first, speed-gate, race_eval_every vs official, patience vs budget-OFF.
   - One-line status gloss when `phase=validating` (“scheduled race eval — not hung”).
 - **risks / refuse:** No reward mutation API; no mid-overnight flag morph; sacred floors stay worded honestly.
-- **triage:** SHIP (bundle W3 glossary; no reward API)
+- **triage:** DONE (W3 glossary base + W6 glossary/titles + Validating banner gloss)
 - **board:** `20260917-W6-suggestion-bot`
 
 #### S-20260917-W6-03 — Map curriculum unlock checklist (train_ok only)
@@ -68,7 +68,7 @@
   - UI/CLI checklist: map role (`train_ok` / validation / holdout), fingerprint present, `assert_train_safe` would pass.
   - Optional: print next suggested train_ok id from pack — never auto-Start overnight.
 - **risks / refuse:** No mapgen inside `step`; no sealed-id train; no dual-Start while soak live.
-- **triage:** DEFER product UI — SHIP glossary bullets OK
+- **triage:** DEFER product UI — DONE glossary bullets (`train_ok` checklist copy); no auto-Start
 - **board:** `20260917-W6-suggestion-bot`
 
 #### S-20260917-W6-04 — Eval wall-clock honesty (sparse mid-train reminder)
@@ -79,7 +79,7 @@
   - Status/tooltip: last validating duration + “official stays 400s / 5 seeds — do not densify overnight.”
   - Document-only or tiny preview: mid-train = 1 seed × validation map spirit (already in RaceBest) — no timeout shorten.
 - **risks / refuse:** Never lower `select_timeout` / official 400; never drop `eval_spawn_jitter`; no “faster = official.”
-- **triage:** SHIP tooltip/status only — SKIP denser overnight eval
+- **triage:** DONE tooltip/status/glossary only — SKIP denser overnight eval / timeout shorten
 - **board:** `20260917-W6-suggestion-bot`
 
 #### S-20260917-W6-05 — Bridge-readiness constraint card (transfer observe)
@@ -90,5 +90,5 @@
   - Short Control/docs card: freeze ABI; shaping may use GT, race obs may not; bridge `:4567` = P3 after sealed holdout beat-FTG.
   - Cite RESEARCH §5 transfer note — **no** Jetson/latency/bridge code.
 - **risks / refuse:** Document-only this window; Block any obs-dim morph or IPS/pose-in-obs “for gym wins.”
-- **triage:** SHIP document-only — SKIP bridge/Jetson code
+- **triage:** DONE document-only (Control `#bridge_card` + README note) — SKIP bridge/Jetson code
 - **board:** `20260917-W6-suggestion-bot`

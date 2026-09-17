@@ -4,8 +4,8 @@
 
 **Scope:** Process only. This file does not implement product features.
 
-**Companion artifacts:** [`CAMPAIGN_BOARD.md`](CAMPAIGN_BOARD.md) (append-only ship permission); [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (soft idea inbox); [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md) (stable-core bugfix/perf).  
-**Hard rule:** **No ship without a board entry** for that chunk (proposal → research → votes → ship/skip). Soft suggestions are **not** ship permission.
+**Companion artifacts:** [`CAMPAIGN_BOARD.md`](CAMPAIGN_BOARD.md) (append-only ship permission); [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (soft idea inbox); [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md) (stable-core bugfix/perf); [`CAMPAIGN_UI.md`](CAMPAIGN_UI.md) (UI seat — incremental Control/Watch chrome).  
+**Hard rule:** **No ship without a board entry** for that chunk (proposal → research → votes → ship/skip). Soft suggestions are **not** ship permission. Allowlisted UI chrome may auto-approve only as defined under the UI seat (still logged + `ui_selftest`).
 
 ---
 
@@ -19,6 +19,7 @@
 | **Reliability** | Overnight / train safety? | Protects Continue, early-stop defaults, dual-writer refuse, seals | Touches live overnight without Continue plan; lowers sacred constants |
 | **Bugfix** (recurring duty) | Bugs + perf on **stable cores** that stick | Ranked finding in [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md); small overnight-safe fix | Auditing throwaway UI chrome / bridge stubs; large refactors mid-soak |
 | **Suggestion** | Invent **soft** ideas (UX / train / perf / pipeline / transfer); same tone as user W3/W4/W5 soft asks | Idea is optional, reversible, diverse, and filed to `CAMPAIGN_SUGGESTIONS.md` + a short board proposal | Mandates, auto-code, MUST override, overnight morph, sacred retune, SKIP-forever repeats (GPU theater, continuous outer, reward Discord, bridge product) |
+| **UI** (recurring duty) | Propose **1–3 SMALL** Control/Watch presentation increments; improve scan/clarity without redesign | Allowlisted chrome (tooltips, spacing, contrast, labels, glossary copy, compact polish) logged to `CAMPAIGN_UI.md` + `ui_selftest` green | New frameworks; embed Watch; Overnight sacred default retune; remove honesty banners; starve MUST / Bugfix P0 |
 | **Integrator / Orchestrator** | Ship gate only | **Researcher = Go** (or Conditional with conditions met) **and ≥2 of {Racer, Minimalist, Reliability} Approve** | Any seat **Block**; research **No-Go**; no board entry; shipping from suggestions inbox alone |
 
 Personality deep-dives (optional refresh, not required every tick):
@@ -54,6 +55,13 @@ Ticks with no candidate: still append a short **tick pulse** (see template) so c
 - **Does:** invent **3–7** soft ideas → append a wave to `CAMPAIGN_SUGGESTIONS.md` → open a short `CAMPAIGN_BOARD.md` proposal for triage.
 - **Does not:** implement code, override MUST order, Start/Continue/kill overnight, or treat soft ideas as mandates.
 - **Then:** Researcher + Racer + Minimalist + Reliability vote; Integrator marks **SHIP / DEFER / SKIP**; Orchestrator builds **SHIP only**.
+
+### UI seat in the board loop
+
+- **When:** each tick, **or every other tick** (avoid chrome spam).
+- **Does:** propose **1–3 SMALL** Control UI / Watch presentation increments → append to `CAMPAIGN_UI.md` → **auto-approve allowlist** (tooltips, spacing, contrast, labels, glossary copy, compact polish) **or** board mini-gate otherwise → bump `UI_BUILD` → run `python -m rl.ui_selftest`.
+- **Does not:** Gradio/React/new frameworks; embed Watch in browser; change Overnight sacred knob defaults; remove honesty / unofficial banners; Start/Continue/kill overnight; override MUST or Bugfix P0.
+- **Prior art:** W3 SHIP compact Watch + glossary; SKIP drastic reskin / embed. Thin same-DOM CSS only.
 
 ---
 
@@ -93,6 +101,7 @@ Integrator records: `SHIP` | `SKIP` | `DEFER` + one line.
 | `CAMPAIGN_GOVERNANCE.md` | This standing process (stable) |
 | `CAMPAIGN_BOARD.md` | Append-only dated entries; **source of truth for ship permission** |
 | `CAMPAIGN_SUGGESTIONS.md` | Soft idea inbox (Suggestion seat); **not** ship permission until board triage |
+| `CAMPAIGN_UI.md` | Incremental Control/Watch chrome proposals (UI seat); allowlist auto-approve or mini-gate; **not** redesign license |
 | `CAMPAIGN_BUGFIX.md` | Standing bugfix / perf findings on stable cores (Bugfix duty); fixes still need board entries |
 | `CAMPAIGN_LOG.md` | Operator narrative / protected run / backlog summary — may **point to** board ids, not replace them |
 | `CAMPAIGN_RESEARCH.md` / critique / `ideas_review/campaign_*.md` | Standing evidence; Researcher cites, does not rewrite every tick |
@@ -136,4 +145,5 @@ Integrator: SHIP | SKIP | DEFER — <one line> (need ≥2 Approve + research Go;
 ## Quick link for agents
 
 On `AGENT_LOOP_TICK` or before coding: open `CAMPAIGN_BOARD.md` → copy template → fill → gate → only then implement.  
-Suggestion seat: append soft wave to `CAMPAIGN_SUGGESTIONS.md` first, then board triage — never ship from the inbox alone.
+Suggestion seat: append soft wave to `CAMPAIGN_SUGGESTIONS.md` first, then board triage — never ship from the inbox alone.  
+UI seat: append increments to `CAMPAIGN_UI.md`; allowlist may ship with selftest; everything else needs mini-gate — never redesign from chat alone.

@@ -11,6 +11,21 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — W6 Wave 1 thin SHIP — 2026-09-17 ~04:20 America/Chicago
+- **id:** `20260917-W6-sug-wave1-ship`
+- **type:** result
+- **amends:** `20260917-W6-suggestion-bot`
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739`; no reward mutation; no denser eval / timeout shorten; no bridge code.
+- **S-01 Watch compact honesty strip:** **DONE** — W3 already shipped `--compact` / `--every 8`; W6 polish adds phase + crash% to compact train strip (lag-behind / unofficial banners unchanged).
+- **S-02 Reward/curriculum glossary:** **DONE** — glossary + titles for collision-first, speed-gate, race_eval_every vs official, budget OFF vs patience; Validating banner = “scheduled race eval — not hung”.
+- **S-03 Map checklist:** product UI still **DEFER**; glossary `train_ok` checklist bullets **DONE**.
+- **S-04 Eval wall-clock honesty:** **DONE** copy only (400s×5 / do-not-densify tooltips + hint); **SKIP** denser overnight eval.
+- **S-05 Bridge-readiness card:** **DONE** document-only (`#bridge_card` + README §); **SKIP** Jetson/bridge code.
+- **UI_BUILD:** `w6-sug-wave1-20260917`
+- **Tests:** `.venv` `python -m rl.test_watch_overlay`; `python -m rl.ui_selftest` (Stop mocked — do not sweep overnight).
+
+---
+
 ## STANDING — UI bot (Control / Watch presentation) — ~04:16 Chicago
 - **id:** `20260917-W7-ui-bot`
 - **type:** tick / wave (user soft suggestion — standing)
@@ -90,11 +105,11 @@ Append one entry per resume tick. Newest first.
 
 | Id | Idea | Gate |
 | -- | ---- | ---- |
-| S-20260917-W6-01 | Watch compact honesty strip | **SHIP** (bundle with W3 Watch compact / `--every`; free hands only) |
-| S-20260917-W6-02 | Reward / curriculum plain-language clarity | **SHIP** (bundle with W3 glossary; no reward API) |
-| S-20260917-W6-03 | Map curriculum unlock checklist | **DEFER** product UI — **SHIP** checklist copy as glossary bullets OK; no auto-Start |
-| S-20260917-W6-04 | Eval wall-clock honesty cue | **SHIP** tooltip/status copy only; **SKIP** timeout shorten / denser overnight eval |
-| S-20260917-W6-05 | Bridge-readiness constraint card | **SHIP** document-only (RESEARCH §5); **SKIP** bridge/Jetson code |
+| S-20260917-W6-01 | Watch compact honesty strip | **DONE** (W3 compact/`--every` + W6 phase|crash% strip) |
+| S-20260917-W6-02 | Reward / curriculum plain-language clarity | **DONE** (glossary + Validating gloss) |
+| S-20260917-W6-03 | Map curriculum unlock checklist | **DEFER** product UI — glossary bullets **DONE** |
+| S-20260917-W6-04 | Eval wall-clock honesty cue | **DONE** tooltip/status; **SKIP** denser eval |
+| S-20260917-W6-05 | Bridge-readiness constraint card | **DONE** document-only; **SKIP** bridge code |
 
 **Orchestrator:** implement Wave 1 **SHIP** items only as thin copy/overlay/glossary when free; leave DEFER/SKIP alone. Soft suggestion ≠ starve MUST #3 A/B or #4 FTGΔ.
 

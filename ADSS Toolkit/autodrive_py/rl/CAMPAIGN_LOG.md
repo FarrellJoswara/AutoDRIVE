@@ -149,6 +149,18 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Shipped / Tests
 
+### ~04:18 — “Reset to ~6k” false alarm (UI multi-train latch)
+- **Not a resume/SB3 bug.** Protected overnight `overnight_soak_20260917_082739` still live: Continue from `ppo_295480_steps.zip`, `reset_num_timesteps=False`, live_status **~395k** `phase=validating` (map3), ckpts through `ppo_395480_steps.zip`. Learning **not** lost.
+- **Cause:** campaign short A/B smokes (`cf_ab50k_*` ~12–16k, earlier `tick0_ab_*` ~5.6k) running beside overnight. `_find_external_train` picked first leaf `train_ppo` (process order) → UI banner showed ~6k as if soak reset; `_train_busy` then stuck `_train_run_id` on that smoke.
+- **Fix:** rank external trains by `CURRENT_RUN.txt` pin → highest live timesteps → `--resume`/`--unlimited` → leaf; status re-syncs preferred run when UI does not own the proc. Verified pick → overnight pid **19244**.
+- **Action:** left overnight + disposable A/B trains running; no Continue needed. Refresh Control UI to see ~395k.
+
+### ~04:20 — W6 Wave 1 thin SHIP (Suggestion bot)
+- **Board:** `20260917-W6-sug-wave1-ship` amends `20260917-W6-suggestion-bot`.
+- **S-01–05:** DONE as docs/tooltips/glossary/compact strip polish; S-03 product checklist still DEFER; no overnight touch; no reward mutation; no bridge code.
+- **Code:** `watch` compact honesty strip (phase|crash%); Control glossary + `#bridge_card`; Validating banner gloss; README bridge note; `UI_BUILD=w6-sug-wave1-20260917`.
+- **Tests:** `.venv` `test_watch_overlay` + `ui_selftest` (Stop mocked).
+
 ### ~04:15 — Overnight confirm: still learning after selftest Stop incident
 - **Incident:** `ui_selftest` HTTP `op=stop` (unmocked) killed protected soak mid-validation (~295k).
 - **Mock fix:** Stop path in `ui_selftest` now mocks `_kill_train_tree` / external scan so retests cannot sweep live `train_ppo`.

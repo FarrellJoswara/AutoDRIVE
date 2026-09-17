@@ -166,6 +166,8 @@ def test_kpi_lines_compact_keeps_race_drops_session():
         "steps_per_sec": 200.0,
         "collisions_estimate": 3,
         "ep_rew_mean": 1.2,
+        "phase": "learning",
+        "crash_rate_estimate": 0.25,
     }
     full = _kpi_lines(twins, _GhostStub(), status, compact=False)
     compact = _kpi_lines(twins, _GhostStub(), status, compact=True)
@@ -173,7 +175,9 @@ def test_kpi_lines_compact_keeps_race_drops_session():
     assert any("vs FTG" in ln or "ahead" in ln or "delta" in ln for ln in compact)
     assert len(compact) < len(full)
     assert not any("ghost dump" in ln for ln in compact)
-    assert any(ln.startswith("train ts") for ln in compact)
+    assert any(ln.startswith("train") and "ts 12000" in ln for ln in compact)
+    assert any("learning" in ln for ln in compact)
+    assert any("crash 25%" in ln for ln in compact)
     assert not any("rew" in ln for ln in compact)
 
 
