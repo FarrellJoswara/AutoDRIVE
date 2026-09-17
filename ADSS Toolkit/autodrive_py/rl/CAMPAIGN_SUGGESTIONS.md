@@ -32,6 +32,93 @@
 
 ---
 
+## Wave 2 — 2026-09-17 ~04:30 Chicago (idea-factory)
+
+**wave-id:** `20260917-W9-sug-wave2`  
+**board:** `20260917-W9-idea-factory`  
+**count:** 8 · all **soft** · avoid sacred early-stop retunes
+
+#### S-20260917-W9-01 — Coach hint when N live locks
+- **soft:** yes
+- **area:** UX
+- **why:** W8 list/warn helps Start path; Coach still silent when overnight + A/B coexist — operators miss Focus.
+- **concrete:**
+  - Pass `live_run_count` into `coach_hints`; one line when N≥2 pointing at Live runs Focus.
+- **risks / refuse:** No dual-Start enablement; no kill.
+- **triage:** SHIP (allowlist copy)
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-02 — Selftest fake zips must pass zipfile.testzip
+- **soft:** yes
+- **area:** tooling
+- **why:** P1 zip completeness gate rejects `PK`+zeros stubs; Continue/model selftests falsely fail.
+- **concrete:**
+  - `_fake_run` writes a real minimal zip; ASCII-safe Focus msgs for cp1252 consoles.
+- **risks / refuse:** Do not weaken `_zip_looks_complete` for production.
+- **triage:** SHIP
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-03 — Watch overlay shows Focus pin run_id
+- **soft:** yes
+- **area:** UX
+- **why:** Compact Watch still anonymous when several trains live; CURRENT_RUN pin already exists.
+- **concrete:**
+  - Compact strip include `run_id` from env/`CURRENT_RUN.txt` when following.
+- **risks / refuse:** No embed Watch; no argv sacred retune.
+- **triage:** DEFER (next UI tick)
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-04 — Leaderboard protocol column honesty
+- **soft:** yes
+- **area:** eval
+- **why:** Mid-train validation rows can look like official 400s×5 if skimmed fast.
+- **concrete:**
+  - Docs + optional `protocol_id` tooltip in Control race_candidate line (copy only).
+- **risks / refuse:** No protocol shorten; no denser overnight eval.
+- **triage:** DEFER
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-05 — Atomic CheckpointCallback wrapper
+- **soft:** yes
+- **area:** reliability
+- **why:** CAMPAIGN_BUGFIX P1-1 — SB3 ckpt writes not routed through `atomic_save_sb3`.
+- **concrete:**
+  - Wrap CheckpointCallback save path; keep overnight observe-only (lands on Continue).
+- **risks / refuse:** No overnight morph; measure before large rewrite.
+- **triage:** DEFER (Bugfix P1 queue)
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-06 — Train spawn pose jitter
+- **soft:** yes
+- **area:** train
+- **why:** IDEAS_TRIMMED: Watch has jitter; train resets still fixed spawn → fake skill on map0.
+- **concrete:**
+  - Small lateral/heading jitter on reset for train_ok maps only.
+- **risks / refuse:** No overnight morph; disposable A/B only; no holdout.
+- **triage:** DEFER (behind race MUST / disposable A/B)
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-07 — HANDOFF multi-run Focus one-liner
+- **soft:** yes
+- **area:** docs
+- **why:** Returning operators still Task-Manager-stop when banner looks stuck on short A/B.
+- **concrete:**
+  - `HANDOFF.md` bullet: Focus pin + Start refuse semantics + overnight never killed.
+- **risks / refuse:** Docs only.
+- **triage:** SHIP
+- **board:** `20260917-W9-idea-factory`
+
+#### S-20260917-W9-08 — GPU theater / denser overnight eval
+- **soft:** yes
+- **area:** perf
+- **why:** Tempting to densify race_eval_every "to use GPU" while validating freezes learning.
+- **concrete:** — refuse forever this campaign
+- **risks / refuse:** Sacred floors; overnight soak.
+- **triage:** SKIP (hard)
+- **board:** `20260917-W9-idea-factory`
+
+---
+
 ## Wave 1 — 2026-09-17 ~04:11 Chicago (first batch)
 
 **wave-id:** `20260917-W6-sug-wave1`  

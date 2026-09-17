@@ -85,6 +85,17 @@ Watch **lags** training on purpose. Overlay KPIs are **unofficial** — promote 
 - **Continue** resumes the focused / pinned `run_id` from the last complete checkpoint (`reset_num_timesteps=False`).
 - After a crash or UI restart: set pin → Continue (see [Resume after crash](#resume-after-crash)).
 
+### Auto-train (outer chain — refuse overnight)
+
+Thin scaffold only. Default is **dry-run**. Never use it to morph the protected soak.
+
+```powershell
+python -m rl.auto_train --dry-run
+# python -m rl.auto_train --execute --smoke   # only when NO live train.lock
+```
+
+Refuses: any live `train.lock`, `overnight_soak_*` run_ids, holdout/validation maps, sacred-floor edits, kill-tree. See module docstring in `auto_train.py`.
+
 ---
 
 ## Where overnight soak lives

@@ -11,6 +11,37 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — W9 idea-factory cycle 1 — ~04:31 America/Chicago
+- **id:** `20260917-W9-idea-factory`
+- **type:** wave / result
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739` (selftest Stop mocked; Focus pin only).
+- **Ideas:** 8 soft ideas in `CAMPAIGN_SUGGESTIONS.md` Wave 2 (`S-W9-01…08`).
+
+### Triage
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| S-W9-01 | Coach hint when N≥2 live locks | **SHIP** |
+| S-W9-02 | Selftest real zips + ASCII Focus (cp1252) | **SHIP** |
+| S-W9-03 | Watch overlay shows Focus pin run_id | **DEFER** |
+| S-W9-04 | Leaderboard protocol honesty tooltip | **DEFER** |
+| S-W9-05 | Atomic CheckpointCallback | **DEFER** (Bugfix P1 / Tick2) |
+| S-W9-06 | Train spawn pose jitter | **DEFER** |
+| S-W9-07 | HANDOFF Focus one-liner | **SHIP** |
+| S-W9-08 | GPU theater / denser overnight eval | **SKIP** (hard) |
+
+### Personality votes — thin SHIP batch → **SHIP**
+
+- **Researcher:** **Go** — W8 already enumerates locks; coach/selftest/docs close operator foot-guns without touching sacred floors. Cite `coach_hints` + `_zip_looks_complete` + HANDOFF Multi-run.
+- **Racer:** **Approve** — no race math; Block denser eval (SKIP'd).
+- **Minimalist:** **Approve** — one coach line + fake-zip fix + docs; refuse spawn jitter / ckpt epic this tick.
+- **Reliability:** **Approve** — keep zip completeness gate; ASCII msgs avoid selftest crash; overnight observe-only.
+- **Integrator:** **SHIP** S-01/02/07 only. `UI_BUILD=w9-idea-factory-20260917`. `ui_selftest` green.
+
+**Resume-me:** Next idea-factory cycle (~20–30m): invent new Wave 3 ideas; optionally ship Watch pin overlay (S-03) if free; never touch overnight.
+
+---
+
 ## Tick #2 (~04:26 America/Chicago) — NEXT multi-proposal batch
 - **id:** `20260917-tick2-wave`
 - **type:** tick / proposal batch (fresh parallel wave executor — standing IDs parent-mismatch)

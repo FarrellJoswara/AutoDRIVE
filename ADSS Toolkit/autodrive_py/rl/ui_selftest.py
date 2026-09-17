@@ -606,6 +606,7 @@ def test_http_surface() -> None:
             'id="ui_build"' in html
             and (
                 "w8-multi-run" in html
+                or "w9-idea-factory" in html
                 or "w7-ui-bot" in html
                 or "w6-sug-wave1" in html
                 or "w4-auto-train" in html
@@ -621,7 +622,7 @@ def test_http_surface() -> None:
             and 'id="op_targets"' in html
             and "focus_run" in html
             and "__startLockWarn" in html
-            and "w8-multi-run" in html,
+            and ("w9-idea-factory" in html or "w8-multi-run" in html),
         )
         check(
             "index has glossary drawer",
