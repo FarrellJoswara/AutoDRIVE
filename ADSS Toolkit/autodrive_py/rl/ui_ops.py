@@ -105,6 +105,11 @@ def _safe_id(value: str) -> bool:
     return bool(SAFE_ID.match(str(value or ""))) and ".." not in str(value)
 
 
+def safe_run_id(value: str) -> bool:
+    """Public alias: True when ``value`` is a safe models/<run_id> directory name."""
+    return _safe_id(value)
+
+
 STILL_ACTIVE = 259
 
 

@@ -19,7 +19,7 @@
 | **Reliability** | Overnight / train safety? | Protects Continue, early-stop defaults, dual-writer refuse, seals | Touches live overnight without Continue plan; lowers sacred constants |
 | **Bugfix** (recurring duty) | Bugs + perf on **stable cores** that stick | Ranked finding in [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md); small overnight-safe fix | Auditing throwaway UI chrome / bridge stubs; large refactors mid-soak |
 | **Suggestion** | Invent **soft** ideas (UX / train / perf / pipeline / transfer); same tone as user W3/W4/W5 soft asks | Idea is optional, reversible, diverse, and filed to `CAMPAIGN_SUGGESTIONS.md` + a short board proposal | Mandates, auto-code, MUST override, overnight morph, sacred retune, SKIP-forever repeats (GPU theater, continuous outer, reward Discord, bridge product) |
-| **UI** (recurring duty) | Propose **1–3 SMALL** Control/Watch presentation increments; improve scan/clarity without redesign | Allowlisted chrome (tooltips, spacing, contrast, labels, glossary copy, compact polish) logged to `CAMPAIGN_UI.md` + `ui_selftest` green | New frameworks; embed Watch; Overnight sacred default retune; remove honesty banners; starve MUST / Bugfix P0 |
+| **UI** (recurring duty) | Propose **1–3 SMALL** Control/Watch presentation increments; improve scan/clarity without redesign; keep **multi concurrent trains** in mind | Allowlisted chrome (tooltips, spacing, contrast, labels, glossary copy, compact polish) logged to `CAMPAIGN_UI.md` + `ui_selftest` green; mini-gate multi-run list when board SHIPs | New frameworks; embed Watch; Overnight sacred default retune; remove honesty banners; kill multi-train support; starve MUST / Bugfix P0 |
 | **Integrator / Orchestrator** | Ship gate only; **commit+push after each wave** | **Researcher = Go** (or Conditional with conditions met) **and ≥2 of {Racer, Minimalist, Reliability} Approve**; then `git status` → commit+push stable SHIP (tests green) | Any seat **Block**; research **No-Go**; no board entry; shipping from suggestions inbox alone; leaving large uncommitted SHIP piles |
 
 Personality deep-dives (optional refresh, not required every tick):
@@ -62,6 +62,7 @@ Ticks with no candidate: still append a short **tick pulse** (see template) so c
 - **Does:** propose **1–3 SMALL** Control UI / Watch presentation increments → append to `CAMPAIGN_UI.md` → **auto-approve allowlist** (tooltips, spacing, contrast, labels, glossary copy, compact polish) **or** board mini-gate otherwise → bump `UI_BUILD` → run `python -m rl.ui_selftest`.
 - **Does not:** Gradio/React/new frameworks; embed Watch in browser; change Overnight sacred knob defaults; remove honesty / unofficial banners; Start/Continue/kill overnight; override MUST or Bugfix P0.
 - **Prior art:** W3 SHIP compact Watch + glossary; SKIP drastic reskin / embed. Thin same-DOM CSS only.
+- **Multi-run soft constraint (W8):** Operators may hold **several concurrent** live `train.lock` / run_ids (overnight + disposable A/B). Prefer chrome that lists live runs and binds banner / Watch / Continue / Stop to a **selected** run. **DEFER** fancy multi-run dashboards. **SKIP** designs that kill multi-train support to “simplify.” See board `20260917-W8-multi-run-ui` + `CAMPAIGN_UI.md` Wave 2.
 
 ---
 

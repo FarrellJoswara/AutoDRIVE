@@ -11,6 +11,37 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## W8 — Multi-run Control UI (soft) — ~04:22 America/Chicago
+- **id:** `20260917-W8-multi-run-ui`
+- **type:** tick / wave (user soft suggestion)
+- **proposal:** UI redesign/polish must keep **multiple concurrent trains** in mind (operators already see several live `train.lock` / run_ids). Ship **incremental** Control chrome — not a fancy dashboard, not a single-train assumption, and **never** kill multi-train support or overnight.
+- **overnight plan:** Observe-only `overnight_soak_20260917_082739`. No Start/Continue/kill/morph soak. Soft ≠ MUST / Bugfix P0.
+
+### Scope triage
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| U-20260917-W8-01 | Live-runs list (locks + live_status: run_id, timesteps, phase, overnight badge) | **SHIP** design now · **implement next UI tick** (mini-gate — not allowlist) |
+| U-20260917-W8-02 | Status banner bound to **selected** run (not “whichever file was last”) | **SHIP** design · couple to W8-01 |
+| U-20260917-W8-03 | Clear which run Watch / Continue / Stop targets | **SHIP** design · couple to W8-01 |
+| U-20260917-W8-04 | Warn before Start when N live locks already present | **SHIP** design · couple to W8-01 |
+| U-20260917-W8-05 | Fancy multi-run dashboard / Gradio reskin | **DEFER** |
+| U-20260917-W8-06 | Kill / refuse multi-train support to “simplify” UI | **SKIP** (hard) |
+
+### Personality votes — multi-run incremental → **SHIP (design)**
+
+- **Researcher:** **Go** — grounded: `ui_ops.find_live_run_locks` already enumerates live locks; `_status_payload` can fall back to `find_latest_status` / prefer one external train — multi-lock operators get ambiguous banner. Cite `control_ui._status_payload` + Models `[locked pid=…]` without a Live list.
+- **Racer:** **Approve** — operator clarity only; Block any wave that trades race MUST for chrome or retunes overnight.
+- **Minimalist:** **Approve** — thin read-only list + selected-run binding; **Block** fancy dashboard / frameworks / embed Watch.
+- **Reliability:** **Approve** — read locks + `live_status` only; Start warn when N locks live; **Block** killing multi-train, dual-Start murder, unmocked Stop vs overnight.
+- **Integrator:** **SHIP** incremental **design** into `CAMPAIGN_UI.md` + governance UI note this tick. **Do not** code W8-01…04 here (outside allowlist — needs mini-gate implementer + `ui_selftest`). **DEFER** fancy dashboard. **SKIP** killing multi-train. Soft ≠ overnight kill.
+
+**Orchestrator (this tick):** docs only — board + `CAMPAIGN_UI.md` Wave 2 + GOVERNANCE UI soft constraint. Next UI implementer: W8-01…04 thin Control list (read `find_live_run_locks` + per-run `live_status`); bump `UI_BUILD`; `ui_selftest` with Stop mocked.
+
+**Resume-me:** UI bot — implement W8-01…04 when free (mini-gate already SHIP’d design); keep allowlist chrome flowing; never redesign epic; never kill overnight / multi-train.
+
+---
+
 ## RESULTS — W7 UI bot process + allowlist chrome — 2026-09-17 ~04:21 America/Chicago
 - **id:** `20260917-W7-ui-bot-ship`
 - **type:** result
