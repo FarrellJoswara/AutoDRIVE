@@ -762,16 +762,16 @@ def _focus_run(run_id: str) -> str:
     _invalidate_ext_train_cache()
     owner = lock_owner(MODELS_DIR, rid)
     alive = bool(owner and owner.get("alive"))
-    note = f"Focused → {rid}"
+    note = f"Focused -> {rid}"
     if rid == PROTECTED_OVERNIGHT_RUN:
-        note += " (protected overnight — Stop sweep never kills this run_id)"
+        note += " (protected overnight - Stop sweep never kills this run_id)"
     elif alive:
         note += (
-            f" (live pid={owner.get('pid')}; banner/Watch/Continue pin only — "
+            f" (live pid={owner.get('pid')}; banner/Watch/Continue pin only - "
             "Stop still skips protected overnight)"
         )
     else:
-        note += " (not live — status may show last trail; Start still refuses other live locks)"
+        note += " (not live - status may show last trail; Start still refuses other live locks)"
     return _set_msg(note)
 
 
@@ -1713,13 +1713,17 @@ def _status_payload() -> dict:
         msg=live.get("msg") or live.get("note"),
     )
 
-    coach = coach_hints(live or None, watch_opened=watch_opened, n_envs=int(n_envs_live or 1))
-
     live_runs = _list_live_runs(selected_run=selected or "")
     bound = selected or run_id or live.get("run_id")
     start_warn = _start_lock_warn(live_runs)
+    coach = coach_hints(
+        live or None,
+        watch_opened=watch_opened,
+        n_envs=int(n_envs_live or 1),
+        live_run_count=len(live_runs),
+    )
     bound_note = (
-        f"targets: {bound or '—'} (banner/status). "
+        f"targets: {bound or '-'} (banner/status). "
         "Continue = Models row run_id. Stop = non-protected train_ppo "
         f"(never {PROTECTED_OVERNIGHT_RUN}). Watch --follow = map + n_envs."
     )

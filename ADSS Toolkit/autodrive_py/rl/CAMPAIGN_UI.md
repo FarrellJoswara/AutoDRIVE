@@ -40,6 +40,26 @@
 
 ---
 
+## Wave 3 — 20260917-W9 coach multi-lock (soft) — ~04:31 Chicago
+
+**wave-id:** `20260917-W9-ui-coach-locks`  
+**board:** `20260917-W9-idea-factory`  
+**count:** 1 · allowlist
+
+#### U-20260917-W9-01 — Coach hint when N≥2 live locks
+- **soft:** yes
+- **allowlist:** yes (copy / coach)
+- **surface:** Control
+- **why:** Live runs list exists; Coach was silent when overnight + A/B coexist.
+- **concrete:**
+  - `coach_hints(..., live_run_count=N)` one-liner pointing at Focus.
+- **risks / refuse:** No dual-Start; no kill.
+- **triage:** SHIP
+- **board:** `20260917-W9-idea-factory`
+- **shipped:** DONE `w9-idea-factory-20260917`
+
+---
+
 ## Wave 2 — 20260917-W8 multi-run (soft) — ~04:22 Chicago
 
 **wave-id:** `20260917-W8-ui-multi-run`  
@@ -183,4 +203,4 @@ Operators already run **several concurrent trains** and see multiple live locks.
 
 Next tick (or every other): invent **1–3** small increments → append wave → allowlist auto-approve **or** mini-gate → implement only SHIP → `ui_selftest` → never kill overnight / never redesign. Soft ≠ MUST / Bugfix P0.
 
-**Multi-run soft constraint (W8):** Prefer chrome that names a **selected** `run_id` when multiple `train.lock`s are live. Implement W8-01…04 when free (board already SHIP’d design). **DEFER** fancy dashboard. **SKIP** killing multi-train support.
+**Multi-run soft constraint (W8):** Prefer chrome that names a **selected** `run_id` when multiple `train.lock`s are live. **W8-01…04 SHIP’d** (`w8-multi-run-20260917`). **DEFER** fancy dashboard. **SKIP** killing multi-train support.
