@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** Tick #2 SHIP’d P1-1/3/5 + W8; FTGΔ **DONE** (PPO +8.52 s vs FTG); MUST #3 crashΔ DEFER tonight; overnight ~569k learning — do not kill. Thin: stall_rate live_status + Watch validating honesty.  
+**Head note:** Watch overlay honesty SHIP (20260917-meta-watch-honesty); MUST #4 FTGΔ DONE (Δ+8.52); MUST #3 crashΔ DEFER; overnight soak ALIVE — do not kill.
 **Human handoff:** friends start at [`HANDOFF.md`](HANDOFF.md) (runbook + sacred soak + multi-run).
 
 ---
@@ -109,6 +109,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Timeline
+
+### ~04:40 — Watch overlay honesty (20260917-meta-watch-honesty)
+- **SHIP:** Watch phase=validating no longer mislabeled TRAIN STALE; lag-behind sub_label keeps **unofficial**; compact strip phase/crash%/ts bind via CURRENT_RUN pin to overnight (not short A/B).
+- **Tests:** python -m rl.test_watch_overlay → **14/14**. Code: d5dd05 / 851b0dd / 2bd61c7.
+- Overnight observe-only PIDs **19244/53852**.
+
 
 ### ~04:33 — FTGΔ close wave + stall-metric thin SHIP (`20260917-ftgdelta-close-wave`)
 - **Overnight:** observe-only ~**569k** learning, PIDs **19244/53852** — no kill/morph; no sacred early-stop retune; no third official eval.
