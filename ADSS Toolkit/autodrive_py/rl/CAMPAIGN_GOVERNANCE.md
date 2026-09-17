@@ -20,7 +20,7 @@
 | **Bugfix** (recurring duty) | Bugs + perf on **stable cores** that stick | Ranked finding in [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md); small overnight-safe fix | Auditing throwaway UI chrome / bridge stubs; large refactors mid-soak |
 | **Suggestion** | Invent **soft** ideas (UX / train / perf / pipeline / transfer); same tone as user W3/W4/W5 soft asks | Idea is optional, reversible, diverse, and filed to `CAMPAIGN_SUGGESTIONS.md` + a short board proposal | Mandates, auto-code, MUST override, overnight morph, sacred retune, SKIP-forever repeats (GPU theater, continuous outer, reward Discord, bridge product) |
 | **UI** (recurring duty) | Propose **1–3 SMALL** Control/Watch presentation increments; improve scan/clarity without redesign | Allowlisted chrome (tooltips, spacing, contrast, labels, glossary copy, compact polish) logged to `CAMPAIGN_UI.md` + `ui_selftest` green | New frameworks; embed Watch; Overnight sacred default retune; remove honesty banners; starve MUST / Bugfix P0 |
-| **Integrator / Orchestrator** | Ship gate only | **Researcher = Go** (or Conditional with conditions met) **and ≥2 of {Racer, Minimalist, Reliability} Approve** | Any seat **Block**; research **No-Go**; no board entry; shipping from suggestions inbox alone |
+| **Integrator / Orchestrator** | Ship gate only; **commit+push after each wave** | **Researcher = Go** (or Conditional with conditions met) **and ≥2 of {Racer, Minimalist, Reliability} Approve**; then `git status` → commit+push stable SHIP (tests green) | Any seat **Block**; research **No-Go**; no board entry; shipping from suggestions inbox alone; leaving large uncommitted SHIP piles |
 
 Personality deep-dives (optional refresh, not required every tick):
 
@@ -75,6 +75,7 @@ Budget: **~5 minutes**. Do not write essays.
 4. **Gate (30s)** — Integrator: **SHIP** only if research Go/Conditional-met **and** ≥2 Approves **and** zero Blocks. Else **SKIP** (log why). Soft suggestions default to triage, not auto-SHIP.  
 5. **Append** — Paste the filled template at the **top** of the dated section in `CAMPAIGN_BOARD.md` (newest first under today’s date).  
 6. **Act** — If SHIP: implement that chunk only. If SKIP / NONE: do not code product changes; optionally update `CAMPAIGN_LOG.md` pointer. Suggestion seat: stop after inbox + board proposal unless also acting as another seat.
+7. **Git (Orchestrator / parent, every ~10m tick)** — Run `git status` (+ `git diff --stat`). If stable reviewed changes exist (board **SHIP**, relevant tests green): **commit + push** with a focused message. Push **after each wave/chunk**, continuously through the night — not a single end-of-window dump. Exclude `__pycache__/`, logs, large zips/checkpoints, `.venv/`. Do not kill overnight `train_ppo` for git ops.
 
 Fail review → **SKIP**. Partial votes without Integrator gate → **do not ship**.
 
@@ -138,12 +139,14 @@ Integrator: SHIP | SKIP | DEFER — <one line> (need ≥2 Approve + research Go;
 - Rubber-stamp Approves with no Researcher cite  
 - “Temporary” protocol/timeout/FTG retune to manufacture a win  
 - Touching overnight early-stop math to feel productive  
-- Board essays >5 min; if over budget, **SKIP** and note time-box
+- Board essays >5 min; if over budget, **SKIP** and note time-box  
+- Letting SHIP’d code / board results pile up uncommitted for hours (must `git status` + commit+push each tick / after each wave)
 
 ---
 
 ## Quick link for agents
 
 On `AGENT_LOOP_TICK` or before coding: open `CAMPAIGN_BOARD.md` → copy template → fill → gate → only then implement.  
+After SHIP lands (and tests green): Orchestrator **commit + push** — again on the next wave; do not wait for the deadline.  
 Suggestion seat: append soft wave to `CAMPAIGN_SUGGESTIONS.md` first, then board triage — never ship from the inbox alone.  
 UI seat: append increments to `CAMPAIGN_UI.md`; allowlist may ship with selftest; everything else needs mini-gate — never redesign from chat alone.

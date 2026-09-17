@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** W7 UI allowlist + B0.1 strict map refuse; overnight Continue live (~428k @ 04:20); prior `83fa8a1` Watch/glossary on remote.
+**Head note:** Continuous commit+push mandate (~04:22); W7 UI + B0.1 on remote `319b117`; overnight Continue live — do not kill.
 
 ---
 
@@ -11,7 +11,8 @@
 
 - **Sentinel:** `AGENT_LOOP_TICK_autodrive-rl-campaign` — **every 10 min (600s)**.
 - **Cadence change (~04:00):** 50m ticks were too slow / padded the 9h window. User mandate: ideas constantly worked; lots of well-implemented small features each tick. See [`campaign_tick.md`](campaign_tick.md).
-- **On EVERY tick:** parent MUST (1) resume Researcher + Racer/Minimalist/Reliability **in parallel** for NEXT proposal batch → `CAMPAIGN_BOARD.md`; (2) resume Orchestrator to ship **MULTIPLE** approved small features in parallel (spawn sibling implementers); protect overnight; **push often**. **Not orchestrator-only / not single-feature trickle.**
+- **On EVERY tick:** parent MUST (1) resume Researcher + Racer/Minimalist/Reliability **in parallel** for NEXT proposal batch → `CAMPAIGN_BOARD.md`; (2) resume Orchestrator to ship **MULTIPLE** approved small features in parallel (spawn sibling implementers); protect overnight; (3) **`git status` + commit+push** any stable reviewed SHIP (tests green) — **after each wave**, continuously through the night, not once. Exclude pycache / logs / large zips / `.venv`. **Not orchestrator-only / not single-feature trickle.**
+- **Orchestrator standing order:** push after **each** wave/chunk lands; do not batch uncommitted SHIP piles until morning.
 - **Deadline:** after 12:54 America/Chicago 2026-09-17, STOP loop; do not re-arm.
 - Cursor-attached loops die ~60s; use detached [`campaign_keepalive.ps1`](campaign_keepalive.ps1) (PID in `logs/campaign_keepalive.pid`; ticks in `logs/campaign_loop_ticks.log`). Parent: read latest tick → run `campaign_tick.md`. Do not kill `train_ppo` when re-arming.
 
@@ -20,7 +21,7 @@
 1. **Ingest before ship:** `CAMPAIGN_CRITIQUE.md` + `ideas_review/campaign_{racer,minimalist,reliability}.md` + `CAMPAIGN_RESEARCH.md` when present.
 2. **Before each non-trivial feature:** CAMPAIGN_LOG / `CAMPAIGN_BOARD.md` Go/No-Go with research checklist + ≥2 personality opinions (agree/dissent).
 3. **Prefer:** overnight survival, race-score honesty, steps/sec truth, operator Start/Stop/Continue — over cosmetics and GPU theater.
-4. **Fail review → SKIP** and log why. Ship reviewed work only; commit+push frequently.
+4. **Fail review → SKIP** and log why. Ship reviewed work only; **commit+push after each wave** (and every ~10m tick if anything SHIP’d sits dirty).
 5. **Sacred:** early-stop defaults (select≥220, eval≥50k, warmup≥2, min_ts≥100k), contracts `2.0.0`, holdouts, atomic promote, dual-writer refuse. Cut the feature, not the guard.
 6. **Never kill** `overnight_soak_20260917_082739` without Continue restart.
 
@@ -137,6 +138,14 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - Sentinel fired; loop still running; deadline not reached.
 - Overnight already Continue-restored and learning (~376k @ ~04:15; lock ~19244 / parent ~53852) — no new Continue this tick.
 - Nested tick handler cannot `resume` standing Researcher/personalities (parent mismatch); **parent** must resume board + Orchestrator for this wake (Orchestrator may already be mid-run).
+
+### ~04:22 — Continuous commit+push mandate (orchestrator note)
+
+- User: **commit+push continuously through the night when stable** — not only once.
+- Updated `campaign_tick.md` + `CAMPAIGN_GOVERNANCE.md`: every ~10m tick MUST `git status`; if board SHIP + tests green → **commit+push**; exclude pycache/logs/zips/.venv; no large uncommitted piles.
+- **Orchestrator (`4a5b7bd3-…`):** push **after each wave/chunk**, not only at end of window / morning dump. Log push hashes here when practical.
+- Pre-mandate remote HEAD already had W7 chrome: **`319b117`** (`Ship W7 UI bot chrome…`) on `origin/rl/phase-1-research`. Untracked only: `__pycache__`, `_ftg_pin*.log` (left uncommitted).
+- Overnight soak **untouched** (do not kill).
 
 ---
 
