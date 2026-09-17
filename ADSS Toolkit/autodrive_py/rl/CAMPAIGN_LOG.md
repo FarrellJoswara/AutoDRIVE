@@ -164,7 +164,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 - Support loop: every ~18m `git status` → commit+push safe SHIP; never touch overnight PIDs; never force-push/amend remote; exclude pycache / `_ftg_pin*.log`.
 - **SHIP P1-2:** `train_ppo` RaceBest `best_model_meta.json` → `atomic_write_json`; `_bugfix_p0_checks` **19/19**.
-- **Pushed:** **`8af8a25`** (P1-2) → **`bec5752`** (log SHA). W8 Control later SHIP’d as **`891864f`** — do not fight UI seat files mid-edit.
+- **Pushed:** **`8af8a25`** (P1-2) → **`bec5752`** (log) → **`1eece1c`** (A/B report + Start-warn dedupe). W8 Control SHIP’d as **`891864f`**.
 - Overnight soak ALIVE (~495k validating @ smoke) — untouched.
 
 ---
