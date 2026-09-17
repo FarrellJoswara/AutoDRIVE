@@ -1422,6 +1422,8 @@ def main(argv=None) -> int:
         "early_stop_warmup_evals": early_stop_warmup_evals,
         "early_stop_min_timesteps": early_stop_min_timesteps,
         "select_timeout_s": select_timeout,
+        "fast_probe_every": fast_probe_every,
+        "fast_probe_timeout_s": fast_probe_timeout if fast_probe_every > 0 else 0,
         "early_stopped": bool(getattr(race_cb, "early_stopped", False)),
     }
     config["fingerprint"] = config_fingerprint(config)

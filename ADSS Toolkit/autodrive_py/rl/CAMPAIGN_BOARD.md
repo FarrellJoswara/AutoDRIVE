@@ -9,6 +9,90 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## SHIP — Reliability P0 (heartbeat join + Start/Continue no-kill) — ~04:08 Chicago
+
+- **id:** `20260917-reliab-p0-nokill-hbjoin`
+- **type:** patch / safety
+- **Was:** Reliability **Block** until heartbeat-join + Start-kill-on-false-busy fixed (`campaign_reliability.md` critical notes).
+- **Now:** **FIXED / SHIP**
+  1. `RaceBestModelCallback`: join heartbeat before `early_stopped`; gen-token; refuse validating clobber of terminal phase.
+  2. Start/Continue: **never** `_kill_train_tree` (Stop-only); `_train_busy` refuses on live `train.lock` if PID scan misses.
+  3. `live_status.TERMINAL_PHASES` / `is_terminal_phase`; `ui_ops.find_live_run_locks`; `ui_selftest` regressions (+ HTTP Stop mocked so selftest cannot murder overnight).
+- **overnight:** observe-only `overnight_soak_20260917_082739` (Continue-restarted; live). Do not kill.
+- **Tests:** `python -m rl.ui_selftest` PASS with overnight surviving.
+- **UI_BUILD:** `reliability-nokill-hbjoin+w2-20260917`
+- **Continuous outer loop:** still **NO-GO** until chaos drills; this only clears the P0 code blockers.
+
+---
+
+## RESULTS — W2 FAST wave ships — 2026-09-17 ~04:08 America/Chicago
+- **id:** `20260917-W2-fast-wave-results`
+- **type:** result
+- **overnight:** observe-only — Continue soak reported lock pid=46692 intact; did not kill/morph soak. UI Start/Continue no longer call `_kill_train_tree` (reliability merge).
+- **SHIP 1 Collision-first UI:** **DONE** — checkboxes + tooltips for `--collision-first` / `--speed-gate` / optional NON-OFFICIAL fast probe; wired Start argv + preview; Continue inherits curriculum from `config.json`. Soft-stop one-liner present. `ui_selftest` **all checks passed**. UI build `w2-fast-wave-20260917`.
+- **SHIP 2 Continue soak proof:** **PASS** — disposable `continue_soak_20260917_090812` via `python -m rl._continue_soak_smoke` (CLI only, no UI kill-tree): phase1 ts=1024 → Continue resume → phase2 ts=**2048**. Script refuses overnight naming.
+- **SHIP 3 Fast validation probe (honest):** **DONE** — `--fast-probe-every` / `--fast-probe-timeout` (default 30s) + `FastProbeCallback`: writes `probe_kind=smoke` / progress only; **never** promotes `best_model`; **never** ticks patience; skips when phase=`validating`/`early_stopped`. Full `select_timeout` (~220s) RaceBest remains sole promote/patience path. UI checkbox off by default; Overnight should leave off.
+- **DEFER/SKIP unchanged:** n_envs knee · continuous loop · big UI redesign · GPU AMP.
+- **Tests:** `.venv` `python -m rl.ui_selftest` PASS; `python -m rl._continue_soak_smoke` PASS.
+
+---
+
+## W3 — User UX soft suggestions triage — ~04:07 Chicago
+- **id:** `20260917-W3-user-ux-suggestions`
+- **type:** tick / wave
+- **proposal:** Soft (non-MUST) user asks: declutter Watch, glossary/tooltips, pretty Control UI, Watch snappiness/embed, keep gym→AutoDRIVE transfer in mind. Soft ≠ override MUST order or W2 SKIP of big chrome.
+- **overnight plan:** Observe-only vs `overnight_soak_20260917_082739`. No train-path display. No bridge/Jetson build.
+- **Guidance cite:** W2 #6 big UI redesign = SKIP; Watch carnival = SKIP; declutter + glossary may SHIP as operator honesty; embed Watch = Conditional (perf); bridge = document constraint only (P3).
+
+### Candidates
+
+#### 1. Watch follow declutter (fewer numbers / compact overlay) → **SHIP**
+- **Researcher:** **Go** — operator honesty, not carnival; keep lag-behind / unofficial labels; pairs with `--every` bump (RESEARCH §4 / §6 Watch aesthetics still hard-skip).
+- **Racer:** **Approve** — tiny; does not claim podium; unofficial surface OK if hours stay small.
+- **Minimalist:** **Approve** — compact toggle + fewer overlay rows; no ghost/seasons.
+- **Reliability:** **Approve** — `test_watch_overlay` must stay green; promotion path untouched.
+- **Concrete:** `compact` overlay mode (default on or toggle); raise follow `--every` default (5→8 or 10); drop dense counter spam, keep race KPIs + honesty banners.
+
+#### 2. Plain-language glossary / RL tooltips (“normie terms”) → **SHIP**
+- **Researcher:** **Go** — passes design test (fewer wrong Starts / misread Validating/EarlyStop/patience); extend existing `title=` pattern, not a new docs site.
+- **Racer:** **Approve** — operators who understand collision-first / Continue ship race work faster.
+- **Minimalist:** **Approve** — static glossary drawer or hover copy only; no second UI framework.
+- **Reliability:** **Approve** — sacred knobs must stay worded honestly (budget vs early-stop; unofficial probe).
+- **Concrete:** small “?” glossary drawer (timesteps, patience, eval_every, collision-first, official vs smoke, Watch lag-behind).
+
+#### 3. Drastic Control UI visual redesign → **SKIP**
+- **Researcher:** **No-Go** — same fail as W2 #6; cosmetics ≠ fewer wrong Starts unless copy/layout of sacred actions.
+- **Racer:** **Block** — chrome ≠ adjusted_time.
+- **Minimalist:** **Block** — pixels ≠ policy; operator min already shipped.
+- **Reliability:** **Block** — reskin risks losing Overnight preset / refuse copy.
+- **Note:** thin CSS polish (spacing/contrast, **same DOM**, no Gradio/React) may ride with #2 as a ≤1h companion — not a redesign epic.
+
+#### 4. Watch snappiness / embed in Control UI → **split**
+- **4a Raise `--every` + follow poll snappiness → **SHIP**** (bundle with #1).
+- **4b Embed Watch inside browser Control → **Conditional / DEFER****
+  - **Researcher:** **Conditional** — only if Watch stays a **separate process** (iframe/spawn), train remains headless, no auto-open on Start (RESEARCH §4/§6).
+  - **Racer:** **Abstain** embed; **Approve** `--every` snappiness.
+  - **Minimalist:** **Block** one-UI product; **Approve** CLI default tweak.
+  - **Reliability:** **Conditional** — must not steal Subproc cores / lock contention from overnight.
+- **Why not SHIP embed now:** Conditional unmet (perf + MUST queue first). Re-vote post-collision/Continue if operators still drown in two windows.
+
+#### 5. AutoDRIVE sim transfer awareness (obs/DR/latency) → **DEFER build / SHIP constraint note**
+- **Researcher:** **Go** document-only — freeze contracts `2.0.0`, keep mid-train LiDAR DR, no privileged GT in obs; **No-Go** bridge `:4567` / latency product this 9h (P3 after holdout beat-FTG).
+- **Racer:** **Approve** constraint; **Block** bridge cosplay before FTGΔ.
+- **Minimalist:** **Approve** freeze + refuse GT leak; **Block** Phase-3 scope creep.
+- **Reliability:** **Approve** refuse-load / no mid-campaign obs morph; **Block** “faster gym wins” via privileged topics.
+- **Concrete:** CAMPAIGN_RESEARCH transfer note only — no bridge code.
+
+### Integrator gate
+**SHIP now (small, after/parallel to MUST if free hands):** (1) Watch compact + higher `--every` · (2) glossary/tooltips drawer · optional thin CSS with #2.  
+**DEFER:** embedded Watch-in-browser (Conditional).  
+**SKIP:** drastic Control reskin · bridge/Jetson/latency implementation.  
+Orchestrator: implement **SHIP** only; treat soft UX as **optional** behind collision/Continue/probe if contention.
+
+**Resume-me:** Researcher `f4ac2241-2ce6-4f1b-b7ea-719eb29035dc` — next tick: refresh §7 soak evidence; re-vote embed only if MUST #2/#3 proven and operators still dual-window blocked; do not expand this entry into a UI epic.
+
+---
+
 ## W3 — Immediate tick ~04:06 Chicago — collision UI + probe; Continue restarted
 - **id:** `20260917-W3-immediate-tick`
 - **type:** tick / wave

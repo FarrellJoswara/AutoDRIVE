@@ -181,6 +181,15 @@ Start/Stop ownership, preview, Continue, presets, map gen + thumbs, model load/d
 6. **Autotrain map cycle:** outer loop picks from `train_safe_maps()` only; after EarlyStop, optionally add next train_ok map **as a new fingerprinted run**, not mid-episode morph.  
 7. **Official transfer claim:** only after sealed holdout eval under `official_v2` — generating 50 maps does not buy a podium.
 
+### Gym → AutoDRIVE transfer (observe this 9h — do not build P3)
+
+Bridge `:4567` / Jetson / latency product stays **Phase 3** (after sealed holdout beat-FTG). Gym work must not drift from that eventual bridge:
+
+- **Freeze contracts `2.0.0`** — obs dim / action space / beam ABI stay refuse-load on mismatch (eval, resume, Watch, Continue). No “temporary” obs reshape for gym speed.
+- **Mid-train DR already counts** — keep light LiDAR noise/dropout (and existing spawn/curriculum levers); do not invent a second DR stack or full actuator-lag theater this window.
+- **No privileged GT in observations** for faster gym wins — shaping may use map GT / contact in reward; race obs stays LiDAR + legal proprio. Do not add IPS/pose/progress channels then plan to strip at bridge.
+- **Document, don’t implement** — latency/actuator match and sim-to-sim calibration are constraints to *not violate*, not tickets to ship before FTGΔ.
+
 ### Anti-patterns
 
 - 8–32× identical map0 clones (“fake skill” — PLAN).  

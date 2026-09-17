@@ -261,17 +261,39 @@ def _kpi_lines(
     twins: FleetKpi,
     ghost: GhostRunner | None,
     status: dict | None = None,
+    *,
+    compact: bool = False,
 ) -> list[str]:
-    """Bottom-left overlay rows: race score first, train counters last."""
+    """Bottom-left overlay rows: race score first, train counters last.
+
+    ``compact`` keeps the live score (+ beat vs FTG if ghost) and drops the
+    rolling session dump / verbose train row clutter.
+    """
     lines = [twins.line()]
     if ghost is not None:
-        lines.append(ghost.line())
+        if not compact:
+            lines.append(ghost.line())
         lines.append(beat_line(twins, ghost.kpi))
-    if twins.session.episodes > 0:
-        lines.append(twins.session_line())
-    train = train_status_line(status)
-    if train:
-        lines.append(train)
+    if not compact:
+        if twins.session.episodes > 0:
+            lines.append(twins.session_line())
+        train = train_status_line(status)
+        if train:
+            lines.append(train)
+    elif status:
+        # One short train heartbeat only.
+        ts = status.get("timesteps")
+        sps = status.get("steps_per_sec")
+        try:
+            bits = []
+            if ts is not None:
+                bits.append(f"ts {int(ts)}")
+            if sps is not None:
+                bits.append(f"{float(sps):.0f}/s")
+            if bits:
+                lines.append("train " + " | ".join(bits))
+        except (TypeError, ValueError):
+            pass
     return lines
 
 
@@ -287,6 +309,7 @@ def _frame_payload(
     warn: str | None = None,
     ep: int = 0,
     step: int = 0,
+    compact: bool = False,
 ) -> tuple[list[dict], dict]:
     agents = [
         _agent_snapshot(env, i, done=dones[i], with_scan=(i == 0))
@@ -300,7 +323,7 @@ def _frame_payload(
         "warn": warn,
         "episode": ep,
         "step": step,
-        "kpi_lines": _kpi_lines(twins, ghost, status),
+        "kpi_lines": _kpi_lines(twins, ghost, status, compact=compact),
     }
     return agents, metrics
 
@@ -498,6 +521,7 @@ def _run_standalone(args) -> int:
                     sub_label=sub_label,
                     ep=ep,
                     step=step,
+                    compact=bool(getattr(args, "compact", False)),
                 )
                 if not viewer.show(agents=agents, metrics=metrics, markers=markers, wait_ms=1):
                     return _viewer_quit(viewer)
@@ -518,6 +542,7 @@ def _run_standalone(args) -> int:
             sub_label=sub_label,
             ep=ep,
             step=step,
+            compact=bool(getattr(args, "compact", False)),
         )
         if not viewer.show(
             agents=agents, metrics=metrics, markers=markers, wait_ms=EPISODE_HOLD_MS
@@ -758,6 +783,7 @@ def _run_follow(args) -> int:
                     warn=warn,
                     ep=ep,
                     step=step,
+                    compact=bool(getattr(args, "compact", False)),
                 )
                 if not viewer.show(agents=agents, metrics=metrics, markers=markers, wait_ms=1):
                     return _viewer_quit(viewer)
@@ -788,6 +814,7 @@ def _run_follow(args) -> int:
                 warn=warn,
                 ep=ep,
                 step=step,
+                compact=bool(getattr(args, "compact", False)),
             )
             if not viewer.show(
                 agents=agents, metrics=metrics, markers=markers, wait_ms=EPISODE_HOLD_MS
@@ -880,6 +907,11 @@ def main(argv=None) -> int:
         "--deterministic",
         action="store_true",
         help="Use deterministic PPO actions (default: stochastic so twins diverge)",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Fewer overlay lines (live score + beat-FTG + short train ts). Unofficial KPIs only.",
     )
     args = parser.parse_args(argv)
 

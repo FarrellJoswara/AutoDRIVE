@@ -35,7 +35,7 @@
 | `CAMPAIGN_RESEARCH.md` | READY (tick 0) |
 | `CAMPAIGN_BOARD.md` | OPEN (tick 0) |
 
-MUST 1–5 gated by critique+racer+minimalist; reliability **vetoes** unattended continuous until dual-writer/heartbeat notes addressed. Board owns per-tick Go/No-Go.
+MUST 1–5 gated by critique+racer+minimalist; reliability **P0 dual-writer/heartbeat blockers SHIPPED ~04:08** (Start/Continue no-kill + heartbeat join). Continuous outer loop still **NO-GO** until chaos drills pass; board owns per-tick Go/No-Go.
 
 ---
 
@@ -141,6 +141,13 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Shipped / Tests
+
+### ~04:08 — Reliability P0: heartbeat join + Start/Continue no-kill (**SHIP**)
+- **Bug 1:** validation heartbeat could overwrite `phase=early_stopped` with `validating` (Event set, thread not joined). Fixed: join+gen-token; refuse non-terminal writes after `early_stopped`; stop heartbeat before terminal write.
+- **Bug 2:** Start/Continue called `_kill_train_tree()` after busy check — busy false-negative murdered overnight then spawned. Fixed: **never kill** from Start/Continue (Stop-only); busy also scans live `train.lock`.
+- **Regressions:** `ui_selftest` — heartbeat vs early_stopped; Start/Continue no-kill on false-busy; live-lock refuse; HTTP Stop mocked (prior unmocked Stop could sweep live `train_ppo`).
+- **Verify:** `python -m rl.ui_selftest` → all passed; overnight survived retest (live Continue PIDs ~53852/19244 @ ~295k).
+- **Note:** First selftest run (before Stop mock) raced overnight death mid-validation @ 300k; W3 Continue-restarted from `ppo_295480_steps.zip`.
 
 ### ~04:04 — W3 collision-first UI + smoke progress probe
 - Control UI checkbox → `--collision-first` on Start; Overnight preset clears checkbox; preview shows collision line.

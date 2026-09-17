@@ -179,8 +179,14 @@ def _kill_proc_tree(proc: subprocess.Popen | None) -> int:
     return killed
 
 
+PROTECTED_OVERNIGHT_RUN = "overnight_soak_20260917_082739"
+
+
 def _sweep_train_ppo() -> int:
-    """Kill any stray python -m rl.train_ppo (and start_train) outside this UI."""
+    """Kill stray python -m rl.train_ppo outside this UI.
+
+    Never touches the protected overnight soak (or any cmdline containing its run_id).
+    """
     killed = 0
     try:
         import psutil
@@ -192,6 +198,8 @@ def _sweep_train_ppo() -> int:
             except (psutil.Error, TypeError):
                 continue
             if "control_ui" in cmd:
+                continue
+            if PROTECTED_OVERNIGHT_RUN in cmd:
                 continue
             hit = ("train_ppo" in cmd) or ("start_train" in cmd and "rl" in cmd.lower())
             if not hit:
@@ -218,10 +226,12 @@ def _sweep_train_ppo() -> int:
                 "-NoProfile",
                 "-Command",
                 (
-                    "$n=0; Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+                    "$n=0; $prot='" + PROTECTED_OVERNIGHT_RUN + "'; "
+                    "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
                     "Where-Object { "
                     "  $_.CommandLine -like '*train_ppo*' -and "
-                    "  $_.CommandLine -notlike '*control_ui*' "
+                    "  $_.CommandLine -notlike '*control_ui*' -and "
+                    "  $_.CommandLine -notlike ('*'+$prot+'*') "
                     "} | ForEach-Object { "
                     "  taskkill /PID $_.ProcessId /T /F 2>$null | Out-Null; $n++ "
                     "}; Write-Output $n"
@@ -1588,7 +1598,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w2-fast-wave-20260917"
+UI_BUILD = "reliability-nokill-hbjoin+w2-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
