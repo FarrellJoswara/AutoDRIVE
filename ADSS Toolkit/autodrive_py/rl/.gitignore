@@ -20,4 +20,6 @@ logs/
 *.log
 _ftg_pin*.log
 *.zip
+*.__tmp_save__
+_tmp_*/
 _trash_candidates/

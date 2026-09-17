@@ -110,6 +110,13 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Timeline
 
+### ~04:32 — Tick #2 wave executor (fresh parallel; standing resume parent-mismatch)
+- **Overnight:** `overnight_soak_20260917_082739` **ALIVE** ≈563k learning, PIDs **19244/53852** — no Continue-restart.
+- **Board:** `20260917-tick2-wave` Go + ≥2 Approves on T2-01…04; DEFER A/B; SKIP GPU.
+- **SHIP’d:** P1-1 AtomicCheckpointCallback · P1-3 CorruptManifest · P1-5 MONITOR_INFO_KEYWORDS · W8 multi-run Control (live_runs/Focus/Start warn).
+- **Tests:** `_bugfix_p0_checks` 25/25; `ui_selftest` all passed (overnight untouched).
+- **Blocked:** MUST #3 crashΔ still inconclusive (anti-thrash — no new disposable A/B while soak busy); standing agent resume IDs unusable from nested wake.
+
 ### ~04:32 — Researcher closeout: 50k collision A/B + holdout reconfirm
 - **Holdout:** `_w2_verify_smokes` ALL PASS (map2/3 CLI refuse exit=2; seals OK).
 - **Collision A/B 50k:** `cf_ab50k_{base,cf}_20260917_041400` finished 49152 ts; crash_rate **0.0 both** (stall-heavy) → **crashΔ null**; board `20260917-researcher-ab50k-holdout` (+ meta `20260917-meta-ab-report`).
@@ -200,6 +207,11 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Shipped / Tests
+
+### ~04:34 — Repo cleanup batch 4 (standing cleanup agent)
+- **gitignore:** ignore `*.__tmp_save__` and `_tmp_*/` so atomic-save / scratch leftovers stay out of git.
+- **Re-scan:** no orphan locks; no OS junk; overnight **19244/53852** ALIVE; cleared regen pycache again.
+- Did not stage other agents' WIP.
 
 ### ~04:33 — Repo cleanup batch 3 (standing cleanup agent)
 - **Safe deletes:** regenerated `rl/__pycache__`; confirmed junk `models/_tmp_save_test` (foo.__tmp_save__ / bar.zip atomic-save leftovers).
