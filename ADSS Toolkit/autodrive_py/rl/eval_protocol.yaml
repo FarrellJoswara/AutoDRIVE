@@ -1,0 +1,38 @@
+# Frozen held-out eval protocol (contracts 2.0.0).
+# Do not fish on these seeds/maps for "wins" outside this file.
+#
+# official_v2 (supersedes official_v1):
+#   * timeout_s raised to 400 s. The map pack laps are ~1060-1220 m and the car
+#     tops out at 6 m/s, so a lap needs ~180-210 s. Under the old 60 s limit no
+#     policy could finish, every run scored the DNF proxy, and "beat FTG" was
+#     undecidable. Retuned FTG laps all five maps clean in 181-208 s.
+#   * map4 added as a second sealed holdout.
+# Rows scored under official_v1 are not comparable and must not be ranked here.
+protocol_id: official_v2
+contracts_version: "2.0.0"
+backend: gym
+episodes_per_map: 5
+seeds: [0, 1, 2, 3, 4]
+collision_dq: 10
+# Per-episode sim-time budget. Must exceed the slowest expected lap.
+timeout_s: 400
+# Jitter the start pose per seed. Without this the env and a deterministic
+# policy are fully reproducible, so all five seeds return the identical episode
+# and any reported spread is fake precision.
+eval_spawn_jitter: true
+# Maps: train may use map0/map1; map3 is the validation pin (selection only);
+# holdouts are sealed for official scoring. See maps/map_pack.json.
+train_ok_maps: [map0, map1]
+validation_map: map3
+maps:
+  - id: map0
+    role: train_ok
+    sealed: false
+  - id: map2
+    role: holdout
+    sealed: true
+  - id: map4
+    role: holdout
+    sealed: true
+# FTG pin identity under this protocol
+ftg_run_id: ftg_official_v2

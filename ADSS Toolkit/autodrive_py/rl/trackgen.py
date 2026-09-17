@@ -5,14 +5,16 @@ Adapted from f1tenth_gym random_trackgen.py (CarRacing-style), MIT License
 Copyright (c) 2020 Joseph Auckley, Matthew O'Kelly, Aman Sinha, Hongrui Zheng
 
 Outputs per map under maps/<name>/:
-  <name>.png, <name>.pgm, <name>.yaml, centerline.csv, start_pose.txt
+  <name>.png, <name>.yaml, centerline.csv, start_pose.txt  (+ <name>.pgm with --pgm)
+
+Map ``<prefix><i>`` is reproducible from ``(seed, i)`` alone, so a pack can be
+grown or repaired one map at a time without shifting the other maps' geometry.
 """
 
 from __future__ import annotations
 
 import argparse
 import math
-import os
 from pathlib import Path
 
 import cv2
@@ -21,6 +23,10 @@ import shapely.geometry as shp
 
 
 WIDTH = 10.0  # half-track buffer (pixels in generator space → meters after scale)
+
+# Bumped when generated geometry/outputs change: v1 = shared RNG stream + pgm
+# image, v2 = per-index RNG + png image. Recorded in the map pack manifest.
+GEN_VERSION = 2
 
 
 def create_track(rng: np.random.Generator):
@@ -146,8 +152,15 @@ def convert_track(
     out_dir: Path,
     name: str,
     resolution: float = 0.05,
+    *,
+    scale: float = 1.0,
+    write_pgm: bool = False,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if scale != 1.0:
+        s = float(scale)
+        track, track_int, track_ext = track * s, track_int * s, track_ext * s
 
     # Bounds with margin
     all_pts = np.vstack([track_int, track_ext, track])
@@ -187,12 +200,16 @@ def convert_track(
     start_path = out_dir / "start_pose.txt"
 
     cv2.imwrite(str(png_path), img)
-    cv2.imwrite(str(pgm_path), img)
+    # PGM is the ROS map_server convention but costs ~400x the png on disk at
+    # this raster size; the gym/UI read whatever `image:` points at.
+    if write_pgm:
+        cv2.imwrite(str(pgm_path), img)
+    image_name = f"{name}.pgm" if write_pgm else f"{name}.png"
 
     yaml_path.write_text(
         "\n".join(
             [
-                f"image: {name}.pgm",
+                f"image: {image_name}",
                 f"resolution: {resolution:.6f}",
                 f"origin: [{origin[0]:.6f}, {origin[1]:.6f}, 0.000000]",
                 "negate: 0",
@@ -218,32 +235,113 @@ def convert_track(
     return yaml_path
 
 
+def map_yaml_path(out_root: Path, name: str) -> Path:
+    return Path(out_root) / name / f"{name}.yaml"
+
+
+def _map_rng(seed: int, index: int, attempt: int) -> np.random.Generator:
+    """Independent stream per (seed, index) so each map id regenerates identically."""
+    return np.random.default_rng([int(seed), int(index), int(attempt)])
+
+
+def generate_map(
+    out_root: Path,
+    index: int,
+    *,
+    seed: int = 123,
+    prefix: str = "map",
+    resolution: float = 0.05,
+    scale: float = 1.0,
+    write_pgm: bool = False,
+    max_attempts: int = 40,
+) -> dict | None:
+    """Generate one map ``<prefix><index>``; returns its spec, or None if all attempts fail."""
+    name = f"{prefix}{index}"
+    for attempt in range(max(1, int(max_attempts))):
+        result = create_track(_map_rng(seed, index, attempt))
+        if result is None:
+            continue
+        track, track_int, track_ext = result
+        try:
+            yaml_path = convert_track(
+                track,
+                track_int,
+                track_ext,
+                Path(out_root) / name,
+                name,
+                resolution=resolution,
+                scale=scale,
+                write_pgm=write_pgm,
+            )
+        except Exception:
+            continue
+        return {
+            "id": name,
+            "index": int(index),
+            "yaml": yaml_path,
+            "gen_seed": int(seed),
+            "gen_attempt": int(attempt),
+            "gen_version": GEN_VERSION,
+            "resolution": float(resolution),
+            "scale": float(scale),
+            "has_pgm": bool(write_pgm),
+            "n_centerline": int(len(track)),
+        }
+    return None
+
+
+def generate_map_specs(
+    out_root: Path,
+    num_maps: int = 3,
+    seed: int = 123,
+    prefix: str = "map",
+    *,
+    start_index: int = 0,
+    skip_existing: bool = True,
+    resolution: float = 0.05,
+    scale: float = 1.0,
+    write_pgm: bool = False,
+) -> list[dict]:
+    """Ensure maps ``<prefix><start_index..>`` exist on disk; cached ones are not redrawn.
+
+    Specs of cached maps carry ``cached=True`` and no generation provenance (it
+    lives in the map pack manifest instead).
+    """
+    out_root = Path(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+    specs: list[dict] = []
+    for i in range(int(start_index), int(start_index) + int(num_maps)):
+        name = f"{prefix}{i}"
+        existing = map_yaml_path(out_root, name)
+        if skip_existing and existing.is_file():
+            specs.append({"id": name, "index": i, "yaml": existing, "cached": True})
+            continue
+        spec = generate_map(
+            out_root,
+            i,
+            seed=seed,
+            prefix=prefix,
+            resolution=resolution,
+            scale=scale,
+            write_pgm=write_pgm,
+            max_attempts=40,
+        )
+        if spec is not None:
+            spec["cached"] = False
+            specs.append(spec)
+    return specs
+
+
 def generate_maps(
     out_root: Path,
     num_maps: int = 3,
     seed: int = 123,
     prefix: str = "map",
+    **kwargs,
 ) -> list[Path]:
-    rng = np.random.default_rng(seed)
-    out_root.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    i = 0
-    attempts = 0
-    while i < num_maps and attempts < num_maps * 40:
-        attempts += 1
-        result = create_track(rng)
-        if result is None:
-            continue
-        track, track_int, track_ext = result
-        name = f"{prefix}{i}"
-        dest = out_root / name
-        try:
-            yaml_path = convert_track(track, track_int, track_ext, dest, name)
-        except Exception:
-            continue
-        written.append(yaml_path)
-        i += 1
-    return written
+    """Backwards-compatible wrapper: returns the ensured map yaml paths."""
+    specs = generate_map_specs(out_root, num_maps=num_maps, seed=seed, prefix=prefix, **kwargs)
+    return [s["yaml"] for s in specs]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,15 +354,49 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path(__file__).resolve().parent / "maps"),
     )
     parser.add_argument("--prefix", type=str, default="map")
+    parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--resolution", type=float, default=0.05)
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Shrink/grow track geometry (1.0 = legacy size; smaller = tighter, cheaper raster)",
+    )
+    parser.add_argument("--pgm", action="store_true", help="Also write the ~40MB ROS .pgm twin")
+    parser.add_argument("--force", action="store_true", help="Redraw maps that already exist")
+    parser.add_argument(
+        "--no-register",
+        action="store_true",
+        help="Skip adopting the results into maps/map_pack.json",
+    )
     args = parser.parse_args(argv)
 
-    paths = generate_maps(Path(args.out), num_maps=args.num_maps, seed=args.seed, prefix=args.prefix)
-    if len(paths) < args.num_maps:
-        print(f"Only generated {len(paths)}/{args.num_maps} maps after retries")
+    out_root = Path(args.out)
+    specs = generate_map_specs(
+        out_root,
+        num_maps=args.num_maps,
+        seed=args.seed,
+        prefix=args.prefix,
+        start_index=args.start_index,
+        skip_existing=not args.force,
+        resolution=args.resolution,
+        scale=args.scale,
+        write_pgm=args.pgm,
+    )
+    for s in specs:
+        print(f"{'cached ' if s.get('cached') else 'wrote  '}{s['yaml']}")
+    if not args.no_register and specs:
+        try:
+            from .map_pack import register_specs
+
+            register_specs(specs, maps_root=out_root)
+            print(f"registered in {out_root / 'map_pack.json'}")
+        except Exception as exc:  # pack registration is advisory, never fatal here
+            print(f"NOTE: map pack not updated ({exc})")
+    if len(specs) < args.num_maps:
+        print(f"Only produced {len(specs)}/{args.num_maps} maps after retries")
         return 1
-    for p in paths:
-        print(f"wrote {p}")
-    print(f"OK: {len(paths)} map sets")
+    print(f"OK: {len(specs)} map sets")
     return 0
 
 

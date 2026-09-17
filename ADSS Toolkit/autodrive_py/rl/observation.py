@@ -91,6 +91,28 @@ def observation_bounds(n_lidar: int = N_LIDAR_DEFAULT) -> tuple[np.ndarray, np.n
     return low, high
 
 
+def apply_lidar_dr(
+    lidar_norm: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    noise_std: float = 0.0,
+    dropout: float = 0.0,
+    max_range_scale: float = 1.0,
+) -> np.ndarray:
+    """Light LiDAR domain randomization on already-normalized [0, 1] beams (train only)."""
+    x = np.asarray(lidar_norm, dtype=np.float32).copy()
+    if max_range_scale < 1.0:
+        # Occasional shorter effective max → clip highs.
+        if float(rng.random()) < 0.25:
+            x = np.clip(x / max(float(max_range_scale), 1e-3), 0.0, 1.0)
+    if noise_std > 0.0:
+        x = x + rng.normal(0.0, float(noise_std), size=x.shape).astype(np.float32)
+    if dropout > 0.0:
+        mask = rng.random(x.shape) < float(dropout)
+        x = np.where(mask, 1.0, x)  # dropout → max-range / no hit
+    return np.clip(x, 0.0, 1.0).astype(np.float32)
+
+
 def build_observation(
     raw_ranges: np.ndarray,
     prev_throttle: float,
@@ -101,9 +123,23 @@ def build_observation(
     ay: float,
     n_lidar: int = N_LIDAR_DEFAULT,
     speed_max: float = SPEED_MAX_MPS,
+    *,
+    lidar_dr: bool = False,
+    rng: np.random.Generator | None = None,
+    noise_std: float = 0.0,
+    dropout: float = 0.0,
+    max_range_scale: float = 1.0,
 ) -> np.ndarray:
     """Build the fixed v2 observation vector (no camera / no vision pad)."""
     lidar = downsample_lidar(raw_ranges, n_lidar=n_lidar)
+    if lidar_dr and rng is not None:
+        lidar = apply_lidar_dr(
+            lidar,
+            rng,
+            noise_std=noise_std,
+            dropout=dropout,
+            max_range_scale=max_range_scale,
+        )
     proprio = np.array(
         [
             float(prev_throttle),

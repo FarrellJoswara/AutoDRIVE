@@ -1,0 +1,119 @@
+{
+  "pack_version": 1,
+  "contracts_version": "2.0.0",
+  "updated_utc": "2026-09-17T08:21:37+00:00",
+  "validation_map": "map3",
+  "maps": {
+    "gen231_0": {
+      "id": "gen231_0",
+      "role": "train_ok",
+      "sealed": false,
+      "map_hash": "89ff654f1ce89591",
+      "content_hash": "40daf4f6b16aa0f5",
+      "seal_hash": null,
+      "hashed_utc": "2026-09-17T06:42:39+00:00",
+      "sealed_utc": null,
+      "seal_reason": null,
+      "gen": {
+        "source": "trackgen",
+        "seed": 231,
+        "index": 0,
+        "attempt": 0,
+        "version": 2,
+        "resolution": 0.05,
+        "scale": 1.0,
+        "has_pgm": false,
+        "n_centerline": 278,
+        "created_utc": "2026-09-17T06:42:39+00:00"
+      }
+    },
+    "map0": {
+      "id": "map0",
+      "role": "train_ok",
+      "sealed": false,
+      "map_hash": "574ed45b45c899b2",
+      "seal_hash": null,
+      "hashed_utc": "2026-09-17T05:58:13+00:00",
+      "sealed_utc": null,
+      "seal_reason": null,
+      "gen": {
+        "source": "adopted"
+      },
+      "content_hash": "a4e7fe7f20ae9a84"
+    },
+    "map1": {
+      "id": "map1",
+      "role": "train_ok",
+      "sealed": false,
+      "map_hash": "0851f6ccc803b9c7",
+      "seal_hash": null,
+      "hashed_utc": "2026-09-17T05:58:14+00:00",
+      "sealed_utc": null,
+      "seal_reason": null,
+      "gen": {
+        "source": "adopted"
+      },
+      "content_hash": "7234c07116521417"
+    },
+    "map2": {
+      "id": "map2",
+      "role": "holdout",
+      "sealed": true,
+      "map_hash": "59927658ec0416c3",
+      "seal_hash": "87b5545bd611ddb7",
+      "hashed_utc": "2026-09-17T06:03:17+00:00",
+      "sealed_utc": "2026-09-17T06:03:17+00:00",
+      "seal_reason": "official_v1 protocol holdout H (eval_protocol.yaml)",
+      "gen": {
+        "source": "adopted"
+      },
+      "content_hash": "87b5545bd611ddb7"
+    },
+    "map3": {
+      "id": "map3",
+      "role": "validation",
+      "sealed": false,
+      "map_hash": "54a6596063976c5c",
+      "seal_hash": null,
+      "hashed_utc": "2026-09-17T05:58:39+00:00",
+      "sealed_utc": null,
+      "seal_reason": null,
+      "gen": {
+        "source": "trackgen",
+        "seed": 123,
+        "index": 3,
+        "attempt": 0,
+        "version": 2,
+        "resolution": 0.05,
+        "scale": 1.0,
+        "has_pgm": false,
+        "n_centerline": 307,
+        "created_utc": "2026-09-17T05:58:39+00:00"
+      },
+      "content_hash": "c2a057a3b53c1626"
+    },
+    "map4": {
+      "id": "map4",
+      "role": "holdout",
+      "sealed": true,
+      "map_hash": "1ff6701cddc339a9",
+      "seal_hash": "ce0a9c950b1d2303",
+      "hashed_utc": "2026-09-17T05:58:45+00:00",
+      "sealed_utc": "2026-09-17T05:58:45+00:00",
+      "seal_reason": "official_v1 second holdout H2",
+      "gen": {
+        "source": "trackgen",
+        "seed": 123,
+        "index": 4,
+        "attempt": 0,
+        "version": 2,
+        "resolution": 0.05,
+        "scale": 1.0,
+        "has_pgm": false,
+        "n_centerline": 349,
+        "created_utc": "2026-09-17T05:58:45+00:00"
+      },
+      "content_hash": "ce0a9c950b1d2303"
+    }
+  }
+}

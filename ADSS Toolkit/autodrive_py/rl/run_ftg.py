@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .contracts import CONTRACTS_VERSION, N_LIDAR_DEFAULT, TIMEOUT_S
+from .contracts import CONTRACTS_VERSION, N_LIDAR_DEFAULT, TIMEOUT_S, obs_dim
 from .ftg import FollowTheGap
 from .metrics_io import make_metrics, write_run_artifacts
 from .racing_env import RacingEnv, resolve_map_yaml
@@ -96,7 +96,10 @@ def main(argv=None) -> int:
             "action_space": "MultiDiscrete([4, 11])",
             "throttle_bins": [0.0, 0.33, 0.66, 1.0],
             "steering_bins": [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            "obs_include_speed": False,
+            "obs_include_speed": True,
+            "obs_include_imu": True,
+            "imu_dim": 3,
+            "obs_dim": obs_dim(args.n_lidar),
             "timeout_s": TIMEOUT_S,
         }
         write_run_artifacts(models_root, metrics["run_id"], config, metrics)

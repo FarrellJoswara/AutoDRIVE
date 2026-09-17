@@ -6,6 +6,21 @@ Frozen interface: [contracts.md](contracts.md). Research: [research_notes.md](re
 
 **Branch:** `rl/phase-1-research`
 
+## Control UI (minimal)
+
+Ugly single-page panel (stdlib HTTP — no Gradio). Starts/stops train as a **separate** headless process; never runs OpenCV inside train.
+
+```powershell
+cd "ADSS Toolkit/autodrive_py"
+.\rl\start_ui.ps1
+# or: python -m rl.control_ui
+# open http://127.0.0.1:7860/
+```
+
+- Shows `live_status.json` (timesteps, `ep_rew_mean`, `run_id`, `n_envs`) when present
+- Buttons: **Start training**, **Stop training** (kills `train_ppo` tree), **Open watch --follow**, TensorBoard command/link
+- Knobs: map / timesteps / **Parallel sims / CPU workers** slider (`n_envs` 1–32). Start uses Subproc when >1 (Dummy fallback). Watch opens that many colored twins.
+
 ## Start training
 
 Easiest (no chat / no activate needed) — defaults: **map0**, **500k** steps, **8 SubprocVecEnv**, **512×512** net, batch 1024, **device auto**, TB under `rl/runs`:
@@ -21,7 +36,7 @@ cd "ADSS Toolkit/autodrive_py"
 - Models: `rl/models/<run_id>/best_model.zip` (+ `latest_model.zip` / `checkpoints/` while training)
 - Live trail: `rl/runs/<run_id>/live_status.json` (timesteps, ep reward, etc. — no frames)
 - TensorBoard: `& .\rl\.venv\Scripts\python.exe -m tensorboard --logdir rl/runs` → http://localhost:6006
-- Stop: `Ctrl+C` in the train window
+- Stop: `Ctrl+C` in the train window, or **Stop** in `rl.control_ui`
 - Follow while training (second terminal): `python -m rl.watch --follow`
 
 ## Quickstart (Windows)
@@ -53,13 +68,13 @@ python -m rl.eval_cli --backend gym --policy ppo --map map0
 
 ## Watching (minimal) vs TensorBoard
 
-**No camera in v1** — observation and viewer are LiDAR / map only (see `contracts.md`).
+**No camera in v2** — observation is LiDAR + proprio/IMU; viewer is still LiDAR / map only (see `contracts.md`).
 
-There is **no** separate dashboard app. Training stays **headless** (never calls OpenCV). Watching is a separate process that **lags behind** training on purpose.
+Training stays **headless** (never calls OpenCV). Use `python -m rl.control_ui` for start/stop knobs; watching is a separate process that **lags behind** training on purpose.
 
 | Need | Tool | Notes |
 | ---- | ---- | ----- |
-| Lag-behind twin + train stats | `python -m rl.watch --follow` | Reads `rl/runs/<run_id>/live_status.json` for overlay (timesteps, ep_rew_mean, collision estimate). Loads `latest_model.zip` / newest checkpoint and rolls out in its **own** env. Shows ~latest brain, not every train frame. |
+| Lag-behind twins + train stats | `python -m rl.watch --follow [--n-envs N]` | Reads `live_status.json`. Runs **N colored twin cars** on one map with `latest_model.zip` (not live Subproc poses). Overlay: timesteps, ep_rew, n_envs, color legend. |
 | Fixed policy on map | `python -m rl.watch --policy ftg\|ppo` | One OpenCV window: map + car + numbers. |
 | Training curves | TensorBoard | Reward / loss over time. Prefer this during training (no FPS hit). |
 
@@ -69,23 +84,23 @@ We **cannot** cheaply stream every train-env frame without slowing `train_ppo`. 
 
 Instead:
 
-1. **Train** writes a tiny JSON trail every N PPO rollouts (`LiveStatusCallback` — no render) and optionally `latest_model.zip`.
-2. **`watch --follow`** polls that JSON for overlay metrics and drives a **twin** car with the latest saved weights.
-3. Twin episodes lag real train episodes; overlay train_ts / ep_rew reflect the status file (closest available progress).
+1. **Train** writes a tiny JSON trail every N PPO rollouts (`LiveStatusCallback` — no render) and optionally `latest_model.zip` (includes `n_envs`).
+2. **`watch --follow`** polls that JSON and drives **N colored twin cars** on one map with the latest saved weights (viewer twins — not live Subproc poses).
+3. Twin episodes lag real train episodes; overlay train_ts / ep_rew / n_envs reflect the status file.
 
 ```powershell
-# Terminal A — train (headless)
+# Terminal A — train (headless) or use control UI
 .\rl\start_train.ps1
+# .\rl\start_ui.ps1  → http://127.0.0.1:7860/
 
-# Terminal B — lag-behind viewer
-python -m rl.watch --follow --map map0 --every 5
-# or pin a run:
+# Terminal B — lag-behind multi-color twins
+python -m rl.watch --follow --map map0 --n-envs 8 --every 5 --no-beams
+# or pin a run / let n_envs come from live_status (omit --n-envs or pass 0):
 python -m rl.watch --follow --run_id 20260101_120000_ppo_gym_map0
 
 # One-shot / baseline view (not following train)
 python -m rl.watch --policy ftg --map map0 --every 2
-python -m rl.watch --policy ppo --map map0 --every 5
-python -m rl.watch --policy ftg --map map0 --every 2 --no-beams
+python -m rl.watch --policy ppo --map map0 --n-envs 4 --every 5
 
 # Training curves only
 tensorboard --logdir rl/runs
@@ -96,17 +111,25 @@ tensorboard --logdir rl/runs
 
 ## Observation / sensors (what the policy sees)
 
-Training observation today (**neural net inputs**):
+**contracts_version `2.0.0`** — fixed layout so encoders/IMU do not force a later reshape. Camera stays out (future MAJOR bump / separate head — no huge zero pads).
+
+```text
+obs[0 : N)          LiDAR (N=180 default), ranges / 10 → [0, 1]
+obs[N : N+2)        prev_throttle, prev_steering          → [-1, 1]
+obs[N+2]            speed_norm = clip(v / 6.0, 0, 1)      → [0, 1]
+obs[N+3 : N+6)      IMU: yaw_rate, ax, ay (each / 10)     → [-1, 1]
+────────────────────────────────────────────────────────────
+obs_dim = N + 6 = 186 (default)
+```
 
 | In the net | Not in the net |
 | ---------- | -------------- |
-| LiDAR **180** beams (normalized ranges) | Camera |
-| Previous **throttle + steering** | IMU |
-| | Raw time / wall-clock |
-| | IPS / pose ground truth |
-| | Wheel encoders |
+| LiDAR **180** (normalized) | **Camera** (deferred) |
+| Previous **throttle + steering** | Raw wall-clock / episode time |
+| **Speed** (gym `v` / Bridge encoders) | IPS / pose ground truth |
+| **IMU×3** (`yaw_rate`, `ax`, `ay`) | `az` / `wx` / `wy` (not in v2) |
 
-Episode **time/step** and collision counts can appear on the **viewer overlay** as metrics, but they are **not** policy inputs unless contracts change (`obs_include_speed` etc.). Reward shaping may use map GT / collisions **during training only** — that does not add those signals to the observation vector.
+**v1 LiDAR-only (+prev action) zips are obsolete** — do not load them into a v2 env. Reward shaping may still use map GT / collisions **during training only**; that does not change the observation vector.
 
 ## Phase index
 
@@ -132,9 +155,12 @@ Episode **time/step** and collision counts can appear on the **viewer overlay** 
 
 ## Training notes
 
-- Observation: **LiDAR 180 + prev throttle/steering only** (see table above). Camera / IMU / time / IPS / encoders are **not** policy inputs.
+- Observation: **LiDAR 180 + prev action + speed + IMU×3** (`obs_dim=186`; see diagram above). Camera out. v1 zips obsolete.
 - Action: `MultiDiscrete([4, 11])`.
+- Reward progress: **forward centerline Δs only** (high-water Frenet `s`); reverse/orbit → `0`. No spin/yaw penalty.
+- Termination: collision; 60 s timeout; **stall** if no meaningful forward progress for **`stall_timeout_s=8` s** (`info["stall"]`).
+- **Restart train after reward/env code changes** — Stop + Start so workers reload `RacingEnv` (an old run keeps old reward until restart).
 - Score: `adjusted_time = lap_time + 10 * collisions`.
 - **GPU:** `--device auto` uses the RTX when CUDA torch is installed. Env stepping stays on CPU (normal for this stack); GPU runs the PPO update. Force CPU with `--device cpu` if you want. GPU util may still stay well below 100% because physics/LiDAR are CPU-bound — parallel envs (`--n-envs` / `-NEnvs`) + bigger net/batch still train harder and raise throughput (FPS / steps/sec).
-- **UI:** TensorBoard for curves; `rl.watch --follow` for a lag-behind twin + train stats; plain `rl.watch` for a fixed policy. No full dashboard.
+- **UI:** `rl.control_ui` / `start_ui.ps1` for start/stop; TensorBoard for curves; `rl.watch --follow` for a lag-behind twin.
 - For a serious train, use `--timesteps 100000` (or more) and multiple maps.

@@ -225,15 +225,17 @@ Reward is a **sum of terms** per step. Defaults below are normative for comparab
 
 | Term | Sign | Default | Definition |
 | ---- | ---- | ------- | ---------- |
-| Progress | `+` | `w_progress = 1.0` | Forward progress along track: encoder delta and/or pose arc-length delta **in gym**. Prefer centerline / Frenet `s` increase when available. |
+| Progress | `+` | `w_progress = 1.0` | **Forward-only** centerline / Frenet `s` increase (lap direction). Gym credits only new high-water of unwrapped Δs; reverse / sideways / orbiting that does not increase forward `s` → progress term `0`. Local projection window + per-step Δs cap prevent nearest-point wrap farming. |
 | Speed | `+` | `w_speed = 0.01` | Small bonus proportional to speed (m/s or normalized speed proxy), clipped to a reasonable max to avoid reward hacking. |
 | Wall proximity | `−` | `w_wall = 0.1` | If `min(raw_lidar_m) < d_wall` where `d_wall = 0.3` **meters before normalize**, apply penalty (e.g. `w_wall * (d_wall - min_range)` or flat `w_wall`). Threshold is on **meters**, not normalized `[0,1]`. |
 | Collision | `−` | **`10.0`** | On collision event: add `-10.0` and **terminate** the episode (§5). |
 | Time cost | `−` | `w_time = 0.001` | Small per-step cost to discourage stalling. |
 
+No spin / yaw-rate penalty in the default reward (v2 shaping).
+
 ```text
 r_t = (
-    + w_progress * progress_delta
+    + w_progress * progress_delta   # forward centerline Δs only (≥ 0)
     + w_speed    * speed
     - wall_penalty          # 0 if min_lidar_m >= 0.3
     - 10.0                  # only on collision step
@@ -278,15 +280,17 @@ An episode ends when any of the following is true:
 | --------- | ------- | ----- |
 | **Collision** | always on | Terminate on the collision step after applying `-10.0` reward |
 | **Timeout** | **60 s** wall/sim time **or** `max_steps` | Whichever the env configures; both must be documented in `config.json`. Suggested `max_steps` ≈ `ceil(60 / dt)` for the control rate used |
+| **Stall (no progress)** | **8 s** (`stall_timeout_s`) | Truncate if forward centerline Δs ≤ `0.05` m for this long (sim time). `truncated=True`, `info["stall"]=True`. Constructor / config arg; shaping only — not an obs/action contract bump. |
 | **Lap complete** | optional | If lap detection is available (start/finish crossing / progress wrap), terminate successfully; record lap time |
 
 `truncated` / info keys (informative, not frozen as Gym API names beyond common practice):
 
 - `terminated`: collision or lap complete (task end)
-- `truncated`: timeout / step limit
+- `truncated`: timeout / step limit / stall
 - `info["collision"]`: bool
 - `info["lap_time"]`: float seconds if lap completed
 - `info["timeout"]`: bool
+- `info["stall"]`: bool (no meaningful forward progress for `stall_timeout_s`)
 
 ---
 
