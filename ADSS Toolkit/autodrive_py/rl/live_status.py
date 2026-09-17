@@ -147,6 +147,7 @@ def LiveStatusCallback(*args, **kwargs):
             save_latest_every_rollouts: int = 1,
             n_envs: int = 1,
             vec_env_active: str = "dummy",
+            vec_env_fallback: bool = False,
             verbose: int = 0,
         ):
             super().__init__(verbose)
@@ -158,6 +159,7 @@ def LiveStatusCallback(*args, **kwargs):
             self.save_latest_every_rollouts = max(1, int(save_latest_every_rollouts))
             self.n_envs = max(1, int(n_envs))
             self.vec_env_active = str(vec_env_active or "dummy")
+            self.vec_env_fallback = bool(vec_env_fallback)
             self._rollouts = 0
             self._ep_count = 0
             self._collision_eps = 0
@@ -307,6 +309,7 @@ def LiveStatusCallback(*args, **kwargs):
                 "latest_model": latest_str,
                 "n_envs": int(self.n_envs),
                 "vec_env_active": self.vec_env_active,
+                "vec_env_fallback": bool(self.vec_env_fallback),
                 # Reminder: reward/env edits need Stop+Start train to reload worker code.
                 "reward_shaping": "forward_s_only+stall_timeout; restart train after env changes",
             }

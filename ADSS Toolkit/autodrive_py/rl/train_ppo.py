@@ -1211,11 +1211,17 @@ def main(argv=None) -> int:
                 save_latest_every_rollouts=max(1, save_latest_every) if latest_path else 1,
                 n_envs=n_envs,
                 vec_env_active=vec_kind,
+                vec_env_fallback=vec_env_fallback,
             )
         )
         print(f"Live status -> {status_path}")
         if latest_path:
             print(f"Latest weights every {save_latest_every} rollout(s) -> {latest_path}")
+        if vec_env_fallback:
+            print(
+                "WARNING: live_status.vec_env_fallback=true "
+                "(Subproc requested but Dummy active)"
+            )
 
     race_cb = RaceBestModelCallback(
         run_dir_early,
@@ -1280,6 +1286,7 @@ def main(argv=None) -> int:
         "n_envs": n_envs,
         "vec_env": vec_kind,
         "vec_env_requested": vec_env_requested,
+        "vec_env_fallback": bool(vec_env_fallback),
         "n_steps": n_steps,
         "batch_size": batch_size,
         "n_epochs": n_epochs,
@@ -1428,6 +1435,7 @@ def main(argv=None) -> int:
         "n_envs": n_envs,
         "vec_env": vec_kind,
         "vec_env_requested": vec_env_requested,
+        "vec_env_fallback": bool(vec_env_fallback),
         "n_steps": n_steps,
         "batch_size": batch_size,
         "n_epochs": n_epochs,

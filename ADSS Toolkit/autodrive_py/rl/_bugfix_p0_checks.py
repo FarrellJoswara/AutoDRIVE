@@ -17,6 +17,8 @@ from rl.metrics_io import (  # noqa: E402
     find_last_complete_checkpoint,
     release_run_lock,
 )
+from rl.map_pack import HoldoutViolation, assert_train_safe  # noqa: E402
+from rl.racing_env import assert_resolved_map_id, resolve_map_yaml  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
 
@@ -143,6 +145,77 @@ def main() -> int:
         second_excl = True
     check("O_EXCL second create raises FileExistsError", second_excl)
 
+    # --- B0.1: strict map resolve refuses silent wrong-map fallback -----------
+    # Soft fallback only matches **/map*.yaml (or demo) — use map0 so soft works.
+    maps_tmp = tmp / "maps_b01"
+    maps_tmp.mkdir()
+    real = maps_tmp / "map0"
+    real.mkdir()
+    (real / "map0.yaml").write_text("image: map0.png\nresolution: 0.05\n", encoding="utf-8")
+    soft = resolve_map_yaml("does_not_exist_xyz", maps_tmp, strict=False)
+    check(
+        "B0.1 soft resolve still falls back",
+        soft.stem == "map0",
+        str(soft),
+    )
+    strict_refused = False
+    try:
+        resolve_map_yaml("does_not_exist_xyz", maps_tmp, strict=True)
+    except FileNotFoundError as exc:
+        strict_refused = "strict" in str(exc).lower() or "refuse" in str(exc).lower()
+    check("B0.1 strict missing id raises FileNotFoundError", strict_refused)
+
+    mismatch_refused = False
+    try:
+        assert_resolved_map_id("berlin", soft)
+    except FileNotFoundError as exc:
+        mismatch_refused = "mismatch" in str(exc).lower()
+    check("B0.1 assert_resolved_map_id catches stem mismatch", mismatch_refused)
+
+    ok_id = resolve_map_yaml("map0", maps_tmp, strict=True)
+    try:
+        assert_resolved_map_id("map0", ok_id)
+        id_ok = True
+    except FileNotFoundError:
+        id_ok = False
+    check("B0.1 exact id resolves + assert passes", id_ok and ok_id.stem == "map0")
+
+    # assert_train_safe: missing yaml + not-in-pack (empty manifest, no adopt)
+    empty_pack = {"pack_version": 1, "maps": {}, "validation_map": None}
+    missing_gate = False
+    try:
+        assert_train_safe(["ghost_map_zzz"], maps_root=maps_tmp, pack=empty_pack)
+    except HoldoutViolation as exc:
+        missing_gate = "missing" in str(exc).lower() or "unresolved" in str(exc).lower()
+    check("B0.1 assert_train_safe refuses missing map yaml", missing_gate)
+
+    not_safe_gate = False
+    try:
+        # yaml exists on disk but pack has no train_ok entry
+        assert_train_safe(["map0"], maps_root=maps_tmp, pack=empty_pack)
+    except HoldoutViolation as exc:
+        not_safe_gate = "train_safe" in str(exc).lower() or "unregistered" in str(exc).lower()
+    check("B0.1 assert_train_safe refuses unregistered map", not_safe_gate)
+
+    safe_pack = {
+        "pack_version": 1,
+        "validation_map": None,
+        "maps": {
+            "map0": {
+                "id": "map0",
+                "role": "train_ok",
+                "sealed": False,
+                "exists": True,
+            }
+        },
+    }
+    try:
+        assert_train_safe(["map0"], maps_root=maps_tmp, pack=safe_pack)
+        train_ok_gate = True
+    except HoldoutViolation:
+        train_ok_gate = False
+    check("B0.1 assert_train_safe allows train_ok with yaml", train_ok_gate)
+
     # --- live_status does not clobber early_stopped ---------------------------
     status = tmp / "live_status.json"
     write_live_status(
@@ -162,6 +235,7 @@ def main() -> int:
         every_rollouts=1,
         n_envs=1,
         vec_env_active="dummy",
+        vec_env_fallback=True,
     )
     # Minimal fake for _write without full SB3 train loop
     class _M:
@@ -177,6 +251,27 @@ def main() -> int:
         "LiveStatus refuses to clobber early_stopped phase",
         after.get("phase") == "early_stopped",
         f"phase={after.get('phase')}",
+    )
+
+    # Fresh learning write must surface Subproc→Dummy honesty flag (B1.1 / P1-7)
+    status2 = tmp / "live_status_fallback.json"
+    cb2 = LiveStatusCallback(
+        status_path=status2,
+        run_id="t2",
+        every_steps=1,
+        every_rollouts=1,
+        n_envs=8,
+        vec_env_active="dummy",
+        vec_env_fallback=True,
+    )
+    cb2.model = _M()  # type: ignore[attr-defined]
+    cb2.num_timesteps = 100  # type: ignore[attr-defined]
+    cb2._write(force_save_latest=False)  # type: ignore[attr-defined]
+    fb = read_live_status(status2) or {}
+    check(
+        "live_status records vec_env_fallback=true",
+        fb.get("vec_env_fallback") is True and fb.get("vec_env_active") == "dummy",
+        f"fallback={fb.get('vec_env_fallback')} active={fb.get('vec_env_active')}",
     )
 
     print()
