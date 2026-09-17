@@ -318,7 +318,7 @@ def _kpi_lines(
             if rid:
                 rid_s = str(rid)
                 # Keep strip readable; overnight ids are long.
-                bits.append(rid_s if len(rid_s) <= 28 else ("…" + rid_s[-24:]))
+                bits.append(rid_s if len(rid_s) <= 28 else ("..." + rid_s[-24:]))
             phase = status.get("phase")
             if phase:
                 bits.append(str(phase))

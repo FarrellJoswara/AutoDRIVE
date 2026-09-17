@@ -162,6 +162,7 @@ def test_kpi_lines_compact_keeps_race_drops_session():
             return "FTG  ghost dump row"
 
     status = {
+        "run_id": "overnight_soak_demo",
         "timesteps": 12000,
         "steps_per_sec": 200.0,
         "collisions_estimate": 3,
@@ -176,6 +177,7 @@ def test_kpi_lines_compact_keeps_race_drops_session():
     assert len(compact) < len(full)
     assert not any("ghost dump" in ln for ln in compact)
     assert any(ln.startswith("train") and "ts 12000" in ln for ln in compact)
+    assert any("overnight_soak_demo" in ln for ln in compact)
     assert any("learning" in ln for ln in compact)
     assert any("crash 25%" in ln for ln in compact)
     assert not any("rew" in ln for ln in compact)
