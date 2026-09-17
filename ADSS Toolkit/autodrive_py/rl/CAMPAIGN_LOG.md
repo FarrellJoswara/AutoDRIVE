@@ -201,6 +201,11 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Shipped / Tests
 
+### ~04:33 — Repo cleanup batch 3 (standing cleanup agent)
+- **Safe deletes:** regenerated `rl/__pycache__`; confirmed junk `models/_tmp_save_test` (foo.__tmp_save__ / bar.zip atomic-save leftovers).
+- **Soft fix:** `logs/CURRENT_PID.txt` stale dead PID 50444 → **19244** (matches overnight `train.lock`).
+- **Sacred untouched:** overnight PID **19244/53852** ALIVE; research model dirs left alone; other agents' WIP not staged.
+
 ### ~04:30 — Repo cleanup batch 2 (standing cleanup agent)
 - **Safe deletes:** regenerated `rl/__pycache__`; zero-byte `logs/*.err.log` / `*.log.err` (non-overnight).
 - **gitignore:** add parent `autodrive_py/.gitignore` (`__pycache__/`, `*.pyc`, `*.pyo`, `.pytest_cache/`).
