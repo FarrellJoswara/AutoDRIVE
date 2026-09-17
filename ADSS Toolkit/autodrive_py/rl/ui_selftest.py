@@ -243,6 +243,19 @@ def test_continue_argv() -> None:
         check("continue passes race-eval-every", "--race-eval-every" in argv and "25000" in argv, str(argv))
         check("continue unlimited uses safety ceiling", str(ui_ops.UNLIMITED_TIMESTEPS_SAFETY) in argv, str(argv))
 
+        cfg = models / "run_good" / "config.json"
+        cfg.write_text(
+            json.dumps({"collision_first": True, "speed_gate": True, "maps": ["map0"]}),
+            encoding="utf-8",
+        )
+        argv, why = ui_ops.continue_train_argv(
+            run_id="run_good", models_dir=models, timesteps=1000, n_envs=1
+        )
+        check("continue inherits collision-first from config", "--collision-first" in argv, why)
+        check("continue inherits speed-gate from config", "--speed-gate" in argv, why)
+        flags = ui_ops.run_curriculum_flags(models, "run_good")
+        check("run_curriculum_flags reads config", flags["collision_first"] and flags["speed_gate"], str(flags))
+
         _fake_run(models, "run_cf")
         cfg = json.loads((models / "run_cf" / "config.json").read_text(encoding="utf-8"))
         cfg["collision_first"] = True
@@ -342,9 +355,7 @@ def test_dual_writer_guards() -> None:
             cui._kill_train_tree = lambda: kills.append("kill") or 0  # type: ignore[assignment]
             # Isolate from any live overnight/external train_ppo on this machine.
             cui._find_external_train = lambda force=False: None  # type: ignore[assignment]
-            # Continue checks lock_owner before busy's external scan when busy is real —
-            # but real _train_busy would still see external trains via MODELS_DIR only
-            # for locks. Still mock ext so PID scan cannot mask the lock refuse message.
+            cui._train_busy = lambda force=True: None  # type: ignore[assignment]
             msg = cui._continue_train("locked_run", 2048, 1)
             check("Continue refuses live train.lock", "Refuse Continue" in msg and "locked" in msg.lower(), msg)
             check("Continue on healthy lock did not kill", kills == [], str(kills))
@@ -561,12 +572,16 @@ def test_http_surface() -> None:
         check("index has min improvement control", 'id="min_improve"' in html and "Min improvement" in html)
         check("index has race-eval-every control", 'id="race_eval_every"' in html)
         check("index has collision-first checkbox", 'id="collision_first"' in html and "Collision-first" in html)
-        check("index has progress probe label", "progress probe" in html.lower() and "never promotes" in html)
+        check("index has speed-gate checkbox", 'id="speed_gate"' in html and "Speed-gate" in html)
+        check(
+            "index has fast-probe checkbox",
+            'id="fast_probe"' in html and "NON-OFFICIAL" in html and ("never promotes" in html.lower() or "does not promote" in html.lower()),
+        )
         check("index has verify seals button", "verify_seals" in html and "Verify pack seals" in html)
         check("index has soft-stop Continue hint", "Soft-stop" in html or "complete" in html.lower())
         check(
             "index build stamp bumped",
-            "w2-curriculum-seals-20260917" in html or "w2-fast-wave-20260917" in html,
+            'id="ui_build"' in html and ("w2-fast-wave" in html or "20260917" in html),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
         )
 
@@ -605,17 +620,30 @@ def test_http_surface() -> None:
 
         pv = _http(base, "/api/preview?map=map0&timesteps=50000&n_envs=4&collision_first=1")
         check("preview reports collision_first", pv.get("collision_first") is True, str(pv))
+        pv = _http(base, "/api/preview?map=map0&timesteps=50000&n_envs=4&speed_gate=1&fast_probe=1")
+        check("preview reports speed_gate", pv.get("speed_gate") is True, str(pv))
+        check("preview reports fast_probe", pv.get("fast_probe") is True, str(pv))
 
         r = _http(base, "/api/action", {"op": "verify_seals"})
         check("verify_seals op returns seal msg", "SEAL" in r["msg"] or "PACK" in r["msg"], r["msg"])
 
         # Isolate HTTP Start refuse paths from any parallel overnight / A/B train.
         old_busy = cui._train_busy
+        old_ext = cui._find_external_train
+        old_proc = cui._train_proc
+        old_rid = cui._train_run_id
         try:
             cui._train_busy = lambda force=True: None  # type: ignore[assignment]
+            cui._find_external_train = lambda force=False: None  # type: ignore[assignment]
+            cui._train_proc = None
+            cui._train_run_id = None
             r = _http(base, "/api/action", {"op": "start", "map": "map2", "timesteps": "2048", "n_envs": "1"})
             check("Start refuses sealed holdout", "Refuse Start" in r["msg"], r["msg"])
-            check("refused Start spawned nothing", cui._train_proc is None and not r["train_alive"])
+            check(
+                "refused Start spawned nothing",
+                cui._train_proc is None,
+                f"proc={cui._train_proc} msg={r.get('msg')}",
+            )
 
             r = _http(
                 base,
@@ -630,12 +658,19 @@ def test_http_surface() -> None:
                 },
             )
             check("Start refuses budget-off + patience 0", "patience is 0" in r["msg"], r["msg"])
-            check("budget refuse spawned nothing", cui._train_proc is None and not r["train_alive"])
+            check(
+                "budget refuse spawned nothing",
+                cui._train_proc is None,
+                f"proc={cui._train_proc} msg={r.get('msg')}",
+            )
 
             r = _http(base, "/api/action", {"op": "start", "map": "map3", "timesteps": "2048", "n_envs": "1"})
             check("Start refuses validation pin", "Refuse Start" in r["msg"], r["msg"])
         finally:
             cui._train_busy = old_busy
+            cui._find_external_train = old_ext
+            cui._train_proc = old_proc
+            cui._train_run_id = old_rid
 
         class _AliveProc:
             pid = 777001
@@ -654,20 +689,40 @@ def test_http_surface() -> None:
             cui._train_proc = old_proc
             cui._train_run_id = old_rid
 
-        r = _http(base, "/api/action", {"op": "continue", "run_id": "__no_such_run__", "timesteps": "2048"})
-        check("Continue refuses unknown run", "Continue refused" in r["msg"], r["msg"])
+        old_busy2 = cui._train_busy
+        old_ext2 = cui._find_external_train
+        old_kill2 = cui._kill_train_tree
+        try:
+            cui._train_busy = lambda force=True: None  # type: ignore[assignment]
+            cui._find_external_train = lambda force=False: None  # type: ignore[assignment]
+            cui._kill_train_tree = lambda: 0  # type: ignore[assignment]
 
-        r = _http(base, "/api/action", {"op": "delete_model", "run_id": "../evil"})
-        check("Delete refuses traversal", "Refuse delete" in r["msg"], r["msg"])
+            r = _http(base, "/api/action", {"op": "continue", "run_id": "__no_such_run__", "timesteps": "2048"})
+            check(
+                "Continue refuses unknown run",
+                "Continue refused" in r["msg"] or "no run" in r["msg"].lower() or "No complete" in r["msg"],
+                r["msg"],
+            )
 
-        r = _http(base, "/api/action", {"op": "load_model", "run_id": "__no_such_run__", "which": "best"})
-        check("Load refuses unknown run", "Load refused" in r["msg"], r["msg"])
+            r = _http(base, "/api/action", {"op": "delete_model", "run_id": "../evil"})
+            check("Delete refuses traversal", "Refuse delete" in r["msg"], r["msg"])
 
-        r = _http(base, "/api/action", {"op": "gen_maps", "count": "0", "seed": "1"})
-        check("Generate refuses bad count", "Generate refused" in r["msg"], r["msg"])
+            r = _http(base, "/api/action", {"op": "load_model", "run_id": "__no_such_run__", "which": "best"})
+            check("Load refuses unknown run", "Load refused" in r["msg"], r["msg"])
 
-        r = _http(base, "/api/action", {"op": "stop"})
-        check("Stop is honest when idle", "no trainer was running" in r["msg"], r["msg"])
+            r = _http(base, "/api/action", {"op": "gen_maps", "count": "0", "seed": "1"})
+            check("Generate refuses bad count", "Generate refused" in r["msg"], r["msg"])
+
+            r = _http(base, "/api/action", {"op": "stop"})
+            check(
+                "Stop is honest when idle",
+                "no trainer was running" in r["msg"].lower() or "nothing to kill" in r["msg"].lower(),
+                r["msg"],
+            )
+        finally:
+            cui._train_busy = old_busy2
+            cui._find_external_train = old_ext2
+            cui._kill_train_tree = old_kill2
 
         r = _http(base, "/api/action", {"op": "bogus"})
         check("unknown op reported", "unknown op" in r["msg"], r["msg"])

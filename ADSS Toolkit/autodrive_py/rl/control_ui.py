@@ -1588,7 +1588,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "reliability-nokill-hbjoin-20260917"
+UI_BUILD = "w2-fast-wave-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
