@@ -3,7 +3,8 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** Support-loop armed (~18m); **P1-2** atomic `best_model_meta` SHIP’d; W8 multi-run UI design on remote `283417c` (Control WIP left local for UI seat); overnight Continue live — do not kill.
+**Head note:** Support-loop armed (~18m); **P1-2** atomic `best_model_meta` SHIP’d; W8 multi-run UI design on remote `283417c` (Control WIP left local for UI seat); overnight Continue live — do not kill.  
+**Human handoff:** friends start at [`HANDOFF.md`](HANDOFF.md) (runbook + sacred soak + multi-run).
 
 ---
 
@@ -163,8 +164,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 - Support loop: every ~18m `git status` → commit+push safe SHIP; never touch overnight PIDs; never force-push/amend remote; exclude pycache / `_ftg_pin*.log`.
 - **SHIP P1-2:** `train_ppo` RaceBest `best_model_meta.json` → `atomic_write_json`; `_bugfix_p0_checks` **19/19**.
-- **Pushed:** **`8af8a25`** (`Ship P1-2 atomic best_model_meta write.`).
-- Left W8 `control_ui.py` mid-flight for UI seat (do not fight).
+- **Pushed:** **`8af8a25`** (P1-2) → **`bec5752`** (log SHA). W8 Control later SHIP’d as **`891864f`** — do not fight UI seat files mid-edit.
 - Overnight soak ALIVE (~495k validating @ smoke) — untouched.
 
 ---

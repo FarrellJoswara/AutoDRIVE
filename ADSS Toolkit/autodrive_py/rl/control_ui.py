@@ -2435,7 +2435,6 @@ async function refresh(){
         + ' · Continue=Models row · Stop=non-protected (overnight never)';
     }
     renderLiveRuns(j.live_runs || [], j.bound_run_id || j.run_id);
-    window.__startLockWarn = j.start_lock_warn || null;
     document.getElementById('ts').textContent = j.timesteps != null ? j.timesteps : '-';
     document.getElementById('rew').textContent = j.ep_rew_mean != null ? Number(j.ep_rew_mean).toFixed(3) : '-';
     document.getElementById('ne').textContent = j.n_envs != null ? j.n_envs : '-';
