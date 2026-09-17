@@ -11,6 +11,29 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — MUST #4 FTGΔ (official_v2 PPO vs FTG pin) — ~04:29 America/Chicago
+- **id:** `20260917-meta-ftg-delta`
+- **type:** result / honesty
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739` (PIDs ~19244/53852 ALIVE). Did not start a third eval.
+- **MUST #4:** **DONE (row present)** — duplicate `eval_cli --official` thrash (PIDs ~52360/27808) both exited; one `official_v2` PPO row landed.
+
+| Field | Value |
+| ----- | ----- |
+| run_id | `eval_ppo_eval_overnight_best_20260917_0412` |
+| policy / kind / protocol | `ppo` / `official` / `official_v2` |
+| maps | map0 + map2 + map4 (5 eps × 3 maps); timeout **400 s** |
+| adjusted_time | **206.68 s** |
+| DNF | **False** (collisions=0, mean_progress≈0.990) |
+| n_episodes | **15** |
+| FTG pin | **198.16 s** (`ftg_official_v2`, n=15) |
+| **Δ (PPO − FTG)** | **+8.52 s** (positive = slower than FTG; did **not** beat pin) |
+
+**NOT official (do not rank):** overnight mid-train `best_model_meta` `kind=train_eval` ≈**187.8 s** on **map3** @ **220 s** validation timeout — different protocol/maps/timeout from `official_v2`. Label only.
+
+**Model:** `models/eval_overnight_best_20260917_0412/best_model.zip` (snapshot of overnight RaceBest). Seals intact; no sacred early-stop retune.
+
+---
+
 ## RESULTS — P1-2 atomic best_model_meta — ~04:25 America/Chicago
 - **id:** `20260917-p1-2-atomic-meta`
 - **type:** result / bugfix

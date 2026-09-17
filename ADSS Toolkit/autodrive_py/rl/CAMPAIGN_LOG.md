@@ -110,6 +110,11 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Timeline
 
+### ~04:29 — MUST #4 FTGΔ collected (`20260917-meta-ftg-delta`)
+- Official PPO `official_v2` row: **206.68 s** (n=15, DNF=False, maps map0/2/4 @ 400 s) vs FTG pin **198.16 s** → **Δ = +8.52 s** (lose).
+- Mid-train overnight `train_eval` ≈187.8 s map3 @ 220 s = **NOT official**.
+- Overnight soak untouched; eval PIDs ~52360/27808 exited (no third eval). Board: `CAMPAIGN_BOARD.md` RESULTS id `20260917-meta-ftg-delta`.
+
 ### 03:54–03:57 — Snapshot
 
 - Protected `overnight_soak_20260917_082739`; CURRENT_RUN refreshed.
