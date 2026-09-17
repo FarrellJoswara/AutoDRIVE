@@ -128,6 +128,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - **Rationale:** 50-minute ticks were too slow; remaining window was being padded instead of shipping. User wants ideas constantly worked — many well-implemented small features per tick, parallel board + parallel implementers.
 - Stopped 50m full-board loop PID ~52836 (46964 already dead). Did **not** kill `train_ppo` (31472/34256).
 - Re-armed `AGENT_LOOP_TICK_autodrive-rl-campaign` at **600s** until 12:54 America/Chicago; `campaign_tick.md` updated for parallel Researcher/personalities + Orchestrator multi-ship with sibling implementers + frequent push.
+- **New loop PID:** `40676` (first sentinel after ~10m sleep; train_ppo 31472/34256 left running).
 
 ---
 
