@@ -220,6 +220,30 @@ def test_train_status_line_leads_with_race_counters():
     assert train_status_line(None) is None
 
 
+def test_validating_not_mislabeled_stale_and_keeps_honesty():
+    """phase=validating must not become TRAIN STALE; lag-behind stays unofficial."""
+    import time
+
+    from .watch import _lag_sub_label, _status_stale_warning, _watching_label
+
+    validating = {
+        "phase": "validating",
+        "timesteps": 545488,
+        "unix_time": time.time() - 200.0,
+        "msg": "racing validation map (map3) — timesteps paused (not stuck)",
+        "run_id": "overnight_soak_20260917_082739",
+    }
+    assert _status_stale_warning(validating) is None
+    label = _watching_label(validating)
+    assert "validating" in label and "not hung" in label
+    # Learning + same age still fires stale.
+    learning = dict(validating, phase="learning")
+    warn = _status_stale_warning(learning)
+    assert warn and "TRAIN STALE" in warn
+    sub = _lag_sub_label(None)
+    assert "lag-behind" in sub and "unofficial" in sub
+
+
 def _render_sample_frame() -> np.ndarray:
     """One synthetic frame with every overlay layer on at once."""
     env = RacingEnv(map_yaml=resolve_map_yaml("map0", MAPS_ROOT), seed=0)
@@ -246,7 +270,7 @@ def _render_sample_frame() -> np.ndarray:
     ]
     metrics = {
         "watch_label": "watching iter 12 | ts=49152",
-        "sub_label": "lag-behind replay of latest_model.zip (8s old) - not the training cars",
+        "sub_label": "lag-behind replay of latest_model.zip (8s old) - unofficial KPIs (not the training cars)",
         "warn": "MAP MISMATCH: watching 'map0' but run trained on map3",
         "kpi_lines": [
             "PPO  adj 41.3 | lap 31.3 | col 1 | laps 3/8",

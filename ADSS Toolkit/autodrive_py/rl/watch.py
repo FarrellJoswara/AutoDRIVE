@@ -376,6 +376,8 @@ def _age_str(seconds: float) -> str:
 def _watching_label(status: dict | None, *, using_ftg: bool = False) -> str:
     """Human-readable follow overlay, e.g. ``watching iter 12 | ts=49152``."""
     st = status or {}
+    phase = str(st.get("phase") or "")
+    validating = phase == "validating"
     n_upd = st.get("n_updates")
     if n_upd is None:
         n_upd = st.get("rollouts")
@@ -389,35 +391,45 @@ def _watching_label(status: dict | None, *, using_ftg: bool = False) -> str:
     except (TypeError, ValueError):
         ts_i = None
 
+    gloss = " | validating (not hung)" if validating else ""
+
     if using_ftg:
         if ts_i is not None:
-            return f"watching FTG | waiting weights | ts={ts_i}"
-        return "watching FTG | waiting for train weights"
+            return f"watching FTG | waiting weights | ts={ts_i}{gloss}"
+        return f"watching FTG | waiting for train weights{gloss}"
 
     if n_upd_i is not None and ts_i is not None:
-        return f"watching iter {n_upd_i} | ts={ts_i}"
+        return f"watching iter {n_upd_i} | ts={ts_i}{gloss}"
     if n_upd_i is not None:
-        return f"watching iter {n_upd_i}"
+        return f"watching iter {n_upd_i}{gloss}"
     if ts_i is not None:
-        return f"watching ts={ts_i}"
+        return f"watching ts={ts_i}{gloss}"
+    if validating:
+        return "watching validating (not hung)"
     return "watching (no live_status yet)"
 
 
 def _lag_sub_label(weights: Path | None, *, now: float | None = None) -> str:
     """Second line that admits Watch is a replay, not the training cars."""
     if weights is None:
-        return "lag-behind replay - FTG placeholder until the first weights land"
+        return "lag-behind replay - FTG placeholder until the first weights land (unofficial)"
     try:
         age = (now or time.time()) - weights.stat().st_mtime
         aged = f" ({_age_str(age)} old)"
     except OSError:
         aged = ""
-    return f"lag-behind replay of {weights.name}{aged} - not the training cars"
+    return f"lag-behind replay of {weights.name}{aged} - unofficial KPIs (not the training cars)"
 
 
 def _status_stale_warning(status: dict | None, *, now: float | None = None) -> str | None:
-    """Loud cue when the train side stopped writing live_status."""
+    """Loud cue when the train side stopped writing live_status.
+
+    ``phase=validating`` is a scheduled mid-train race eval (timesteps pause on
+    purpose for minutes). Match Control UI: never mislabel that as TRAIN STALE.
+    """
     if not status:
+        return None
+    if str(status.get("phase") or "") == "validating":
         return None
     ts = status.get("unix_time")
     try:
@@ -427,7 +439,6 @@ def _status_stale_warning(status: dict | None, *, now: float | None = None) -> s
     if age < STATUS_STALE_S:
         return None
     return f"TRAIN STALE: no live_status for {_age_str(age)} (train stopped or crashed)"
-
 
 def _config_warning(
     config: dict | None,
