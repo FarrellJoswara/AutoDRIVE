@@ -13,7 +13,7 @@
 - **Cadence change (~04:00):** 50m ticks were too slow / padded the 9h window. User mandate: ideas constantly worked; lots of well-implemented small features each tick. See [`campaign_tick.md`](campaign_tick.md).
 - **On EVERY tick:** parent MUST (1) resume Researcher + Racer/Minimalist/Reliability **in parallel** for NEXT proposal batch → `CAMPAIGN_BOARD.md`; (2) resume Orchestrator to ship **MULTIPLE** approved small features in parallel (spawn sibling implementers); protect overnight; **push often**. **Not orchestrator-only / not single-feature trickle.**
 - **Deadline:** after 12:54 America/Chicago 2026-09-17, STOP loop; do not re-arm.
-- Prior loops: PID ~46964 (orchestrator-only, 50m) aborted; PID ~52836 (full-board, 50m) stopped for cadence cut. Do not kill `train_ppo` when re-arming.
+- Cursor-attached loops die ~60s; use detached [`campaign_keepalive.ps1`](campaign_keepalive.ps1) (PID in `logs/campaign_keepalive.pid`; ticks in `logs/campaign_loop_ticks.log`). Parent: read latest tick → run `campaign_tick.md`. Do not kill `train_ppo` when re-arming.
 
 ## Governance (mandatory — 03:57+)
 
@@ -129,9 +129,23 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - Stopped 50m full-board loop PID ~52836 (46964 already dead). Did **not** kill `train_ppo` (31472/34256).
 - Re-armed `AGENT_LOOP_TICK_autodrive-rl-campaign` at **600s** until 12:54 America/Chicago; `campaign_tick.md` updated for parallel Researcher/personalities + Orchestrator multi-ship with sibling implementers + frequent push.
 - **New loop PID:** `40676` (first sentinel after ~10m sleep; train_ppo 31472/34256 left running).
+- **~04:05:** Loop PID `40676` died externally (`exit_code=4294967295`, ~4m in, no tick emitted). Re-armed same 10m sentinel — **new loop PID `12004`**. Overnight `31472/34256` no longer present at re-arm — Continue-restart same `run_id` is required on next tick.
+
+---
+
+### ~04:04–04:06 — W3 tick + overnight Continue restart
+- Shipped collision-first UI + smoke progress probe (see Shipped).
+- Cursor-attached 600s loops die ~60s — use detached `campaign_keepalive.ps1` (PID file `logs/campaign_keepalive.pid`).
+- **Incident:** overnight soak found dead (stale lock 34256). Continue-restarted same `run_id` from ckpt `ppo_295480_steps.zip`; sacred floors intact. PIDs ~49144/38752.
 
 ---
 
 ## Shipped / Tests
 
-_(appended as reviewed work lands)_
+### ~04:04 — W3 collision-first UI + smoke progress probe
+- Control UI checkbox → `--collision-first` on Start; Overnight preset clears checkbox; preview shows collision line.
+- `live_status`: `mean_progress_frac_estimate` + `progress_probe_kind=smoke` (Monitor `progress_frac`); UI status row labeled smoke/not official.
+- Seal verify helper `seal_verify_summary` (maps_ok=6/6 smoke). Continue reliability still sibling-owned.
+- Import smoke OK; overnight `train_ppo` left running.
+
+_(further entries appended as reviewed work lands)_

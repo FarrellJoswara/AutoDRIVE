@@ -102,7 +102,10 @@ def _make_env(
             ttc_truncate=ttc_truncate,
             lidar_dr=lidar_dr,
         )
-        return Monitor(env, info_keywords=("collision", "stall", "ttc", "crash_tag"))
+        return Monitor(
+            env,
+            info_keywords=("collision", "stall", "ttc", "crash_tag", "progress_frac"),
+        )
 
     return _thunk
 
@@ -307,7 +310,7 @@ def RaceBestModelCallback(*args, **kwargs):
 
     from stable_baselines3.common.callbacks import BaseCallback
 
-    from .live_status import write_live_status
+    from .live_status import is_terminal_phase, write_live_status
 
     class _CB(BaseCallback):
         def __init__(
@@ -355,6 +358,8 @@ def RaceBestModelCallback(*args, **kwargs):
             self._last_eval_ts = 0
             self._hb_stop: threading.Event | None = None
             self._hb_thread: threading.Thread | None = None
+            # Generation token: late pulses after stop/join must not write.
+            self._hb_gen = 0
 
         def _status_base(self) -> dict:
             return {
@@ -374,6 +379,19 @@ def RaceBestModelCallback(*args, **kwargs):
         def _write_status(self, *, phase: str, msg: str) -> None:
             if self.status_path is None:
                 return
+            # Never let validating/learning heartbeat clobber a terminal phase.
+            if self.early_stopped and not is_terminal_phase(phase):
+                return
+            if not is_terminal_phase(phase):
+                # Also honor a terminal phase already on disk (join race window).
+                try:
+                    from .live_status import read_live_status
+
+                    prev = read_live_status(self.status_path)
+                except OSError:
+                    prev = None
+                if prev and is_terminal_phase(prev.get("phase")):
+                    return
             payload = self._status_base()
             payload["phase"] = phase
             payload["msg"] = msg
@@ -386,13 +404,17 @@ def RaceBestModelCallback(*args, **kwargs):
         def _start_heartbeat(self, msg: str) -> None:
             """Refresh unix_time while validation blocks learn() so status age stays fresh."""
             self._stop_heartbeat()
-            if self.status_path is None:
+            if self.status_path is None or self.early_stopped:
                 return
             stop = threading.Event()
             self._hb_stop = stop
+            self._hb_gen += 1
+            gen = self._hb_gen
 
             def _pulse() -> None:
                 while not stop.wait(5.0):
+                    if gen != self._hb_gen or self.early_stopped or stop.is_set():
+                        return
                     self._write_status(phase="validating", msg=msg)
 
             th = threading.Thread(target=_pulse, name="race-eval-hb", daemon=True)
@@ -400,10 +422,18 @@ def RaceBestModelCallback(*args, **kwargs):
             th.start()
 
         def _stop_heartbeat(self) -> None:
-            if self._hb_stop is not None:
-                self._hb_stop.set()
+            """Signal the pulse thread and join it before any terminal status write."""
+            stop = self._hb_stop
+            th = self._hb_thread
             self._hb_stop = None
             self._hb_thread = None
+            # Bump gen so any in-flight pulse that slipped past wait() bails out.
+            self._hb_gen += 1
+            if stop is not None:
+                stop.set()
+            if th is not None and th.is_alive():
+                # Pulse uses stop.wait(5.0) — join slightly longer than one interval.
+                th.join(timeout=6.0)
 
         def _on_step(self) -> bool:
             if self.eval_freq <= 0:
@@ -436,6 +466,9 @@ def RaceBestModelCallback(*args, **kwargs):
                 )
                 return True
             if should_stop:
+                # Join heartbeat BEFORE writing terminal phase so a late
+                # validating pulse cannot land after early_stopped.
+                self._stop_heartbeat()
                 self.early_stopped = True
                 self.early_stop_msg = (
                     f"early-stop: no meaningful improvement "
@@ -480,6 +513,7 @@ def RaceBestModelCallback(*args, **kwargs):
             return True
 
         def _on_training_end(self) -> None:
+            # Join first — never leave a validating pulse racing training_end.
             self._stop_heartbeat()
             # Final promotion pass only if we did not already stop mid-run.
             if self.early_stopped:
@@ -564,6 +598,140 @@ def RaceBestModelCallback(*args, **kwargs):
             return meaningful, True, is_baseline
 
     return _CB(*args, **kwargs)
+
+
+# Default short timeout for optional NON-OFFICIAL progress probes.
+# Must stay well below MID_TRAIN_SELECT_TIMEOUT_S so nobody mistakes it for race score.
+DEFAULT_FAST_PROBE_TIMEOUT_S = 30.0
+
+
+def FastProbeCallback(*args, **kwargs):
+    """Optional mid-train progress probe — status-only, never official.
+
+    Writes ``probe_*`` fields into live_status. Does **not** promote
+    ``best_model``, does **not** tick early-stop patience, does **not**
+    write ``kind=official`` / train_eval board rows. Only the full
+    ``RaceBestModelCallback`` select-timeout (~220s) path counts for
+    promote / patience.
+    """
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    from .live_status import is_terminal_phase, read_live_status, write_live_status
+
+    class _Probe(BaseCallback):
+        def __init__(
+            self,
+            eval_maps: list[Path],
+            *,
+            n_lidar: int,
+            probe_every: int,
+            seed: int,
+            timeout_s: float = DEFAULT_FAST_PROBE_TIMEOUT_S,
+            status_path: Path | None = None,
+            status_run_id: str | None = None,
+            verbose: int = 0,
+        ):
+            super().__init__(verbose)
+            self.eval_maps = list(eval_maps)
+            self.n_lidar = int(n_lidar)
+            self.probe_every = max(0, int(probe_every))
+            self.seed = int(seed)
+            self.timeout_s = float(timeout_s)
+            self.status_path = Path(status_path) if status_path else None
+            self.status_run_id = status_run_id
+            self._last_probe_ts = 0
+
+        def _on_step(self) -> bool:
+            if self.probe_every <= 0 or not self.eval_maps:
+                return True
+            ts = int(self.num_timesteps)
+            if ts - self._last_probe_ts < self.probe_every:
+                return True
+            self._last_probe_ts = ts
+            if self.status_path is not None:
+                try:
+                    prev = read_live_status(self.status_path)
+                except OSError:
+                    prev = None
+                if prev and (
+                    is_terminal_phase(prev.get("phase"))
+                    or prev.get("phase") == "validating"
+                ):
+                    # Never interrupt / clobber full race-eval or early_stopped.
+                    return True
+            print(
+                f"[fast-probe] NON-OFFICIAL progress probe @ ts={ts} "
+                f"timeout={self.timeout_s:g}s — not race score, not patience, not promote"
+            )
+            try:
+                metrics = _race_eval_maps(
+                    self.model,
+                    self.eval_maps,
+                    n_lidar=self.n_lidar,
+                    episodes=1,
+                    seed=self.seed + 20_000,
+                    timeout_s=self.timeout_s,
+                )
+            except Exception as exc:
+                print(f"[fast-probe] skipped ({exc})")
+                return True
+            # Force honesty: never look like a finished race score under short timeout.
+            metrics = dict(metrics or {})
+            metrics["kind"] = "smoke"
+            metrics["official"] = False
+            metrics["probe_label"] = (
+                "NON-OFFICIAL progress probe — not race score / not early-stop / not FTGΔ"
+            )
+            prog = metrics.get("mean_progress_frac")
+            cols = metrics.get("total_collisions")
+            print(
+                f"[fast-probe] progress={prog if prog is None else round(float(prog), 4)} "
+                f"cols={cols} (status-only; RaceBest 220s still owns patience)"
+            )
+            if self.status_path is None:
+                return True
+            try:
+                prev = read_live_status(self.status_path) or {}
+            except OSError:
+                prev = {}
+            if is_terminal_phase(prev.get("phase")) or prev.get("phase") == "validating":
+                return True
+            payload = dict(prev)
+            payload.update(
+                {
+                    "run_id": self.status_run_id or prev.get("run_id"),
+                    "timesteps": ts,
+                    "unix_time": time.time(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "phase": prev.get("phase") or "learning",
+                    "probe_kind": "smoke",
+                    "probe_official": False,
+                    "probe_label": metrics["probe_label"],
+                    "probe_timeout_s": self.timeout_s,
+                    "probe_mean_progress_frac": prog,
+                    "probe_total_collisions": cols,
+                    "progress_probe_kind": "smoke",
+                    "mean_progress_frac_estimate": prog,
+                    "msg": (
+                        prev.get("msg")
+                        if prev.get("phase") == "validating"
+                        else (
+                            f"learning: NON-OFFICIAL probe progress="
+                            f"{prog if prog is None else round(float(prog), 4)} "
+                            f"(patience still uses full {MID_TRAIN_SELECT_TIMEOUT_S:g}s eval)"
+                        )
+                    ),
+                }
+            )
+            try:
+                write_live_status(self.status_path, payload)
+            except OSError as exc:
+                if self.verbose:
+                    print(f"[fast-probe] live_status write skipped: {exc}")
+            return True
+
+    return _Probe(*args, **kwargs)
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Gym PPO train (honest best_model / resume)")
@@ -681,7 +849,23 @@ def main(argv=None) -> int:
         help="Sim-time budget (s) for mid-train best_model / early-stop race evals "
         f"(default {MID_TRAIN_SELECT_TIMEOUT_S:g}). Must be >=~180-220 so a real "
         "lap can finish; 60s forced permanent DNF and false early-stop. "
-        "Official scoring still uses eval_protocol.yaml timeout_s (400).",
+        "Official scoring still uses eval_protocol.yaml timeout_s (400). "
+        "ONLY these full evals tick early-stop patience / promote best_model.",
+    )
+    parser.add_argument(
+        "--fast-probe-every",
+        type=int,
+        default=0,
+        help="Optional NON-OFFICIAL progress probe every N timesteps (0=off). "
+        "Writes live_status probe_* only — never promotes, never ticks patience, "
+        "never kind=official. Leave off for overnight.",
+    )
+    parser.add_argument(
+        "--fast-probe-timeout",
+        type=float,
+        default=DEFAULT_FAST_PROBE_TIMEOUT_S,
+        help=f"Sim-time budget (s) for --fast-probe-every (default {DEFAULT_FAST_PROBE_TIMEOUT_S:g}). "
+        "Short on purpose — progress signal only, not race score.",
     )
     parser.add_argument(
         "--official-eval",
@@ -1020,6 +1204,26 @@ def main(argv=None) -> int:
     )
     callbacks.append(race_cb)
 
+    fast_probe_every = max(0, int(args.fast_probe_every))
+    fast_probe_timeout = float(args.fast_probe_timeout)
+    if fast_probe_every > 0:
+        print(
+            f"NOTE: fast progress probe every {fast_probe_every} ts "
+            f"(timeout={fast_probe_timeout:g}s) — NON-OFFICIAL; "
+            f"patience/promote still use select-timeout={select_timeout:g}s only"
+        )
+        callbacks.append(
+            FastProbeCallback(
+                select_maps,
+                n_lidar=args.n_lidar,
+                probe_every=fast_probe_every,
+                seed=args.seed,
+                timeout_s=fast_probe_timeout,
+                status_path=status_path,
+                status_run_id=run_id,
+            )
+        )
+
     # Write config.json BEFORE learn so an early crash still leaves Continue with maps/contracts.
     early_config = {
         "contracts_version": CONTRACTS_VERSION,
@@ -1070,6 +1274,8 @@ def main(argv=None) -> int:
         "early_stop_warmup_evals": early_stop_warmup_evals,
         "early_stop_min_timesteps": early_stop_min_timesteps,
         "select_timeout_s": select_timeout,
+        "fast_probe_every": fast_probe_every,
+        "fast_probe_timeout_s": fast_probe_timeout if fast_probe_every > 0 else 0,
         "phase": "training",
     }
     early_config["fingerprint"] = config_fingerprint(early_config)

@@ -31,6 +31,7 @@ from .ui_ops import (
     coach_hints,
     continue_train_argv,
     delete_run_model,
+    find_live_run_locks,
     generate_maps_op,
     list_run_models,
     lock_owner,
@@ -40,7 +41,9 @@ from .ui_ops import (
     race_candidate,
     resolve_model_choice,
     resolve_stop_budget,
+    run_curriculum_flags,
     run_map_ids,
+    seal_verify_summary,
     start_guard,
     start_preview,
 )
@@ -236,7 +239,11 @@ def _sweep_train_ppo() -> int:
 
 
 def _kill_train_tree() -> int:
-    """Stop tracked train_ppo child tree + stray trainers. Does not touch TensorBoard."""
+    """Stop tracked train_ppo child tree + stray trainers. Does not touch TensorBoard.
+
+    ONLY call from explicit Stop (or proven-dead cleanup). Never from Start/Continue —
+    a busy false-negative would murder a live overnight then spawn a dual writer.
+    """
     global _train_proc, _train_run_id
     killed = 0
     with _state_lock:
@@ -755,6 +762,9 @@ def _train_busy(*, force: bool = True) -> str | None:
 
     ``force=False`` reuses the external-scan cache — good enough for preview,
     which must never shell out to PowerShell on every keystroke.
+
+    Start/Continue must refuse (never kill) when any of: UI-owned proc, external
+    train_ppo PID, or a live models/*/train.lock is present.
     """
     global _train_run_id, _train_log
 
@@ -768,21 +778,30 @@ def _train_busy(*, force: bool = True) -> str | None:
         )
 
     ext = _find_external_train(force=force)
-    if ext is None:
-        return None
-    pid, run_guess = ext
-    # Adopt external run into UI status so Refresh / Start messaging stay consistent.
-    with _state_lock:
-        if run_guess:
-            _train_run_id = run_guess
-            cand = LOGS_DIR / f"{run_guess}.log"
-            if cand.is_file():
-                _train_log = cand
-    return (
-        f"Training already running outside this UI: pid={pid}"
-        + (f" run_id={run_guess}" if run_guess else "")
-        + ". Status should show RUNNING - use Stop first to restart."
-    )
+    if ext is not None:
+        pid, run_guess = ext
+        # Adopt external run into UI status so Refresh / Start messaging stay consistent.
+        with _state_lock:
+            if run_guess:
+                _train_run_id = run_guess
+                cand = LOGS_DIR / f"{run_guess}.log"
+                if cand.is_file():
+                    _train_log = cand
+        return (
+            f"Training already running outside this UI: pid={pid}"
+            + (f" run_id={run_guess}" if run_guess else "")
+            + ". Status should show RUNNING - use Stop first to restart."
+        )
+
+    # PID scan can false-negative; a live train.lock is still ownership proof.
+    live_locks = find_live_run_locks(MODELS_DIR)
+    if live_locks:
+        hit = live_locks[0]
+        return (
+            f"Training lock held: {hit.get('run_id')} (pid={hit.get('pid')}). "
+            "Status should show RUNNING - use Stop first to restart."
+        )
+    return None
 
 
 def _log_tail(log_path: Path, n: int = 4) -> str:
@@ -916,6 +935,9 @@ def _start_train(
     early_stop_min_timesteps: int | None = None,
     select_timeout: float | None = None,
     stop_on_budget: bool = True,
+    collision_first: bool = False,
+    speed_gate: bool = False,
+    fast_probe: bool = False,
 ) -> str:
     busy = _train_busy()
     if busy:
@@ -933,7 +955,8 @@ def _start_train(
     if not allowed:
         return _set_msg(guard_msg)
 
-    _kill_train_tree()
+    # NEVER _kill_train_tree() here. Busy false-negative + kill = dead overnight.
+    # Refuse only; operator must Stop explicitly to kill.
 
     n_envs = _clamp_n_envs(n_envs)
     vec_env = "subproc" if n_envs > 1 else "dummy"
@@ -976,6 +999,13 @@ def _start_train(
         argv.append("--unlimited-timesteps")
     if allow_holdout:
         argv.append("--allow-holdout")
+    if collision_first:
+        argv.append("--collision-first")
+    if speed_gate:
+        argv.append("--speed-gate")
+    if fast_probe:
+        # NON-OFFICIAL progress probe — never promotes / never ticks patience.
+        argv.extend(["--fast-probe-every", "10000", "--fast-probe-timeout", "30"])
     if patience > 0:
         argv.extend(["--early-stop-patience", str(patience)])
         argv.extend(["--early-stop-min-improve", f"{min_imp:g}"])
@@ -1023,7 +1053,8 @@ def _continue_train(
     owner = lock_owner(MODELS_DIR, rid)
     if owner and owner.get("alive"):
         return _set_msg(
-            f"Refuse Continue: {rid} is locked by live pid={owner.get('pid')}. Stop that train first."
+            f"Refuse Continue: {rid} is locked by live pid={owner.get('pid')}. "
+            "Same run is healthy — Stop that train first (do not Double-Continue)."
         )
     # A crashed / killed trainer leaves its lock behind; train_ppo would then
     # refuse the resume as a dual writer.
@@ -1055,7 +1086,8 @@ def _continue_train(
         if not ok:
             return _set_msg(f"Continue refused: {precheck_msg}")
 
-    _kill_train_tree()
+    # NEVER _kill_train_tree() on Continue. If the same run is healthy we already
+    # refused above; killing after a busy false-negative murders the overnight.
     msg = _spawn_train(argv, rid, n_envs=n_envs, action="Continue training", log_mode="a")
     return _set_msg(f"{why} ({ckpt_msg}). {msg}")
 
@@ -1473,6 +1505,8 @@ def _status_payload() -> dict:
         "episode_count_estimate": live.get("episode_count_estimate"),
         "collisions_estimate": live.get("collisions_estimate"),
         "crash_rate_estimate": live.get("crash_rate_estimate"),
+        "mean_progress_frac_estimate": live.get("mean_progress_frac_estimate"),
+        "progress_probe_kind": live.get("progress_probe_kind") or live.get("probe_kind"),
         "steps_per_sec": live.get("steps_per_sec"),
         "vec_env_active": live.get("vec_env_active"),
         "rollouts": live.get("rollouts"),
@@ -1499,15 +1533,24 @@ def _models_payload() -> dict:
     for row in list_run_models(MODELS_DIR)[:40]:
         rid = str(row["run_id"])
         owner = lock_owner(MODELS_DIR, rid)
+        flags = run_curriculum_flags(MODELS_DIR, rid)
         runs.append(
             {
                 **row,
                 "active": rid == active,
                 "locked_by": owner.get("pid") if owner and owner.get("alive") else None,
                 "timeline": model_timeline(MODELS_DIR, rid)[:6],
+                "collision_first": flags["collision_first"],
+                "speed_gate": flags["speed_gate"],
             }
         )
     return {"runs": runs, "race_candidate": race_candidate(MODELS_DIR), "active_run_id": active}
+
+
+def _verify_seals() -> str:
+    """Pack seal check for the Maps / Holdout operator path (does not touch train)."""
+    report = seal_verify_summary(MAPS_DIR)
+    return _set_msg(report["msg"])
 
 
 def _preview_payload(
@@ -1519,6 +1562,9 @@ def _preview_payload(
     early_stop_patience: int = 0,
     early_stop_min_improve: float = 0.5,
     race_eval_every: int = 0,
+    collision_first: bool = False,
+    speed_gate: bool = False,
+    fast_probe: bool = False,
 ) -> dict:
     n_envs = _clamp_n_envs(n_envs)
     # The real run_id is stamped at Start; preview only shows its shape.
@@ -1533,13 +1579,16 @@ def _preview_payload(
         early_stop_patience=early_stop_patience,
         early_stop_min_improve=early_stop_min_improve,
         race_eval_every=race_eval_every,
+        collision_first=bool(collision_first),
+        speed_gate=bool(speed_gate),
     )
+    preview["fast_probe"] = bool(fast_probe)
     preview["busy_reason"] = _train_busy(force=False)
     return preview
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "overnight-earlystop-20260917"
+UI_BUILD = "reliability-nokill-hbjoin-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1589,6 +1638,8 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
   <div>steps/sec: <b id="sps">-</b> &nbsp; crash rate: <b id="crash">-</b>
     &nbsp; status age: <b id="age">-</b></div>
   <div>episodes (est.): <b id="eps">-</b> &nbsp; collisions (est.): <b id="cols">-</b></div>
+  <div>progress probe (smoke): <b id="prog">-</b>
+    <span class="small"> — mean ep progress; not official / never promotes</span></div>
   <div>rollouts: <b id="rolls">-</b></div>
   <div>latest_model: <span id="latest">-</span></div>
   <div>status file: <span id="stpath">-</span></div>
@@ -1689,6 +1740,25 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
     <input id="allow_holdout" type="checkbox" onchange="schedulePreview()">
     <span class="small">off = Start refuses [HOLDOUT] and [VALIDATION] maps (keeps official scores meaningful)</span>
   </div>
+  <div class="row">
+    <label for="collision_first" title="Heavier terminal collision penalty (COLLISION_FIRST_PENALTY). Prefer short crash-first runs before unlocking speed / long budgets. Does not morph a live overnight — Start a new disposable run for A/B.">Collision-first curriculum</label>
+    <input id="collision_first" type="checkbox" onchange="schedulePreview()">
+    <span class="small">on = pass --collision-first (crash rate should drop before long overnight aggression)</span>
+  </div>
+  <div class="row">
+    <label for="speed_gate" title="Hold speed reward until rolling crash rate is under SPEED_GATE_CRASH_RATE. Pair with collision-first on short smokes; do not morph a live overnight.">Speed-gate curriculum</label>
+    <input id="speed_gate" type="checkbox" onchange="schedulePreview()">
+    <span class="small">on = pass --speed-gate (unlock speed only under crash budget)</span>
+  </div>
+  <div class="row">
+    <label for="fast_probe" title="Optional NON-OFFICIAL mid-train progress probe (short timeout). Writes live_status probe fields only. Does NOT promote best_model, does NOT tick early-stop patience, is NOT race score / FTGΔ. Full 220s select-timeout evals remain the only patience/promote path.">Fast progress probe (NON-OFFICIAL)</label>
+    <input id="fast_probe" type="checkbox" onchange="schedulePreview()">
+    <span class="small">off by default — never call this a race score; overnight should leave it off</span>
+  </div>
+  <div class="row">
+    <button type="button" onclick="act('verify_seals')" title="Re-hash pack seals (map2/map4 holdouts + validation pin). Does not touch training.">Verify pack seals</button>
+    <span class="small" id="seal_msg"> — check before official append / FTGΔ claims</span>
+  </div>
 
   <div class="box" style="background:#151a15">
     <div><b>Start preview</b> <span class="small">(what pressing Start will do)</span></div>
@@ -1700,6 +1770,8 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
     <button type="button" onclick="act('watch')">Open watch --follow</button>
     <button type="button" onclick="act('stop_watch')">Stop Watch</button>
   </div>
+  <p class="hint"><b>Stop</b> = operator halt (clears lock when verified dead) then <b>Continue</b> from last <b>complete</b> zip.
+  Do not Task-Manager-kill mid-save — that can corrupt checkpoints. Soft-stop ≠ hard kill.</p>
   <p class="hint">Watch: click the OpenCV map window first, then q/Esc or the window X
   (that ends Watch for good — status refresh does <b>not</b> relaunch it).
   If it ignores keys (Windows focus quirk), press <b>Stop Watch</b> here to kill all watch processes.</p>
@@ -1815,6 +1887,9 @@ function buildPresets(presets){
         min_timesteps: p.early_stop_min_timesteps,
         select_timeout: p.select_timeout
       };
+      // Overnight soak stays collision_first=false; curriculum A/B is a separate Start.
+      const cf = document.getElementById('collision_first');
+      if (cf && key === 'overnight') cf.checked = false;
       syncBudget();
       syncN();
       schedulePreview();
@@ -1841,7 +1916,10 @@ async function refreshPreview(){
     early_stop: document.getElementById('early_stop').value,
     min_improve: document.getElementById('min_improve').value,
     race_eval_every: document.getElementById('race_eval_every').value,
-    stop_on_budget: document.getElementById('stop_on_budget').checked ? '1' : '0'
+    stop_on_budget: document.getElementById('stop_on_budget').checked ? '1' : '0',
+    collision_first: document.getElementById('collision_first').checked ? '1' : '0',
+    speed_gate: document.getElementById('speed_gate').checked ? '1' : '0',
+    fast_probe: document.getElementById('fast_probe').checked ? '1' : '0'
   });
   try {
     const r = await fetch('/api/preview?' + q.toString());
@@ -1858,6 +1936,9 @@ async function refreshPreview(){
       'min_impr  : ' + (p.early_stop_min_improve != null ? p.early_stop_min_improve : '-') + 's adj',
       'eval_every: ' + evalNote,
       'n_envs    : ' + p.n_envs + '   vec=' + p.vec_env,
+      'collision : ' + (p.collision_first ? 'FIRST (on)' : 'normal'),
+      'speed_gate: ' + (p.speed_gate ? 'on' : 'off'),
+      'fast_probe: ' + (p.fast_probe ? 'NON-OFFICIAL on' : 'off'),
       'run_id    : ' + p.run_id,
       'run path  : ' + p.run_path
     ];
@@ -1889,6 +1970,7 @@ async function loadModels(){
       cand.className = 'warn small';
     }
     if (!j.runs || !j.runs.length) { host.textContent = 'no models under rl/models/'; return; }
+    window.__runsCache = j.runs;
     let html = '<table><tr><th>run_id</th><th>artifacts</th><th>timeline</th><th>contracts</th><th>actions</th></tr>';
     j.runs.forEach(run => {
       const rid = esc(run.run_id);
@@ -1919,7 +2001,15 @@ function continueRun(runId){
   const stepsNote = budgetOn
     ? ('+' + document.getElementById('timesteps').value + ' steps')
     : 'early-stop only (budget off)';
-  if (!confirm('Continue ' + runId + ' from its last complete checkpoint (' + stepsNote + ')?')) return;
+  const run = (window.__runsCache || []).find(r => r.run_id === runId) || {};
+  const cf = run.collision_first ? 'on' : 'off';
+  const sg = run.speed_gate ? 'on' : 'off';
+  if (!confirm(
+    'Continue ' + runId + ' from its last COMPLETE checkpoint (' + stepsNote + ')?\\n\\n' +
+    'Soft-stop first if RUNNING (UI Stop clears lock when verified dead).\\n' +
+    'Curriculum from config.json: collision_first=' + cf + ' speed_gate=' + sg + '\\n' +
+    '(Continue restores those flags — does not read the Start checkboxes.)'
+  )) return;
   act('continue', {run_id: runId}).then(loadModels);
 }
 function deleteModel(runId){
@@ -1969,6 +2059,15 @@ async function refresh(){
     if (j.run_id !== lastRunId) { lastRunId = j.run_id; loadModels(); }
     document.getElementById('eps').textContent = j.episode_count_estimate != null ? j.episode_count_estimate : '-';
     document.getElementById('cols').textContent = j.collisions_estimate != null ? j.collisions_estimate : '-';
+    const progEl = document.getElementById('prog');
+    if (progEl) {
+      if (j.mean_progress_frac_estimate != null) {
+        progEl.textContent = (100 * Number(j.mean_progress_frac_estimate)).toFixed(1) + '% (' +
+          (j.progress_probe_kind || 'smoke') + ')';
+      } else {
+        progEl.textContent = '-';
+      }
+    }
     document.getElementById('rolls').textContent = j.rollouts != null ? j.rollouts : '-';
     document.getElementById('latest').textContent = j.latest_model || '-';
     document.getElementById('stpath').textContent = j.status_path || '-';
@@ -2034,6 +2133,7 @@ async function act(op, extra){
   else if (op === 'load_model') msgEl.textContent = 'Loading model into watch…';
   else if (op === 'delete_model') msgEl.textContent = 'Deleting…';
   else if (op === 'gen_maps') msgEl.textContent = 'Generating maps… (a few seconds)';
+  else if (op === 'verify_seals') msgEl.textContent = 'Verifying pack seals…';
   else if (op === 'tensorboard') msgEl.textContent = 'Starting TensorBoard…';
   else msgEl.textContent = 'Working…';
   const body = new URLSearchParams(Object.assign({
@@ -2044,7 +2144,10 @@ async function act(op, extra){
     min_improve: document.getElementById('min_improve').value,
     race_eval_every: document.getElementById('race_eval_every').value,
     stop_on_budget: document.getElementById('stop_on_budget').checked ? '1' : '0',
-    allow_holdout: document.getElementById('allow_holdout').checked ? '1' : '0'
+    allow_holdout: document.getElementById('allow_holdout').checked ? '1' : '0',
+    collision_first: document.getElementById('collision_first').checked ? '1' : '0',
+    speed_gate: document.getElementById('speed_gate').checked ? '1' : '0',
+    fast_probe: document.getElementById('fast_probe').checked ? '1' : '0'
   }, extra || {}));
   const hint = window.__overnightHint || {};
   if (hint.warmup_evals != null) body.set('warmup_evals', String(hint.warmup_evals));
@@ -2173,6 +2276,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 race_eval_every = 0
             stop_on_budget = (q.get("stop_on_budget") or ["1"])[0] in ("1", "true", "on", "yes")
+            collision_first = (q.get("collision_first") or ["0"])[0] in ("1", "true", "on", "yes")
+            speed_gate = (q.get("speed_gate") or ["0"])[0] in ("1", "true", "on", "yes")
+            fast_probe = (q.get("fast_probe") or ["0"])[0] in ("1", "true", "on", "yes")
             self._json(
                 200,
                 _preview_payload(
@@ -2183,6 +2289,9 @@ class Handler(BaseHTTPRequestHandler):
                     early_stop_patience=early_stop_patience,
                     early_stop_min_improve=early_stop_min_improve,
                     race_eval_every=race_eval_every,
+                    collision_first=collision_first,
+                    speed_gate=speed_gate,
+                    fast_probe=fast_probe,
                 ),
             )
             return
@@ -2223,6 +2332,9 @@ class Handler(BaseHTTPRequestHandler):
         which = (form.get("which") or ["best"])[0]
         allow_holdout = (form.get("allow_holdout") or ["0"])[0] in ("1", "true", "on", "yes")
         stop_on_budget = (form.get("stop_on_budget") or ["1"])[0] in ("1", "true", "on", "yes")
+        collision_first = (form.get("collision_first") or ["0"])[0] in ("1", "true", "on", "yes")
+        speed_gate = (form.get("speed_gate") or ["0"])[0] in ("1", "true", "on", "yes")
+        fast_probe = (form.get("fast_probe") or ["0"])[0] in ("1", "true", "on", "yes")
         try:
             timesteps = int((form.get("timesteps") or ["100000"])[0])
         except ValueError:
@@ -2276,6 +2388,9 @@ class Handler(BaseHTTPRequestHandler):
                 early_stop_min_timesteps=min_ts,
                 select_timeout=sel_timeout,
                 stop_on_budget=stop_on_budget,
+                collision_first=collision_first,
+                speed_gate=speed_gate,
+                fast_probe=fast_probe,
             )
         elif op == "continue":
             msg = _continue_train(
@@ -2310,6 +2425,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 seed = 123
             msg = _generate_maps(count, seed)
+        elif op == "verify_seals":
+            msg = _verify_seals()
         elif op == "tensorboard":
             msg = _ensure_tensorboard()
             with _state_lock:

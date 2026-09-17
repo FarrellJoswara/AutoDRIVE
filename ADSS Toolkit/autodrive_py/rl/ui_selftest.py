@@ -243,6 +243,32 @@ def test_continue_argv() -> None:
         check("continue passes race-eval-every", "--race-eval-every" in argv and "25000" in argv, str(argv))
         check("continue unlimited uses safety ceiling", str(ui_ops.UNLIMITED_TIMESTEPS_SAFETY) in argv, str(argv))
 
+        _fake_run(models, "run_cf")
+        cfg = json.loads((models / "run_cf" / "config.json").read_text(encoding="utf-8"))
+        cfg["collision_first"] = True
+        cfg["speed_gate"] = True
+        (models / "run_cf" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        flags = ui_ops.run_curriculum_flags(models, "run_cf")
+        check("curriculum flags read collision_first", flags["collision_first"] and flags["speed_gate"], str(flags))
+        argv, why = ui_ops.continue_train_argv(
+            run_id="run_cf", models_dir=models, timesteps=1000, n_envs=1
+        )
+        check("continue restores --collision-first from config", "--collision-first" in argv, str(argv))
+        check("continue restores --speed-gate from config", "--speed-gate" in argv, str(argv))
+        check("continue msg mentions collision_first", "collision_first=True" in why, why)
+
+
+def test_seal_verify() -> None:
+    print("seal verify summary")
+    report = ui_ops.seal_verify_summary(RL_DIR / "maps")
+    check("seal_verify returns ok flag", "ok" in report and "msg" in report, str(report.get("msg")))
+    check("seal_verify msg is operator-readable", "SEAL" in report["msg"] or "PACK" in report["msg"], report["msg"])
+    # Real pack should have sealed holdouts; prefer SEALS OK when maps intact.
+    if report.get("ok"):
+        check("intact pack reports SEALS OK", "SEALS OK" in report["msg"], report["msg"])
+    msg = cui._verify_seals()
+    check("UI verify_seals sets msg", "SEAL" in msg or "PACK" in msg, msg)
+
 
 def test_stop_budget() -> None:
     print("stop-on-budget resolve")
@@ -263,8 +289,14 @@ def test_stop_budget() -> None:
     )
     check("budget off label", off["budget_label"] == "budget: off (early-stop only)", off["budget_label"])
 
-    msg = cui._start_train("map0", 2048, 1, stop_on_budget=False, early_stop_patience=0)
-    check("Start refuses budget-off + patience 0", "Refuse" in msg and "patience is 0" in msg, msg)
+    # Mock busy so overnight train_ppo does not mask the budget refuse path.
+    old_busy = cui._train_busy
+    try:
+        cui._train_busy = lambda force=True: None  # type: ignore[assignment]
+        msg = cui._start_train("map0", 2048, 1, stop_on_budget=False, early_stop_patience=0)
+        check("Start refuses budget-off + patience 0", "Refuse" in msg and "patience is 0" in msg, msg)
+    finally:
+        cui._train_busy = old_busy
 
 
 def test_dual_writer_guards() -> None:
@@ -278,7 +310,10 @@ def test_dual_writer_guards() -> None:
             return None
 
     old_proc, old_rid = cui._train_proc, cui._train_run_id
+    kills: list[str] = []
+    old_kill = cui._kill_train_tree
     try:
+        cui._kill_train_tree = lambda: kills.append("kill") or 0  # type: ignore[assignment]
         cui._train_proc = _AliveProc()  # type: ignore[assignment]
         cui._train_run_id = "owned_run"
         busy = cui._train_busy(force=False)
@@ -286,9 +321,11 @@ def test_dual_writer_guards() -> None:
         msg = cui._start_train("map0", 2048, 1)
         check("Start refuses while UI train alive", "already running" in msg, msg)
         check("refused Start left owned proc alone", cui._train_proc is not None and cui._train_proc.poll() is None)
+        check("refused Start did not kill", kills == [], str(kills))
     finally:
         cui._train_proc = old_proc
         cui._train_run_id = old_rid
+        cui._kill_train_tree = old_kill
 
     with tempfile.TemporaryDirectory() as tmp:
         models = Path(tmp)
@@ -296,12 +333,144 @@ def test_dual_writer_guards() -> None:
         lock = models / "locked_run" / "train.lock"
         lock.write_text(json.dumps({"pid": os.getpid(), "timestamp": "now"}), encoding="utf-8")
         old_models = cui.MODELS_DIR
+        kills = []
+        old_kill = cui._kill_train_tree
+        old_busy = cui._train_busy
+        old_ext = cui._find_external_train
         try:
             cui.MODELS_DIR = models
+            cui._kill_train_tree = lambda: kills.append("kill") or 0  # type: ignore[assignment]
+            # Isolate from any live overnight/external train_ppo on this machine.
+            cui._find_external_train = lambda force=False: None  # type: ignore[assignment]
+            # Continue checks lock_owner before busy's external scan when busy is real —
+            # but real _train_busy would still see external trains via MODELS_DIR only
+            # for locks. Still mock ext so PID scan cannot mask the lock refuse message.
             msg = cui._continue_train("locked_run", 2048, 1)
             check("Continue refuses live train.lock", "Refuse Continue" in msg and "locked" in msg.lower(), msg)
+            check("Continue on healthy lock did not kill", kills == [], str(kills))
+
+            # Busy false-negative + live lock: Start must refuse via lock scan, never kill.
+            cui._train_busy = old_busy
+            cui._train_proc = None
+            busy = cui._train_busy(force=True)
+            check(
+                "busy via live lock when PID scan empty",
+                bool(busy and "lock held" in busy.lower()),
+                str(busy),
+            )
+            kills.clear()
+            msg = cui._start_train("map0", 2048, 1, stop_on_budget=True)
+            check("Start refuses live lock without PID", "lock held" in msg.lower() or "already running" in msg.lower(), msg)
+            check("Start live-lock refuse did not kill", kills == [], str(kills))
         finally:
             cui.MODELS_DIR = old_models
+            cui._kill_train_tree = old_kill
+            cui._train_busy = old_busy
+            cui._find_external_train = old_ext
+            cui._train_proc = old_proc
+            cui._train_run_id = old_rid
+
+
+def test_start_continue_never_kill_on_false_busy() -> None:
+    """Start/Continue must never call _kill_train_tree even if busy looks idle."""
+    print("Start/Continue no-kill (busy false-negative)")
+    kills: list[str] = []
+    spawns: list[str] = []
+    old_kill = cui._kill_train_tree
+    old_spawn = cui._spawn_train
+    old_busy = cui._train_busy
+    old_ext = cui._find_external_train
+    old_models = cui.MODELS_DIR
+    old_proc, old_rid = cui._train_proc, cui._train_run_id
+    with tempfile.TemporaryDirectory() as tmp:
+        models = Path(tmp)
+        try:
+            cui.MODELS_DIR = models  # empty — no live locks
+            cui._train_proc = None
+            cui._train_run_id = None
+            cui._kill_train_tree = lambda: kills.append("kill") or 0  # type: ignore[assignment]
+            cui._spawn_train = (  # type: ignore[assignment]
+                lambda argv, run_id, n_envs=1, action="x", log_mode="w": (
+                    spawns.append(run_id) or f"mock-spawn {run_id}"
+                )
+            )
+            cui._train_busy = lambda force=True: None  # type: ignore[assignment]
+            cui._find_external_train = lambda force=False: None  # type: ignore[assignment]
+
+            msg = cui._start_train("map0", 2048, 1, stop_on_budget=True, early_stop_patience=0)
+            check("Start false-busy did not kill", kills == [], f"kills={kills} msg={msg}")
+            check("Start false-busy reached spawn (no kill path)", bool(spawns), msg)
+
+            kills.clear()
+            spawns.clear()
+            _fake_run(models, "cont_run")
+            # Continue with no live lock, busy false-negative — still no kill.
+            msg = cui._continue_train("cont_run", 2048, 1, stop_on_budget=True, early_stop_patience=0)
+            check("Continue false-busy did not kill", kills == [], f"kills={kills} msg={msg}")
+        finally:
+            cui._kill_train_tree = old_kill
+            cui._spawn_train = old_spawn
+            cui._train_busy = old_busy
+            cui._find_external_train = old_ext
+            cui.MODELS_DIR = old_models
+            cui._train_proc = old_proc
+            cui._train_run_id = old_rid
+
+
+def test_heartbeat_cannot_clobber_early_stopped() -> None:
+    """RaceBest heartbeat must join before early_stopped and never overwrite it."""
+    print("validation heartbeat vs early_stopped")
+    import time
+
+    from .live_status import is_terminal_phase, read_live_status
+    from .train_ppo import RaceBestModelCallback
+
+    check("early_stopped is terminal", is_terminal_phase("early_stopped"))
+    check("validating is not terminal", not is_terminal_phase("validating"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        status = Path(tmp) / "live_status.json"
+        cb = RaceBestModelCallback(
+            run_dir=Path(tmp),
+            eval_maps=[],
+            n_lidar=64,
+            eval_episodes=1,
+            eval_freq=1000,
+            seed=0,
+            status_path=status,
+            status_run_id="hb_test",
+        )
+        # BaseCallback.num_timesteps may need a nudge before status writes.
+        try:
+            cb.num_timesteps = 50_000
+        except Exception:
+            pass
+
+        cb._start_heartbeat("racing validation map (map3)")
+        check("heartbeat thread started", cb._hb_thread is not None and cb._hb_thread.is_alive())
+
+        # Production order: join heartbeat, then mark terminal, then write.
+        cb._stop_heartbeat()
+        check(
+            "heartbeat joined (thread dead)",
+            cb._hb_thread is None or not cb._hb_thread.is_alive(),
+        )
+        cb.early_stopped = True
+        cb._write_status(phase="early_stopped", msg="early-stop: test")
+        data = read_live_status(status)
+        check("phase is early_stopped after join+write", bool(data and data.get("phase") == "early_stopped"), str(data))
+
+        # Late pulse / mistaken validating write must no-op.
+        cb._write_status(phase="validating", msg="late pulse must not win")
+        data = read_live_status(status)
+        check("validating cannot clobber early_stopped", bool(data and data.get("phase") == "early_stopped"), str(data))
+
+        # Even if someone restarts heartbeat after terminal, pulses must no-op.
+        cb._start_heartbeat("should not start or should no-op")
+        check("no heartbeat after early_stopped", cb._hb_thread is None or not cb._hb_thread.is_alive())
+        time.sleep(0.2)
+        data = read_live_status(status)
+        check("still early_stopped after blocked hb", bool(data and data.get("phase") == "early_stopped"), str(data))
 
 
 def test_banner_and_coach() -> None:
@@ -391,7 +560,15 @@ def test_http_surface() -> None:
         check("index has budget stop toggle", "stop_on_budget" in html and "Stop on timesteps budget" in html)
         check("index has min improvement control", 'id="min_improve"' in html and "Min improvement" in html)
         check("index has race-eval-every control", 'id="race_eval_every"' in html)
-        check("index build stamp bumped", "overnight-earlystop-20260917" in html, html[html.find("ui build") : html.find("ui build") + 80] if "ui build" in html else "")
+        check("index has collision-first checkbox", 'id="collision_first"' in html and "Collision-first" in html)
+        check("index has progress probe label", "progress probe" in html.lower() and "never promotes" in html)
+        check("index has verify seals button", "verify_seals" in html and "Verify pack seals" in html)
+        check("index has soft-stop Continue hint", "Soft-stop" in html or "complete" in html.lower())
+        check(
+            "index build stamp bumped",
+            "w2-curriculum-seals-20260917" in html or "w2-fast-wave-20260917" in html,
+            html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
+        )
 
         st = _http(base, "/api/status")
         for key in ("banner", "coach", "presets", "steps_per_sec", "crash_rate_estimate", "vec_env_active"):
@@ -426,27 +603,39 @@ def test_http_surface() -> None:
         check("models endpoint returns runs", isinstance(models.get("runs"), list), str(type(models.get("runs"))))
         check("models endpoint reports race candidate slot", "race_candidate" in models)
 
-        r = _http(base, "/api/action", {"op": "start", "map": "map2", "timesteps": "2048", "n_envs": "1"})
-        check("Start refuses sealed holdout", "Refuse Start" in r["msg"], r["msg"])
-        check("refused Start spawned nothing", cui._train_proc is None and not r["train_alive"])
+        pv = _http(base, "/api/preview?map=map0&timesteps=50000&n_envs=4&collision_first=1")
+        check("preview reports collision_first", pv.get("collision_first") is True, str(pv))
 
-        r = _http(
-            base,
-            "/api/action",
-            {
-                "op": "start",
-                "map": "map0",
-                "timesteps": "2048",
-                "n_envs": "1",
-                "stop_on_budget": "0",
-                "early_stop": "0",
-            },
-        )
-        check("Start refuses budget-off + patience 0", "patience is 0" in r["msg"], r["msg"])
-        check("budget refuse spawned nothing", cui._train_proc is None and not r["train_alive"])
+        r = _http(base, "/api/action", {"op": "verify_seals"})
+        check("verify_seals op returns seal msg", "SEAL" in r["msg"] or "PACK" in r["msg"], r["msg"])
 
-        r = _http(base, "/api/action", {"op": "start", "map": "map3", "timesteps": "2048", "n_envs": "1"})
-        check("Start refuses validation pin", "Refuse Start" in r["msg"], r["msg"])
+        # Isolate HTTP Start refuse paths from any parallel overnight / A/B train.
+        old_busy = cui._train_busy
+        try:
+            cui._train_busy = lambda force=True: None  # type: ignore[assignment]
+            r = _http(base, "/api/action", {"op": "start", "map": "map2", "timesteps": "2048", "n_envs": "1"})
+            check("Start refuses sealed holdout", "Refuse Start" in r["msg"], r["msg"])
+            check("refused Start spawned nothing", cui._train_proc is None and not r["train_alive"])
+
+            r = _http(
+                base,
+                "/api/action",
+                {
+                    "op": "start",
+                    "map": "map0",
+                    "timesteps": "2048",
+                    "n_envs": "1",
+                    "stop_on_budget": "0",
+                    "early_stop": "0",
+                },
+            )
+            check("Start refuses budget-off + patience 0", "patience is 0" in r["msg"], r["msg"])
+            check("budget refuse spawned nothing", cui._train_proc is None and not r["train_alive"])
+
+            r = _http(base, "/api/action", {"op": "start", "map": "map3", "timesteps": "2048", "n_envs": "1"})
+            check("Start refuses validation pin", "Refuse Start" in r["msg"], r["msg"])
+        finally:
+            cui._train_busy = old_busy
 
         class _AliveProc:
             pid = 777001
@@ -598,8 +787,11 @@ def main() -> int:
         test_map_generation,
         test_models_ops,
         test_continue_argv,
+        test_seal_verify,
         test_stop_budget,
         test_dual_writer_guards,
+        test_start_continue_never_kill_on_false_busy,
+        test_heartbeat_cannot_clobber_early_stopped,
         test_banner_and_coach,
         test_meaningful_improvement,
         test_http_surface,

@@ -9,6 +9,19 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## W3 — Immediate tick ~04:06 Chicago — collision UI + probe; Continue restarted
+- **id:** `20260917-W3-immediate-tick`
+- **type:** tick / wave
+- **proposal:** Cadence 10m detached keepalive; ship W2 #1+#3; Continue (#2) sibling+this-tick emergency restart after soak death; DEFER n_envs knee; SKIP continuous/GPU/UI redesign.
+- **overnight plan:** Found `overnight_soak_20260917_082739` **dead** (stale lock pid=34256). Cleared lock; **Continue-restarted** same `run_id` from `ppo_295480_steps.zip` (n_envs=8 subproc, sacred early-stop). Live validating @ ts≈295k. Do not kill.
+- **Researcher:** **Go** — collision UI + smoke probe; Continue restart mandatory when soak dead.
+- **Racer:** **Approve** — crash-first UI + resume = race continuity.
+- **Minimalist:** **Approve** — expose flag + status-only probe; no new subsystems.
+- **Reliability:** **Approve** Continue restart; collision/probe observe-only vs live soak.
+- **Integrator:** **SHIP** collision-first UI + smoke progress probe (+ `progress_probe.py` CLI). **Continue soak proof** still sibling for disposable Stop→Continue; this tick only emergency restart. Detached loop: `campaign_keepalive.ps1` PID in `logs/campaign_keepalive.pid` (600s).
+
+---
+
 ## PAUSE+SHIP — 2026-09-17 ~04:01 — Tick0 smokes only (reliability P0 in flight)
 
 - **id:** `20260917-T0-must-smokes`

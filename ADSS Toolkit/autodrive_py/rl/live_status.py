@@ -12,6 +12,14 @@ from typing import Any
 # os.replace(tmp, dest) raises WinError 5 (access denied) or 32 (sharing).
 _WIN_LOCK_ERRORS = frozenset({5, 32})
 
+# Terminal phases must win over validating/learning heartbeats and LiveStatus defaults.
+TERMINAL_PHASES = frozenset({"early_stopped", "early-stop"})
+
+
+def is_terminal_phase(phase: Any) -> bool:
+    """True for phases that must not be overwritten by mid-train status writers."""
+    return str(phase or "") in TERMINAL_PHASES
+
 
 def write_live_status(path: Path, payload: dict[str, Any]) -> None:
     """Atomic-ish JSON write so ``watch --follow`` never reads a half file.
@@ -153,6 +161,8 @@ def LiveStatusCallback(*args, **kwargs):
             self._rollouts = 0
             self._ep_count = 0
             self._collision_eps = 0
+            self._progress_sum = 0.0
+            self._progress_n = 0
             self._last_latest_path: str | None = None
             self._last_status_ts: int = -10**9
             self._t0 = time.time()
@@ -171,6 +181,14 @@ def LiveStatusCallback(*args, **kwargs):
                 self._ep_count += 1
                 if ep.get("collision"):
                     self._collision_eps += 1
+                # Honest smoke probe: terminal progress_frac only (never promote / official).
+                try:
+                    prog = ep.get("progress_frac")
+                    if prog is not None:
+                        self._progress_sum += float(prog)
+                        self._progress_n += 1
+                except (TypeError, ValueError):
+                    pass
             # Mid-rollout trail so the UI timesteps tick without waiting for a full PPO buffer.
             if self.every_steps > 0:
                 ts = int(self.num_timesteps)
@@ -196,6 +214,7 @@ def LiveStatusCallback(*args, **kwargs):
 
         def _on_training_end(self) -> None:
             # Do not clobber RaceBestModelCallback's early_stopped / validating phase.
+            # preserve_terminal_phase uses live_status.TERMINAL_PHASES (+ validating).
             self._write(
                 force_save_latest=self.latest_model_path is not None,
                 preserve_terminal_phase=True,
@@ -238,17 +257,21 @@ def LiveStatusCallback(*args, **kwargs):
             crash_rate = (
                 float(self._collision_eps) / float(self._ep_count) if self._ep_count > 0 else None
             )
+            mean_progress = (
+                float(self._progress_sum) / float(self._progress_n) if self._progress_n > 0 else None
+            )
 
             phase = "learning"
             msg = "learning"
             if preserve_terminal_phase:
                 prev = read_live_status(self.status_path)
-                if prev and prev.get("phase") in (
-                    "early_stopped",
-                    "early-stop",
-                    "validating",
+                prev_phase = prev.get("phase") if prev else None
+                # Keep early_stopped forever; also keep validating if RaceBest
+                # is mid-eval when training_end races (unusual but safer).
+                if prev and (
+                    is_terminal_phase(prev_phase) or prev_phase == "validating"
                 ):
-                    phase = str(prev["phase"])
+                    phase = str(prev_phase)
                     if prev.get("msg"):
                         msg = str(prev["msg"])
 
@@ -266,6 +289,9 @@ def LiveStatusCallback(*args, **kwargs):
                 "episode_count_estimate": int(self._ep_count),
                 "collisions_estimate": int(self._collision_eps),
                 "crash_rate_estimate": crash_rate,
+                # Status-only progress probe (kind=smoke) — not race score / not promote.
+                "mean_progress_frac_estimate": mean_progress,
+                "progress_probe_kind": "smoke",
                 "steps_per_sec": steps_per_sec,
                 "latest_model": latest_str,
                 "n_envs": int(self.n_envs),

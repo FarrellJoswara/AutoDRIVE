@@ -150,6 +150,8 @@ def start_preview(
     early_stop_patience: int = 0,
     early_stop_min_improve: float = 0.5,
     race_eval_every: int = 0,
+    collision_first: bool = False,
+    speed_gate: bool = False,
 ) -> dict:
     """What Start will do — shown before/with Start."""
     vec = "subproc" if int(n_envs) > 1 else "dummy"
@@ -168,6 +170,8 @@ def start_preview(
     )
     min_imp = max(0.0, float(early_stop_min_improve))
     eval_every = max(0, int(race_eval_every))
+    cf = bool(collision_first)
+    sg = bool(speed_gate)
     return {
         "map": map_id,
         "map_role": info["role"],
@@ -183,15 +187,67 @@ def start_preview(
         "budget_error": budget["error"],
         "n_envs": int(n_envs),
         "vec_env": vec,
+        "collision_first": cf,
+        "speed_gate": sg,
         "run_id": run_id,
         "run_path": str(Path(models_dir) / run_id),
         "holdout_warn": bool(blocked),
         "summary": (
             f"Start -> map={map_id} {steps_note} patience={budget['patience']} "
             f"min_improve={min_imp:g}s eval_every={eval_every or 'auto'} "
-            f"n_envs={n_envs} vec={vec} run={run_id}"
+            f"n_envs={n_envs} vec={vec} collision_first={cf} speed_gate={sg} run={run_id}"
             + (f"{tag} - refuse unless allowed" if blocked else "")
         ),
+    }
+
+
+def run_curriculum_flags(models_dir: Path, run_id: str) -> dict[str, bool]:
+    """Read collision_first / speed_gate from a prior run's config.json (Continue parity)."""
+    defaults = {"collision_first": False, "speed_gate": False}
+    if not _safe_id(run_id):
+        return defaults
+    cfg_path = Path(models_dir) / run_id / "config.json"
+    if not cfg_path.is_file():
+        return defaults
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    return {
+        "collision_first": bool(cfg.get("collision_first", False)),
+        "speed_gate": bool(cfg.get("speed_gate", False)),
+    }
+
+
+def seal_verify_summary(maps_dir: Path | None = None) -> dict[str, Any]:
+    """Operator-facing pack seal check (MUST #5) — never mutates maps."""
+    from . import map_pack
+
+    report = map_pack.verify_pack(maps_dir)
+    broken_seals = [
+        r["id"] for r in report.get("maps", []) if r.get("sealed") and not r.get("ok")
+    ]
+    bad_maps = [r["id"] for r in report.get("maps", []) if not r.get("ok")]
+    ok = bool(report.get("ok"))
+    parts = [
+        "SEALS OK" if ok and not broken_seals else ("SEAL BROKEN" if broken_seals else "PACK ISSUES"),
+        f"maps_ok={sum(1 for r in report.get('maps', []) if r.get('ok'))}/{len(report.get('maps', []))}",
+    ]
+    if broken_seals:
+        parts.append("broken=" + ",".join(broken_seals))
+    elif bad_maps:
+        parts.append("bad=" + ",".join(bad_maps[:6]))
+    pack_issues = list(report.get("issues") or [])
+    if pack_issues:
+        parts.append("pack: " + "; ".join(pack_issues[:3]))
+    return {
+        "ok": ok,
+        "msg": " | ".join(parts),
+        "broken_seals": broken_seals,
+        "bad_maps": bad_maps,
+        "pack_issues": pack_issues,
+        "maps": report.get("maps", []),
+        "maps_root": report.get("maps_root"),
     }
 
 
@@ -352,6 +408,21 @@ def lock_owner(models_dir: Path, run_id: str) -> dict[str, Any] | None:
     }
 
 
+def find_live_run_locks(models_dir: Path) -> list[dict[str, Any]]:
+    """All models/*/train.lock entries whose PID is still alive (Start/Continue refuse)."""
+    root = Path(models_dir)
+    if not root.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for d in root.iterdir():
+        if not d.is_dir() or not _safe_id(d.name):
+            continue
+        owner = lock_owner(root, d.name)
+        if owner and owner.get("alive"):
+            out.append({"run_id": d.name, **owner})
+    return out
+
+
 def list_run_models(models_dir: Path) -> list[dict[str, Any]]:
     models_dir = Path(models_dir)
     if not models_dir.is_dir():
@@ -450,8 +521,15 @@ def continue_train_argv(
     early_stop_warmup_evals: int | None = None,
     early_stop_min_timesteps: int | None = None,
     select_timeout: float | None = None,
+    collision_first: bool | None = None,
+    speed_gate: bool | None = None,
 ) -> tuple[list[str], str]:
-    """Build train_ppo argv for Continue (resume last complete ckpt)."""
+    """Build train_ppo argv for Continue (resume last complete ckpt).
+
+    Curriculum flags default from the run's ``config.json`` so Continue does not
+    silently drop ``--collision-first`` / ``--speed-gate`` (fingerprint parity).
+    Pass explicit bools only to override.
+    """
     run_dir = Path(models_dir) / run_id
     ckpt = find_last_complete_checkpoint(run_dir)
     if ckpt is None:
@@ -463,6 +541,9 @@ def continue_train_argv(
     )
     if not budget["ok"]:
         return [], budget["error"] or "Invalid stop budget"
+    prior = run_curriculum_flags(models_dir, run_id)
+    cf = prior["collision_first"] if collision_first is None else bool(collision_first)
+    sg = prior["speed_gate"] if speed_gate is None else bool(speed_gate)
     vec = "subproc" if int(n_envs) > 1 else "dummy"
     min_imp = max(0.0, float(early_stop_min_improve))
     eval_every = max(0, int(race_eval_every))
@@ -495,6 +576,10 @@ def continue_train_argv(
         argv.extend(["--select-timeout", f"{float(select_timeout):g}"])
     if map_id:
         argv.extend(["--map", str(map_id)])
+    if cf:
+        argv.append("--collision-first")
+    if sg:
+        argv.append("--speed-gate")
     steps_note = (
         "unlimited/early-stop"
         if budget["unlimited"]
@@ -502,7 +587,10 @@ def continue_train_argv(
     )
     return (
         argv,
-        f"Continue {run_id} from {ckpt.name} ({steps_note}, n_envs={n_envs})",
+        (
+            f"Continue {run_id} from {ckpt.name} ({steps_note}, n_envs={n_envs}, "
+            f"collision_first={cf}, speed_gate={sg})"
+        ),
     )
 
 
@@ -559,19 +647,32 @@ def coach_hints(live: dict | None, *, watch_opened: bool, n_envs: int) -> list[s
     if crash is not None:
         try:
             if float(crash) > 0.5:
-                hints.append("Crash rate high - enable --collision-first / lower speed reward.")
+                hints.append(
+                    "Crash rate high - tick Collision-first on Start (or --collision-first); "
+                    "do not morph a live overnight mid-run."
+                )
         except (TypeError, ValueError):
             pass
     if sps is not None:
         try:
-            if float(sps) < 30 and n_envs > 8:
-                hints.append("steps/sec low with many workers - try fewer n_envs or DummyVecEnv.")
+            sps_f = float(sps)
+            if sps_f < 30 and n_envs > 8:
+                hints.append(
+                    "steps/sec low with many workers - try fewer n_envs or DummyVecEnv "
+                    "(n_envs knee measure is deferred this wave)."
+                )
+            elif sps_f < 80 and n_envs >= 12:
+                hints.append(
+                    "steps/sec soft - n_envs may be past the knee; lower workers before overnight."
+                )
         except (TypeError, ValueError):
             pass
     if not watch_opened:
         hints.append("Tip: Open Watch in a second window (lag-behind; does not slow train).")
     if n_envs > 16:
-        hints.append("Many workers - watch GPU util; Windows Subproc may fall back to Dummy.")
+        hints.append(
+            "Many workers - CPU-bound gym; idle GPU is normal. Measure n_envs knee before raising further."
+        )
     if not hints:
         hints.append("Coach: looking healthy. Rank models by official adjusted_time, not ep_rew.")
     return hints
