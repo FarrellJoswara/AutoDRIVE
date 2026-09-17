@@ -201,6 +201,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Shipped / Tests
 
+### ~04:30 — Repo cleanup batch 2 (standing cleanup agent)
+- **Safe deletes:** regenerated `rl/__pycache__`; zero-byte `logs/*.err.log` / `*.log.err` (non-overnight).
+- **gitignore:** add parent `autodrive_py/.gitignore` (`__pycache__/`, `*.pyc`, `*.pyo`, `.pytest_cache/`).
+- **Soft quarantine note:** `rl/_trash_candidates/README.md` (gitignored) — smoke `runs/` + old watch debug left in place; underscore `_*.py` helpers NOT trash.
+- **Sacred untouched:** overnight `overnight_soak_20260917_082739` PID **19244** ALIVE; no orphan locks; did not stage other agents' WIP.
+
 ### ~04:25 — Repo cleanup batch 1 (standing cleanup agent)
 - **Safe deletes:** `rl/__pycache__`, parent `autodrive_py/__pycache__`, `_ftg_pin.log` / `_ftg_pin5.log`, empty `runs/` dirs, orphan `train.lock` for `tick0_ab2_base_20260917_040725` (PID 42732 dead; no matching process).
 - **gitignore:** add `*.log`, `_ftg_pin*.log`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_trash_candidates/`, `*.pyo`.
