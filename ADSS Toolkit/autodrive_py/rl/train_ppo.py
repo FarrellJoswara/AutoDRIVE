@@ -51,6 +51,10 @@ from .ui_ops import (
     UNLIMITED_TIMESTEPS_SAFETY,
 )
 
+# Monitor keywords required for honest crash_rate / progress in live_status.
+# Missing keywords silently zero crash_rate under Subproc/Dummy (P1-5).
+MONITOR_INFO_KEYWORDS = ("collision", "stall", "ttc", "crash_tag", "progress_frac")
+
 
 def resolve_device(requested: str) -> str:
     import torch
@@ -104,7 +108,7 @@ def _make_env(
         )
         return Monitor(
             env,
-            info_keywords=("collision", "stall", "ttc", "crash_tag", "progress_frac"),
+            info_keywords=MONITOR_INFO_KEYWORDS,
         )
 
     return _thunk
@@ -922,6 +926,27 @@ def main(argv=None) -> int:
 
     from .live_status import LiveStatusCallback
 
+    class AtomicCheckpointCallback(CheckpointCallback):
+        """Checkpoint via ``atomic_save_sb3`` so partial zips never look complete (P1-1)."""
+
+        def _on_step(self) -> bool:
+            if self.n_calls % self.save_freq == 0:
+                stem = Path(self.save_path) / f"{self.name_prefix}_{self.num_timesteps}_steps"
+                try:
+                    final = atomic_save_sb3(self.model, stem)
+                    if self.verbose >= 2:
+                        print(f"Saving model checkpoint to {final}")
+                except OSError as exc:
+                    print(f"WARNING: atomic checkpoint failed: {exc}")
+                # Replay / vecnormalize paths unchanged (off for this train).
+                if self.save_replay_buffer and hasattr(self.model, "replay_buffer") and self.model.replay_buffer is not None:
+                    replay_buffer_path = self._checkpoint_path("replay_buffer_", extension="pkl")
+                    self.model.save_replay_buffer(replay_buffer_path)  # type: ignore[attr-defined]
+                if self.save_vecnormalize and self.model.get_vec_normalize_env() is not None:
+                    vec_normalize_path = self._checkpoint_path("vecnormalize_", extension="pkl")
+                    self.model.get_vec_normalize_env().save(vec_normalize_path)  # type: ignore[union-attr]
+            return True
+
     spawn_jitter = bool(args.spawn_jitter) and not bool(args.no_spawn_jitter)
     ttc_truncate = bool(args.ttc_truncate) and not bool(args.no_ttc_truncate)
 
@@ -1128,12 +1153,12 @@ def main(argv=None) -> int:
     status_dir.mkdir(parents=True, exist_ok=True)
     callbacks = []
 
-    # Atomic-ish checkpoints: SB3 writes complete zip; we still mark via CheckpointCallback
+    # Atomic checkpoints: route through atomic_save_sb3 (P1-1); skip incomplete on Continue.
     if args.checkpoint_every and args.checkpoint_every > 0:
         ckpt_dir = run_dir_early / "checkpoints"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         callbacks.append(
-            CheckpointCallback(
+            AtomicCheckpointCallback(
                 save_freq=max(1, int(args.checkpoint_every) // max(1, n_envs)),
                 save_path=str(ckpt_dir),
                 name_prefix="ppo",

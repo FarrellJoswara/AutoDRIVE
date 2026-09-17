@@ -332,6 +332,8 @@ def read_leaderboard(
 
 def _zip_looks_complete(path: Path) -> bool:
     """True if ``path`` is a non-tiny zip that opens and passes ``testzip``."""
+    import zipfile
+
     path = Path(path)
     try:
         if not path.is_file() or path.stat().st_size <= 1024:
@@ -339,8 +341,6 @@ def _zip_looks_complete(path: Path) -> bool:
     except OSError:
         return False
     try:
-        import zipfile
-
         with zipfile.ZipFile(path, "r") as zf:
             return zf.testzip() is None
     except (OSError, zipfile.BadZipFile):
@@ -354,8 +354,6 @@ def find_last_complete_checkpoint(run_dir: Path) -> Path | None:
     Continue can recover instead of claiming no checkpoint. Skips zips that
     fail a zipfile open/test (partial SB3 writes).
     """
-    import zipfile  # noqa: F401 — used by _zip_looks_complete; keep import local
-
     run_dir = Path(run_dir)
     ckpt_dir = run_dir / "checkpoints"
     if ckpt_dir.is_dir():

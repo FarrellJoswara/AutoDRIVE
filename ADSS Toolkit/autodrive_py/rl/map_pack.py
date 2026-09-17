@@ -61,6 +61,14 @@ class SealBroken(RuntimeError):
     """Raised when a sealed map's content no longer matches its recorded hash."""
 
 
+class CorruptManifest(RuntimeError):
+    """Raised when ``map_pack.json`` exists but is unreadable or malformed.
+
+    A non-empty corrupt manifest must never silently become an empty pack
+    (disk adopt could then treat sealed holdouts as ``train_ok``).
+    """
+
+
 # --------------------------------------------------------------------------- #
 # paths / hashing
 # --------------------------------------------------------------------------- #
@@ -213,11 +221,22 @@ def load_pack(maps_root: Path | str | None = None, *, adopt: bool = True) -> dic
     pack = _empty_pack()
     if path.is_file():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("maps"), dict):
-                pack.update(data)
-        except (OSError, json.JSONDecodeError):
-            pass
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise CorruptManifest(f"unreadable map pack manifest: {path}: {exc}") from exc
+        if raw.strip():
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise CorruptManifest(
+                    f"corrupt map pack manifest (JSON): {path}: {exc}"
+                ) from exc
+            if not isinstance(data, dict) or not isinstance(data.get("maps"), dict):
+                raise CorruptManifest(
+                    f"corrupt map pack manifest (bad shape, need dict with maps): {path}"
+                )
+            pack.update(data)
+        # Whitespace-only / empty file → treat as missing (fresh pack + adopt).
     if not adopt:
         return pack
 

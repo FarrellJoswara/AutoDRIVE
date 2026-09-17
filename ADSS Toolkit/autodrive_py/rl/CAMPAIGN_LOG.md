@@ -183,6 +183,13 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - **Pushed:** **`8af8a25`** (P1-2) → **`bec5752`** (log) → **`1eece1c`** (A/B report + Start-warn dedupe). W8 Control SHIP’d as **`891864f`**.
 - Overnight soak ALIVE (~495k validating @ smoke) — untouched.
 
+### ~04:30 — Support-loop resume + P1-3
+
+- Loop PID **52868** still armed to ~08:28 Chicago; overnight **19244/53852** untouched.
+- **SHIP P1-3:** `CorruptManifest` on bad/non-dict `map_pack.json`; checkpoint finder skips incomplete zips (test uses real zip >1KiB); `MONITOR_INFO_KEYWORDS` named (P1-5); W8 `ui_selftest` selection/warn coverage.
+- **Tests:** `_bugfix_p0_checks` **22/22**; `ui_selftest` all passed (Stop mocked).
+- Skipped `models/leaderboard.csv` runtime row.
+
 ---
 
 ### ~04:04–04:06 — W3 tick + overnight Continue restart

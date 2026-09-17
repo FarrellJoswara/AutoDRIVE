@@ -18,7 +18,7 @@ from rl.metrics_io import (  # noqa: E402
     find_last_complete_checkpoint,
     release_run_lock,
 )
-from rl.map_pack import HoldoutViolation, assert_train_safe  # noqa: E402
+from rl.map_pack import CorruptManifest, HoldoutViolation, assert_train_safe, load_pack  # noqa: E402
 from rl.racing_env import assert_resolved_map_id, resolve_map_yaml  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
@@ -30,16 +30,19 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 class _FakeModel:
-    """Minimal SB3-like save that writes an empty-ish zip stem."""
+    """Minimal SB3-like save that writes a valid zip (size >1KiB)."""
 
-    def __init__(self, payload: bytes = b"PK\x05\x06" + b"\x00" * 18):
+    def __init__(self, payload: bytes = b"GOOD_V1________"):
         self.payload = payload
 
     def save(self, path: str) -> None:
+        import zipfile
+
         p = Path(path)
         # Mirror SB3: path without .zip → path.zip
         out = p if p.suffix == ".zip" else Path(str(p) + ".zip")
-        out.write_bytes(self.payload + os.urandom(32))
+        with zipfile.ZipFile(out, "w") as zf:
+            zf.writestr("data.bin", self.payload + (b"\0" * 2048))
 
 
 def main() -> int:
@@ -302,6 +305,68 @@ def main() -> int:
         "P1-2 RaceBest uses atomic_write_json for meta",
         uses_atomic_meta and not still_torn,
         f"atomic={uses_atomic_meta} torn_write_text={still_torn}",
+    )
+
+    # P1-3: corrupt map_pack.json must refuse (never silent empty + adopt as train_ok)
+    pack_root = tmp / "maps_corrupt"
+    pack_root.mkdir()
+    (pack_root / "map_pack.json").write_text("{not-json", encoding="utf-8")
+    corrupt_raised = False
+    try:
+        load_pack(pack_root, adopt=False)
+    except CorruptManifest as exc:
+        corrupt_raised = "corrupt" in str(exc).lower() or "json" in str(exc).lower()
+    check("P1-3 load_pack refuses corrupt JSON manifest", corrupt_raised)
+
+    bad_shape = tmp / "maps_bad_shape"
+    bad_shape.mkdir()
+    (bad_shape / "map_pack.json").write_text('{"pack_version": 1, "maps": []}', encoding="utf-8")
+    shape_raised = False
+    try:
+        load_pack(bad_shape, adopt=False)
+    except CorruptManifest as exc:
+        shape_raised = "shape" in str(exc).lower() or "maps" in str(exc).lower()
+    check("P1-3 load_pack refuses bad-shape manifest", shape_raised)
+
+    # Checkpoint finder skips incomplete/partial zip payloads
+    import io
+    import zipfile
+
+    ckpt_run = tmp / "ckpt_run"
+    (ckpt_run / "checkpoints").mkdir(parents=True)
+    partial = ckpt_run / "checkpoints" / "ppo_1_steps.zip"
+    partial.write_bytes(b"not-a-real-zip-file-just-noise-xxxx")
+    good = ckpt_run / "checkpoints" / "ppo_2_steps.zip"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("policy.pth", b"G" * 2048)
+    good.write_bytes(buf.getvalue())
+    found_ckpt = find_last_complete_checkpoint(ckpt_run)
+    check(
+        "find_last_complete_checkpoint skips bad zip, keeps good",
+        found_ckpt is not None and found_ckpt.resolve() == good.resolve(),
+        str(found_ckpt),
+    )
+
+    # P1-1: AtomicCheckpointCallback wired in train_ppo
+    uses_atomic_ckpt = (
+        "class AtomicCheckpointCallback" in train_src
+        and "AtomicCheckpointCallback(" in train_src
+        and "atomic_save_sb3(self.model" in train_src
+    )
+    check("P1-1 AtomicCheckpointCallback wired", uses_atomic_ckpt)
+
+    # P1-5: Monitor info_keywords constant
+    from rl.train_ppo import MONITOR_INFO_KEYWORDS
+
+    check(
+        "P1-5 MONITOR_INFO_KEYWORDS has collision+progress",
+        "collision" in MONITOR_INFO_KEYWORDS and "progress_frac" in MONITOR_INFO_KEYWORDS,
+        str(MONITOR_INFO_KEYWORDS),
+    )
+    check(
+        "P1-5 _make_env uses MONITOR_INFO_KEYWORDS",
+        "info_keywords=MONITOR_INFO_KEYWORDS" in train_src,
     )
 
     print()

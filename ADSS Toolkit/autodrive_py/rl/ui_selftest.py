@@ -25,16 +25,26 @@ _FAILURES: list[str] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" - {detail}" if detail else ""))
+    line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" - {detail}" if detail else "")
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        print(line.encode("ascii", "replace").decode("ascii"))
     if not ok:
         _FAILURES.append(name)
 
 
 def _fake_run(root: Path, run_id: str, *, contracts: str = CONTRACTS_VERSION) -> Path:
     """Minimal models/<run_id>/ with a plausible zip + config."""
+    import io
+    import zipfile
+
     run_dir = root / run_id
     (run_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
-    blob = b"PK\x03\x04" + b"0" * 4096
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("policy.pth", b"0" * 4096)
+    blob = buf.getvalue()
     (run_dir / "best_model.zip").write_bytes(blob)
     (run_dir / "latest_model.zip").write_bytes(blob)
     (run_dir / "checkpoints" / "ppo_10000_steps.zip").write_bytes(blob)
@@ -605,12 +615,13 @@ def test_http_surface() -> None:
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
         )
         check(
-            "index has live-runs list (W8)",
-            'id="live_runs"' in html and "Focus" in html and "bound_targets" in html,
-        )
-        check(
-            "index has Start/Stop target clarity (W8)",
-            'id="op_targets"' in html and "toggleTrain" in html and "__startLockWarn" in html,
+            "index has live_runs multi-train list",
+            'id="live_runs"' in html
+            and 'id="bound_targets"' in html
+            and 'id="op_targets"' in html
+            and "focus_run" in html
+            and "__startLockWarn" in html
+            and "w8-multi-run" in html,
         )
         check(
             "index has glossary drawer",
@@ -637,23 +648,17 @@ def test_http_surface() -> None:
             and 'id="banner_reason"' in html
             and "#banner.state-" in html,
         )
-        check(
-            "index has live_runs multi-train list",
-            'id="live_runs"' in html
-            and 'id="bound_targets"' in html
-            and "focus_run" in html
-            and "w8-multi-run" in html,
-        )
 
         st = _http(base, "/api/status")
         for key in ("banner", "coach", "presets", "steps_per_sec", "crash_rate_estimate", "vec_env_active"):
             check(f"status exposes {key}", key in st)
         check("status exposes live_runs list", isinstance(st.get("live_runs"), list), str(type(st.get("live_runs"))))
         check("status exposes bound_run_id", "bound_run_id" in st)
+        check("status exposes start_lock_warn key", "start_lock_warn" in st)
         check(
             "status live_runs rows shaped",
             all(
-                isinstance(r, dict) and "run_id" in r and "phase" in r
+                isinstance(r, dict) and "run_id" in r and "phase" in r and "selected" in r
                 for r in (st.get("live_runs") or [])
             ),
             f"n={len(st.get('live_runs') or [])}",
@@ -928,6 +933,62 @@ def test_meaningful_improvement() -> None:
     check("auto eval floor >= 50k", ui_ops.AUTO_RACE_EVAL_EVERY_FLOOR >= 50_000)
 
 
+def test_multi_run_selection() -> None:
+    """W8: pin / max-timesteps selection + Start lock warn (no live kill)."""
+    print("multi-run selection (W8)")
+    overnight = "overnight_soak_20260917_082739"
+    rows = [
+        {"run_id": "smoke_ab_6k", "timesteps": 6000},
+        {"run_id": overnight, "timesteps": 428000},
+    ]
+    pick = cui._resolve_selected_run(ui_owned_run=None, ui_alive=False, live_rows=rows)
+    check("max timesteps beats short A/B smoke", pick == overnight, str(pick))
+
+    old_pref = cui._preferred_operator_run_id
+    try:
+        cui._preferred_operator_run_id = lambda: "smoke_ab_6k"  # type: ignore[assignment]
+        pick = cui._resolve_selected_run(ui_owned_run=None, ui_alive=False, live_rows=rows)
+        check("CURRENT_RUN pin beats max timesteps", pick == "smoke_ab_6k", str(pick))
+    finally:
+        cui._preferred_operator_run_id = old_pref
+
+    pick = cui._resolve_selected_run(
+        ui_owned_run="ui_owned_run", ui_alive=True, live_rows=rows
+    )
+    check("UI-owned alive wins selection", pick == "ui_owned_run", str(pick))
+
+    warn = cui._start_lock_warn(rows)
+    check(
+        "start lock warn lists N runs",
+        bool(warn) and "2 train" in warn and "smoke_ab_6k" in warn and overnight in warn,
+        str(warn),
+    )
+    check("empty locks → no start warn", cui._start_lock_warn([]) is None)
+
+    old_ts = cui._live_timesteps_for_run
+    try:
+        cui._live_timesteps_for_run = (  # type: ignore[assignment]
+            lambda rid: 428000 if rid == overnight else 6000
+        )
+        smoke = cui._score_external_train_hit(
+            pid=9, run_guess="smoke_ab_6k", cmd="rl.train_ppo", is_leaf=True, preferred_run=None
+        )
+        soak = cui._score_external_train_hit(
+            pid=2,
+            run_guess=overnight,
+            cmd="rl.train_ppo --resume --unlimited-timesteps",
+            is_leaf=True,
+            preferred_run=None,
+        )
+        check("external rank prefers high timesteps", soak > smoke, f"soak={soak} smoke={smoke}")
+        pinned = cui._score_external_train_hit(
+            pid=9, run_guess="smoke_ab_6k", cmd="rl.train_ppo", is_leaf=True, preferred_run="smoke_ab_6k"
+        )
+        check("external rank pin beats high timesteps", pinned > soak, f"pinned={pinned} soak={soak}")
+    finally:
+        cui._live_timesteps_for_run = old_ts
+
+
 def main() -> int:
     print(f"control UI selftest - contracts {CONTRACTS_VERSION}, obs_dim {obs_dim(N_LIDAR_DEFAULT)}\n")
     for fn in (
@@ -941,6 +1002,7 @@ def main() -> int:
         test_start_continue_never_kill_on_false_busy,
         test_heartbeat_cannot_clobber_early_stopped,
         test_banner_and_coach,
+        test_multi_run_selection,
         test_meaningful_improvement,
         test_http_surface,
     ):

@@ -11,6 +11,34 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## Tick #2 (~04:26 America/Chicago) — NEXT multi-proposal batch
+- **id:** `20260917-tick2-wave`
+- **type:** tick / proposal batch (fresh parallel wave executor — standing IDs parent-mismatch)
+- **overnight:** **ALIVE** observe-only — `overnight_soak_20260917_082739` ≈498–545k+, PIDs **19244/53852**, phase learning/validating; **no Continue-restart needed**
+- **context:** MUST #1/#2/#5 PASS earlier; MUST #4 FTGΔ **DONE** (PPO 206.68 vs 198.16, Δ+8.52); MUST #3 crash↓ still inconclusive; open bugfix P1 + W8 implement
+
+### Proposals
+
+| Id | Proposal | Researcher | Gate |
+| -- | -------- | ---------- | ---- |
+| T2-01 | **P1-1** Atomic CheckpointCallback (`atomic_save_sb3`) + zip-test in `find_last_complete_checkpoint` | **Go** — Continue integrity; overnight-safe (library only until next train) | **SHIP** |
+| T2-02 | **P1-3** `load_pack` refuse corrupt non-empty `map_pack.json` (`CorruptManifest`) | **Go** — holdout integrity; closes silent-empty→train_ok hole | **SHIP** |
+| T2-03 | **P1-5** `MONITOR_INFO_KEYWORDS` constant wired in `_make_env` + bugfix assert | **Go** — crash_rate honesty for future A/B | **SHIP** |
+| T2-04 | **W8-01…04** implement multi-run Control list / bind / targets / Start warn (design already SHIP) | **Go** — operators already multi-lock; no kill multi-train | **SHIP** |
+| T2-05 | Re-run long collision-first A/B for MUST #3 crashΔ | **Go** when free — **after** overnight not validating; disposable only | **DEFER** this tick (anti-thrash) |
+| T2-06 | GPU / AMP / continuous outer / fancy dash | **No-Go** | **SKIP** |
+
+### Personality votes
+
+- **Racer:** **Approve** T2-01/02/03 (Continue + seals + crash honesty) · **Approve** T2-04 thin only · **Block** T2-06 · T2-05 later when overnight free.
+- **Minimalist:** **Approve** T2-01/02/03 (small integrity fixes) · **Approve** T2-04 if same-DOM list only · **Block** frameworks / denser overnight eval.
+- **Reliability:** **Approve** T2-01/02 (atomic ckpt + corrupt refuse) · **Approve** T2-03 · **Approve** T2-04 read-only + mocked Stop · **Block** any Stop/kill vs overnight · dual-writer/sacred floors intact.
+- **Integrator:** **SHIP** T2-01…04 this tick; **DEFER** T2-05; **SKIP** T2-06. Need research Go + ≥2 Approves — **met**.
+
+**Orchestrator:** implement T2-01…04 now; commit+push; append Timeline; leave overnight untouched.
+
+---
+
 ## Meta-spawner coverage
 - **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI (SHIP’d) · bugfix (P0 + P1-2) · suggestion/UI bots · Tick0 MUST smokes
 - **Gaps found (~04:28):** MUST #3 crashΔ inconclusive · MUST #4 FTGΔ was in-flight (now DONE) · no secrets/onboarding/watch-honesty seats · A/B analyzer missing · anti-thrash (dual eval + overnight validating) · P1-1 CheckpointCallback atomic still open

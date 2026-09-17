@@ -26,7 +26,7 @@
 | -- | ----- | ---------- | ------------- |
 | **P1-1** | `train_ppo.py` ~1112 `CheckpointCallback` | SB3 checkpoint writes are **not** routed through `atomic_save_sb3`. Kill/disk-full mid-write → `ppo_*_steps.zip` that passes size>1024 but fails load. | Wrap with atomic helper or post-save rename from `*_tmpsave.zip`; skip incomplete in `find_last_complete_checkpoint` (zip test open). |
 | **P1-2** | `train_ppo.py` ~586 `best_model_meta.json` | Non-atomic `.write_text` beside atomic zip → torn meta / zip desync on crash. | **FIXED:** `atomic_write_json` for meta (+ `_bugfix_p0_checks`). |
-| **P1-3** | `map_pack.py` `load_pack` ~215–220 | Corrupt `map_pack.json` silently → empty pack + disk adopt as `train_ok` → may **train on holdout** until protocol seals force role. | Fail loud or backup+refuse; never silent empty on JSON error if file non-empty. |
+| **P1-3** | `map_pack.py` `load_pack` ~215–220 | Corrupt `map_pack.json` silently → empty pack + disk adopt as `train_ok` → may **train on holdout** until protocol seals force role. | **FIXED:** `CorruptManifest` on bad JSON/shape; never silent empty. |
 | **P1-4** | `metrics_io.py` `atomic_write_json` ~119–124 | No Windows lock retry (unlike `live_status.write_live_status`). UI reading `config.json` can raise mid-train. | Same retry/fallback pattern as live_status (non-fatal for config optional paths). |
 | **P1-5** | `live_status.py` / Monitor | Crash-rate estimate depends on Monitor `info_keywords`; Subproc + Dummy parity OK today, but any env thunk without those keywords → **silent 0 crash_rate**. | Assert keywords in `_make_env` smoke; document required keys. |
 | **P1-6** | `racing_env.py` `_apply_spawn_jitter` ~361–371 | After 24 rejects, returns **base pose** even if base were occupied (bad map start). | If base colliding, raise / resample from centerline. |
@@ -80,9 +80,10 @@
 1. Re-scan for regressions around Continue + dual-writer (`ui_selftest` dual-writer section).  
 2. Ship **P1-1** atomic CheckpointCallback path if free hands.  
 3. ~~Ship **P1-2** atomic `best_model_meta.json`.~~ **DONE** (~04:25 support loop).  
-4. **P1-3** map_pack corrupt-manifest refuse.  
+4. ~~**P1-3** map_pack corrupt-manifest refuse.~~ **DONE** (~04:30 support loop).  
 5. Optional PERF-6 obs buffer if cast_lidar still dominates after measuring.  
 6. Keep overnight observe-only.
+7. Still open: **P1-1** atomic CheckpointCallback write path (finder already skips incomplete zips).
 
 ---
 
