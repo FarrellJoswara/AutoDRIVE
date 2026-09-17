@@ -146,7 +146,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - **Orchestrator (`4a5b7bd3-…`):** push **after each wave/chunk**, not only at end of window / morning dump. Log push hashes here when practical.
 - Pre-mandate remote HEAD already had W7 chrome: **`319b117`** (`Ship W7 UI bot chrome…`) on `origin/rl/phase-1-research`. Untracked only: `__pycache__`, `_ftg_pin*.log` (left uncommitted).
 - Overnight soak **untouched** (do not kill).
-- **Follow-up push (same mandate):** W8 multi-run UI **design** SHIP (`20260917-W8-multi-run-ui`) + `CAMPAIGN_UI.md` Wave 2 + governance multi-run note + `ui_ops.safe_run_id` alias — commit+push when stable (no Control code for W8-01…04 yet).
+- **Pushed this mandate:** **`ae7ef0e`** (continuous commit+push tick rules) → **`283417c`** (W8 multi-run UI design SHIP + `safe_run_id`). Local WIP only: partial `control_ui.py` W8 helpers (not wired / not green yet — leave uncommitted).
 
 ---
 
