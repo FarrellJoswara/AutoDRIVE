@@ -35,6 +35,23 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — Researcher MUST #3/#5 closeout (50k A/B + holdout reconfirm) — ~04:32 America/Chicago
+- **id:** `20260917-researcher-ab50k-holdout`
+- **researcher:** `f4ac2241` (this tick)
+- **type:** result
+- **overnight:** observe-only — `overnight_soak_20260917_082739` @ ~**545k** `validating`, lock pid=**19244** / parent=**53852**; did not kill/morph; did not edit `control_ui` (W3/W8 UI seat).
+- **MUST #5 holdout refuse:** **PASS** — `python -m rl._w2_verify_smokes` ALL PASS (assert_train_safe map2/3/4; `train_ppo --map map2|map3` exit=2; verify_pack ok; overnight still present).
+- **MUST #3 collision-first A/B:** **DONE — crashΔ null/inconclusive**
+  - Pair `cf_ab50k_base_20260917_041400` vs `cf_ab50k_cf_20260917_041400`: DummyVecEnv, n_envs=2, **49152** ts, map0, cpu, matched knobs; `collision_first` false/true confirmed in `config.json` + train banner.
+  - Mid-run `crash_rate_estimate=0.0` / `collisions_estimate=0` both arms (stall-dominated ~1.4% progress; ep_len_mean≈134).
+  - Final smoke metrics identical (`mean_return`≈12.12, `mean_progress_frac`≈0.0019, DNF) — no reward Discord observable when wall-hits ≈0.
+  - Earlier twin `tick0_ab2_{base,cf}_*` @ ~24k: same story (crash_rate 0.0 both).
+  - **Note:** overnight stays `collision_first=false` by design; curriculum still needs a regime where collisions actually occur (or longer budget / denser traffic) before crash_rateΔ can decide Go/No-Go on the flag.
+- **MUST #4 FTGΔ:** already sealed above (`+8.52 s` vs pin) — no re-eval.
+- **Next:** race work = close the **8.52 s** official gap (not crash-curriculum theater until collisions appear); optional longer A/B only if crash_rate becomes non-zero.
+
+---
+
 ## RESULTS — MUST #4 FTGΔ (official_v2 PPO vs FTG pin) — ~04:29 America/Chicago
 - **id:** `20260917-meta-ftg-delta`
 - **type:** result / honesty

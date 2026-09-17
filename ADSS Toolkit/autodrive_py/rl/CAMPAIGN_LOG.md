@@ -110,6 +110,11 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Timeline
 
+### ~04:32 — Researcher closeout: 50k collision A/B + holdout reconfirm
+- **Holdout:** `_w2_verify_smokes` ALL PASS (map2/3 CLI refuse exit=2; seals OK).
+- **Collision A/B 50k:** `cf_ab50k_{base,cf}_20260917_041400` finished 49152 ts; crash_rate **0.0 both** (stall-heavy) → **crashΔ null**; board `20260917-researcher-ab50k-holdout` (+ meta `20260917-meta-ab-report`).
+- Overnight ~545k validating untouched; no `control_ui` edits this tick.
+
 ### ~04:30 — Meta-spawner coverage (gap net)
 - Standing `## Meta-spawner coverage` on board; A/B honesty report `20260917-meta-ab-report` (MUST #3 still inconclusive).
 - Children: FTGΔ collector (DONE), secrets/onboarding + watch honesty (in flight).
