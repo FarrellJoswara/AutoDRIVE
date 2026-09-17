@@ -11,6 +11,21 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — Tick #2 wave SHIP (P1-1/3/5 + W8) — ~04:32 America/Chicago
+- **id:** `20260917-tick2-wave-ship`
+- **type:** result / implement
+- **amends:** `20260917-tick2-wave`
+- **overnight:** observe-only — ALIVE ≈**563k** learning, PIDs **19244/53852**; no kill/Continue
+- **T2-01 P1-1:** **DONE** — `AtomicCheckpointCallback` → `atomic_save_sb3`; zip `testzip` in `find_last_complete_checkpoint` (also in `815ad27` lineage)
+- **T2-02 P1-3:** **DONE** — `CorruptManifest` on bad JSON/shape
+- **T2-03 P1-5:** **DONE** — `MONITOR_INFO_KEYWORDS` in `_make_env`
+- **T2-04 W8:** **DONE** — live_runs / bound / Focus / Start warn (`UI_BUILD=w8-multi-run-20260917`)
+- **Tests:** `_bugfix_p0_checks` **25/25**; `ui_selftest` **all passed**
+- **DEFER/SKIP:** T2-05 A/B crashΔ · T2-06 GPU/continuous
+- **Note:** W9 S-W9-05 Atomic CheckpointCallback was DEFER’d to this wave — now closed.
+
+---
+
 ## RESULTS — W9 idea-factory cycle 1 — ~04:31 America/Chicago
 - **id:** `20260917-W9-idea-factory`
 - **type:** wave / result
@@ -71,16 +86,25 @@ Append one entry per resume tick. Newest first.
 ---
 
 ## Meta-spawner coverage
-- **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI (SHIP’d) · bugfix (P0 + P1-2) · suggestion/UI bots · Tick0 MUST smokes · **secrets/onboarding** (`20260917-meta-secrets-onboard`)
-- **Gaps found (~04:28):** MUST #3 crashΔ inconclusive · MUST #4 FTGΔ was in-flight (now DONE) · ~~no secrets/onboarding~~ · watch-honesty seat · A/B analyzer missing (tool landed; crashΔ still null) · anti-thrash (dual eval + overnight validating) · P1-1 CheckpointCallback atomic still open
+- **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI · bugfix (P0/P1-2/P1-3 + P1-8 ticket) · suggestion/UI bots · Tick0 MUST · secrets/onboarding · watch honesty
+- **Gaps found (~04:28, refreshed ~04:40):** MUST #3 crashΔ still inconclusive (P1-8) · MUST #4 FTGΔ **DONE** · ~~secrets~~ · ~~watch-honesty~~ · P1-1 atomic ckpt (T2 SHIP in flight) · CURRENT_RUN pin selftest · venv health
 - **Spawned:**
-  - [Collision A/B analyzer] → `rl/_campaign_ab_report.py` (cp1252-safe) — all pairs inconclusive; see `20260917-meta-ab-report`
-  - [FTGΔ collector] → **DONE** `20260917-meta-ftg-delta` — PPO official_v2 **206.68** vs FTG **198.16** → **Δ +8.52 s** (did not beat)
-  - [Secrets + friend-onboarding] → **DONE** `20260917-meta-secrets-onboard` — secrets **CLEAN**; onboard **PARTIAL**; see entry below
-  - [Watch overlay honesty] → child in flight
-- **Next spawn candidates:** preserve crash_rate across validating overwrite (coord bugfix) · P1-1 atomic ckpt · CURRENT_RUN pin selftest · Windows lock CreateTime (P2-1) · venv health · dead-code (after simplify) · auto_train pause-when-locks
-- **Anti-thrash:** **pause new disposable trains** while overnight still `validating`; do not launch third official eval; dual `control_ui` / leftover `eval_cli` thrash = observe-only (do not kill soak). Soft ≠ hard mandate.
-- **Overnight:** observe-only `overnight_soak_20260917_082739` @ ~545k validating (no_improve=2/5) PIDs **19244/53852**
+  - [Collision A/B analyzer] → `rl/_campaign_ab_report.py` — inconclusive; `20260917-meta-ab-report`
+  - [FTGΔ collector] → **DONE** `20260917-meta-ftg-delta` — PPO 206.68 vs FTG 198.16 (**Δ +8.52 s**)
+  - [Secrets + friend-onboarding] → **DONE** `20260917-meta-secrets-onboard` — CLEAN / PARTIAL
+  - [Watch overlay honesty] → **DONE** `20260917-meta-watch-honesty` — validating≠stale; pin via `read_operator_run_pin`; `test_watch_overlay` **14/14**
+- **Next spawn candidates:** **P1-8** crash_rate merge on val trail · P1-1 atomic ckpt · CURRENT_RUN pin selftest · P2-1 CreateTime lock · venv health · auto_train pause-when-locks
+- **Anti-thrash:** soft pause new disposable trains; overnight back to **learning** ~552k+ — still observe-only
+- **Overnight:** observe-only `overnight_soak_20260917_082739` PIDs **19244/53852**
+
+---
+
+## RESULTS — Watch overlay honesty — 2026-09-17 ~04:40 America/Chicago
+- **id:** `20260917-meta-watch-honesty`
+- **type:** result / gap-fill
+- **overnight:** observe-only — did not kill soak; Watch follow may lag CURRENT_RUN pin
+- **SHIP:** `watch` uses shared `ui_ops.read_operator_run_pin`; validating phase not mislabeled TRAIN STALE (keeps “not hung”); lag-behind sub_label keeps **unofficial**; regression `test_validating_not_mislabeled_stale_and_keeps_honesty`
+- **Tests:** `.venv` `python -m rl.test_watch_overlay` → **14/14 PASS**
 
 ---
 

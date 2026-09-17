@@ -311,9 +311,14 @@ def _kpi_lines(
         if train:
             lines.append(train)
     elif status:
-        # Honesty strip: phase + crash_rate + short ts|/s (no rew / session dump).
+        # Honesty strip: run_id + phase + crash_rate + short ts|/s (no rew / session dump).
         try:
             bits = []
+            rid = status.get("run_id")
+            if rid:
+                rid_s = str(rid)
+                # Keep strip readable; overnight ids are long.
+                bits.append(rid_s if len(rid_s) <= 28 else ("…" + rid_s[-24:]))
             phase = status.get("phase")
             if phase:
                 bits.append(str(phase))
