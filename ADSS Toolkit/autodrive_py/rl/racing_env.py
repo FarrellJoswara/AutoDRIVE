@@ -23,6 +23,7 @@ from .contracts import (
     D_WALL_M,
     LIDAR_MAX_M,
     N_LIDAR_DEFAULT,
+    SPEED_MAX_MPS,
     TIMEOUT_S,
     W_PROGRESS,
     W_SPEED,
@@ -30,7 +31,7 @@ from .contracts import (
     W_WALL,
     decode_action,
 )
-from .observation import build_observation
+from .observation import build_observation, observation_bounds
 
 
 @dataclass
@@ -173,7 +174,7 @@ class RacingEnv(gym.Env):
         n_lidar: int = N_LIDAR_DEFAULT,
         dt: float = 0.05,
         timeout_s: float = TIMEOUT_S,
-        v_max: float = 6.0,
+        v_max: float = SPEED_MAX_MPS,
         steer_max: float = 0.4189,
         wheelbase: float = 0.33,
         collision_radius: float = 0.2,
@@ -193,18 +194,16 @@ class RacingEnv(gym.Env):
         self.wheelbase = float(wheelbase)
         self.collision_radius = float(collision_radius)
 
-        low = np.concatenate(
-            [np.zeros(self.n_lidar, dtype=np.float32), np.array([-1.0, -1.0], dtype=np.float32)]
-        )
-        high = np.concatenate(
-            [np.ones(self.n_lidar, dtype=np.float32), np.array([1.0, 1.0], dtype=np.float32)]
-        )
+        low, high = observation_bounds(self.n_lidar)
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
         self.action_space = spaces.MultiDiscrete(list(ACTION_NVEC))
 
         self._rng = np.random.default_rng(seed)
         self._state = None  # x, y, theta, v
         self._prev_action = (0.0, 0.0)
+        self._yaw_rate = 0.0
+        self._ax = 0.0
+        self._ay = 0.0
         self._step_count = 0
         self._progress = 0.0
         self._lap_progress_base = 0.0
@@ -217,13 +216,18 @@ class RacingEnv(gym.Env):
         self._raw_scan = None
 
     def _obs(self) -> np.ndarray:
-        x, y, th, _v = self._state
+        x, y, th, v = self._state
         self._raw_scan = cast_lidar(self.occ, x, y, th, n_beams=self.n_lidar)
         return build_observation(
             self._raw_scan,
             self._prev_action[0],
             self._prev_action[1],
+            float(v),
+            self._yaw_rate,
+            self._ax,
+            self._ay,
             n_lidar=self.n_lidar,
+            speed_max=self.v_max,
         )
 
     def _in_collision(self, x: float, y: float) -> bool:
@@ -241,6 +245,9 @@ class RacingEnv(gym.Env):
         pose = self.start_pose.copy()
         self._state = np.array([pose[0], pose[1], pose[2], 0.0], dtype=np.float64)
         self._prev_action = (0.0, 0.0)
+        self._yaw_rate = 0.0
+        self._ax = 0.0
+        self._ay = 0.0
         self._step_count = 0
         self._crossed_half = False
         if self.centerline is not None:
@@ -256,6 +263,7 @@ class RacingEnv(gym.Env):
     def step(self, action):
         throttle, steering = decode_action(action)
         x, y, th, v = self._state
+        v_prev = float(v)
 
         target_v = throttle * self.v_max
         # simple first-order speed tracking
@@ -263,10 +271,15 @@ class RacingEnv(gym.Env):
         v = float(np.clip(v, 0.0, self.v_max))
         delta = float(steering) * self.steer_max
 
-        # kinematic bicycle
+        # kinematic bicycle + proprio / IMU proxies (legal race-time analogues)
+        yaw_rate = (v / self.wheelbase) * math.tan(delta)
+        self._ax = (v - v_prev) / max(self.dt, 1e-6)
+        self._ay = v * yaw_rate
+        self._yaw_rate = yaw_rate
+
         x = x + v * math.cos(th) * self.dt
         y = y + v * math.sin(th) * self.dt
-        th = th + (v / self.wheelbase) * math.tan(delta) * self.dt
+        th = th + yaw_rate * self.dt
         self._state = np.array([x, y, th, v], dtype=np.float64)
 
         collision = self._in_collision(x, y)
@@ -320,13 +333,27 @@ class RacingEnv(gym.Env):
             truncated = True
 
         self._prev_action = (throttle, steering)
-        obs = build_observation(scan, throttle, steering, n_lidar=self.n_lidar)
+        obs = build_observation(
+            scan,
+            throttle,
+            steering,
+            v,
+            self._yaw_rate,
+            self._ax,
+            self._ay,
+            n_lidar=self.n_lidar,
+            speed_max=self.v_max,
+        )
         info = {
             "collision": bool(collision),
             "timeout": bool(truncated and not terminated),
             "lap_time": lap_time,
             "speed": v,
+            "yaw_rate": self._yaw_rate,
+            "ax": self._ax,
+            "ay": self._ay,
             "progress": self._progress,
+            "obs_dim": int(obs.shape[-1]),
         }
         return obs, float(reward), terminated, truncated, info
 

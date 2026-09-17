@@ -103,13 +103,29 @@ class MapViewer:
         ep = m.get("episode")
         ep_ret = m.get("ep_return")
         collisions = m.get("collisions")
+        train_ts = m.get("train_timesteps")
+        train_rew = m.get("train_ep_rew")
+        train_eps = m.get("train_episodes")
+        train_cols = m.get("train_collisions")
+        run_id = m.get("run_id")
 
         lines: list[str] = []
+        if run_id:
+            rid = str(run_id)
+            lines.append(f"run={rid[-24:]}" if len(rid) > 24 else f"run={rid}")
+        if train_ts is not None:
+            lines.append(f"train_ts={int(train_ts)}")
+        if train_rew is not None:
+            lines.append(f"train_ep_rew={float(train_rew):.1f}")
+        if train_eps is not None:
+            lines.append(f"train_eps={int(train_eps)}")
+        if train_cols is not None:
+            lines.append(f"train_cols={int(train_cols)}")
         if speed is not None:
             lines.append(f"v={float(speed):.1f} m/s")
-        lines.append(f"step={int(step)}")
+        lines.append(f"twin_step={int(step)}" if train_ts is not None else f"step={int(step)}")
         if ep is not None:
-            lines.append(f"ep={int(ep)}")
+            lines.append(f"twin_ep={int(ep)}" if train_ts is not None else f"ep={int(ep)}")
         if ep_ret is not None:
             lines.append(f"return={float(ep_ret):.1f}")
         if collisions is not None:
