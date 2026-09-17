@@ -503,18 +503,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m rl.auto_train",
         description=(
-            "W4 thin Auto-train: chain train_ok → early-stop train → official eval → "
+            "W4 thin Auto-train: chain train_ok -> early-stop train -> official eval -> "
             "next pack map/seed. Refuses overnight soak, live train.lock, holdouts, "
             "and reward mutation. Default dry-run (spawns nothing)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Refuses (nonzero, no spawn, no kill):\n"
-            f"  • live models/*/train.lock or overnight PID ({PROTECTED_OVERNIGHT_RUN})\n"
-            "  • --run-id matching overnight_soak_* / protected soak name\n"
-            "  • holdout/validation maps (map2/map3/map4) via assert_train_safe\n"
-            "  • --allow-holdout / reward-mutation flags (unsupported)\n"
-            "  • --max-runs > 3\n"
+            f"  * live models/*/train.lock or overnight PID ({PROTECTED_OVERNIGHT_RUN})\n"
+            "  * --run-id matching overnight_soak_* / protected soak name\n"
+            "  * holdout/validation maps (map2/map3/map4) via assert_train_safe\n"
+            "  * --allow-holdout / reward-mutation flags (unsupported)\n"
+            "  * --max-runs > 3\n"
             "\n"
             "Does NOT: mutate rewards, morph overnight knobs, hot-cycle soak maps,\n"
             "or call _kill_train_tree.\n"
