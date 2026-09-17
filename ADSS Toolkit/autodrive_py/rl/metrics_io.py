@@ -125,7 +125,12 @@ def atomic_write_json(path: Path, obj: dict) -> None:
 
 
 def atomic_save_sb3(model, dest: Path) -> Path:
-    """Save SB3 zip via temp stem then rename so incomplete never looks like best."""
+    """Save SB3 zip via temp stem then rename so incomplete never looks like best.
+
+    Never deletes the previous ``final`` unless a complete replacement is already
+    on disk (or safely moved to ``.bak``). A failed Windows lock / replace must
+    leave the prior zip intact — do not ``unlink(final)`` as a fallback.
+    """
     dest = Path(dest)
     if dest.suffix == ".zip":
         final = dest
@@ -146,17 +151,45 @@ def atomic_save_sb3(model, dest: Path) -> Path:
     if produced is None:
         raise OSError(f"SB3 save did not produce {tmp_zip}")
     bak = final.with_suffix(final.suffix + ".bak")
+    if bak.exists():
+        try:
+            bak.unlink()
+        except OSError:
+            pass
+    moved_aside = False
     if final.exists():
         try:
-            if bak.exists():
-                bak.unlink()
             final.replace(bak)
-        except OSError:
+            moved_aside = True
+        except OSError as move_exc:
+            # Cannot move the live zip (Windows share lock). Try replace-in-place;
+            # if that also fails, keep ``final`` and drop the temp — never unlink.
             try:
-                final.unlink()
+                produced.replace(final)
+            except OSError as replace_exc:
+                try:
+                    produced.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise OSError(
+                    f"atomic_save_sb3: could not replace locked {final}: {replace_exc}"
+                ) from move_exc
+            return final
+    try:
+        produced.replace(final)
+    except OSError:
+        # Restore prior weights if we had moved them aside.
+        if moved_aside and bak.exists() and not final.exists():
+            try:
+                bak.replace(final)
             except OSError:
                 pass
-    produced.replace(final)
+        try:
+            if produced.exists():
+                produced.unlink()
+        except OSError:
+            pass
+        raise
     if bak.exists():
         try:
             bak.unlink()
@@ -294,7 +327,11 @@ def read_leaderboard(
 
 
 def find_last_complete_checkpoint(run_dir: Path) -> Path | None:
-    """Prefer last complete checkpoint zip; else latest_model; else best_model."""
+    """Prefer last complete checkpoint zip; else latest_model; else best_model.
+
+    Also accepts ``*.zip.bak`` left by a failed ``atomic_save_sb3`` replace so
+    Continue can recover instead of claiming no checkpoint.
+    """
     run_dir = Path(run_dir)
     ckpt_dir = run_dir / "checkpoints"
     if ckpt_dir.is_dir():
@@ -306,7 +343,12 @@ def find_last_complete_checkpoint(run_dir: Path) -> Path | None:
         zips = [p for p in zips if not p.name.startswith(".")]
         if zips:
             return zips[-1]
-    for name in ("latest_model.zip", "best_model.zip"):
+    for name in (
+        "latest_model.zip",
+        "best_model.zip",
+        "latest_model.zip.bak",
+        "best_model.zip.bak",
+    ):
         p = run_dir / name
         if p.is_file() and p.stat().st_size > 1024:
             return p
@@ -317,41 +359,83 @@ def run_lock_path(run_dir: Path) -> Path:
     return Path(run_dir) / "train.lock"
 
 
+def _pid_alive(pid: int) -> bool:
+    """Best-effort: True if ``pid`` appears to refer to a live process."""
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            k = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            handle = k.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if handle:
+                k.CloseHandle(handle)
+                return True
+            return False
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, AttributeError):
+        return False
+
+
 def acquire_run_lock(run_dir: Path, pid: int | None = None) -> Path:
-    """Refuse dual writers: create exclusive train.lock with pid."""
+    """Refuse dual writers: exclusive ``train.lock`` create (O_EXCL) with pid.
+
+    Stale locks (dead PID) are removed once, then create is retried. Two live
+    trainers racing the same ``run_id`` cannot both win the exclusive create.
+    """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     lock = run_lock_path(run_dir)
     pid = int(pid or os.getpid())
-    if lock.exists():
-        try:
-            data = json.loads(lock.read_text(encoding="utf-8"))
-            old_pid = int(data.get("pid", -1))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            old_pid = -1
-        # Stale if process gone
-        alive = False
-        if old_pid > 0:
-            try:
-                if os.name == "nt":
-                    import ctypes
+    payload = json.dumps({"pid": pid, "timestamp": utc_now()}, indent=2)
 
-                    k = ctypes.windll.kernel32  # type: ignore[attr-defined]
-                    handle = k.OpenProcess(0x1000, False, old_pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-                    if handle:
-                        alive = True
-                        k.CloseHandle(handle)
-                else:
-                    os.kill(old_pid, 0)
-                    alive = True
-            except (OSError, AttributeError):
-                alive = False
-        if alive:
-            raise RuntimeError(
-                f"Refuse dual-writer: {lock} held by pid={old_pid}. Stop that train first."
-            )
-    atomic_write_json(lock, {"pid": pid, "timestamp": utc_now()})
-    return lock
+    def _try_excl_create() -> bool:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY  # type: ignore[attr-defined]
+        try:
+            fd = os.open(str(lock), flags, 0o644)
+        except FileExistsError:
+            return False
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
+
+    if _try_excl_create():
+        return lock
+
+    # Lock exists — refuse if holder looks alive; else clear stale once and retry.
+    try:
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        old_pid = int(data.get("pid", -1))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        old_pid = -1
+    if _pid_alive(old_pid):
+        raise RuntimeError(
+            f"Refuse dual-writer: {lock} held by pid={old_pid}. Stop that train first."
+        )
+    try:
+        lock.unlink()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Refuse dual-writer: {lock} exists but could not clear stale lock: {exc}"
+        ) from exc
+    if _try_excl_create():
+        return lock
+    # Lost the race to another trainer that created between unlink and create.
+    try:
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        winner = int(data.get("pid", -1))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        winner = -1
+    raise RuntimeError(
+        f"Refuse dual-writer: {lock} taken by pid={winner} during acquire. "
+        "Stop that train first."
+    )
 
 
 def release_run_lock(run_dir: Path) -> None:

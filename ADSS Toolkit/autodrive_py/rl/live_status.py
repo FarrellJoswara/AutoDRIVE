@@ -235,6 +235,9 @@ def LiveStatusCallback(*args, **kwargs):
             force_save_latest: bool,
             preserve_terminal_phase: bool = False,
         ) -> None:
+            # preserve_terminal_phase retained for call-site compat; terminal /
+            # validating are always preserved now (stronger than training_end-only).
+            _ = preserve_terminal_phase
             latest_str = self._last_latest_path
             if force_save_latest and self.latest_model_path is not None:
                 from .metrics_io import atomic_save_sb3
@@ -263,17 +266,25 @@ def LiveStatusCallback(*args, **kwargs):
 
             phase = "learning"
             msg = "learning"
-            if preserve_terminal_phase:
-                prev = read_live_status(self.status_path)
-                prev_phase = prev.get("phase") if prev else None
-                # Keep early_stopped forever; also keep validating if RaceBest
-                # is mid-eval when training_end races (unusual but safer).
-                if prev and (
-                    is_terminal_phase(prev_phase) or prev_phase == "validating"
-                ):
-                    phase = str(prev_phase)
-                    if prev.get("msg"):
-                        msg = str(prev["msg"])
+            # Always honor terminal / validating already on disk — not only on
+            # training_end. CallbackList still invokes later callbacks after
+            # RaceBest returns False; a mid-rollout trail must not clobber.
+            prev = read_live_status(self.status_path)
+            prev_phase = prev.get("phase") if prev else None
+            if prev and (is_terminal_phase(prev_phase) or prev_phase == "validating"):
+                # RaceBest owns validating + early_stopped; only refresh clock
+                # for terminal so watch age stays honest without rewriting phase.
+                if is_terminal_phase(prev_phase):
+                    payload = dict(prev)
+                    payload["unix_time"] = time.time()
+                    payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+                    try:
+                        write_live_status(self.status_path, payload)
+                    except OSError as exc:
+                        if self.verbose:
+                            print(f"[live_status] write skipped (non-fatal): {exc}")
+                    self._last_status_ts = int(self.num_timesteps)
+                return
 
             payload = {
                 "run_id": self.run_id,

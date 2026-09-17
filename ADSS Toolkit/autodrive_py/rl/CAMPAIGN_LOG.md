@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** `5e89e7a` pushed; campaign docs commit separately as they land.
+**Head note:** `83fa8a1` Watch/glossary on remote; overnight Continue live (~376k @ 04:15); this push = campaign W5/W6 + lock/atomic/map-strict + thin auto_train.
 
 ---
 
@@ -44,9 +44,10 @@ MUST 1–5 gated by critique+racer+minimalist; reliability **P0 dual-writer/hear
 | Field | Value |
 | ----- | ----- |
 | **run_id** | `overnight_soak_20260917_082739` |
-| **Status** | ACTIVE — DO NOT KILL without Continue restart |
-| **live_status (~03:57)** | timesteps≈198k, steps/s≈269, phase=learning, n_envs=8, vec=subproc |
-| **PIDs (last seen)** | 31472, 34256 |
+| **Status** | ACTIVE — restored after selftest Stop; DO NOT KILL without Continue |
+| **live_status (~04:15 Chicago)** | timesteps≈**376k**↑, steps/s≈199, phase=`learning`, n_envs=8, vec=subproc; mid-val pauses honest (`validating` @ ~345k then resumed) |
+| **PIDs (lock / parent)** | **19244** / **53852** (Continue from `ppo_295480_steps.zip`) |
+| **Sacred argv** | select=220, eval=50k, warmup=2, min_ts=100k, patience=5, unlimited |
 | **GPU** | ~20–40% util — evidence for **KILL GPU theater**, not a mandate |
 
 ---
@@ -131,6 +132,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - **New loop PID:** `40676` (first sentinel after ~10m sleep; train_ppo 31472/34256 left running).
 - **~04:05:** Loop PID `40676` died externally (`exit_code=4294967295`, ~4m in, no tick emitted). Re-armed same 10m sentinel — **new loop PID `12004`**. Overnight `31472/34256` no longer present at re-arm — Continue-restart same `run_id` is required on next tick.
 
+### ~04:16 — First 10m `AGENT_LOOP_TICK` (PID 12004)
+
+- Sentinel fired; loop still running; deadline not reached.
+- Overnight already Continue-restored and learning (~376k @ ~04:15; lock ~19244 / parent ~53852) — no new Continue this tick.
+- Nested tick handler cannot `resume` standing Researcher/personalities (parent mismatch); **parent** must resume board + Orchestrator for this wake (Orchestrator may already be mid-run).
+
 ---
 
 ### ~04:04–04:06 — W3 tick + overnight Continue restart
@@ -141,6 +148,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Shipped / Tests
+
+### ~04:15 — Overnight confirm: still learning after selftest Stop incident
+- **Incident:** `ui_selftest` HTTP `op=stop` (unmocked) killed protected soak mid-validation (~295k).
+- **Mock fix:** Stop path in `ui_selftest` now mocks `_kill_train_tree` / external scan so retests cannot sweep live `train_ppo`.
+- **Restore:** Continue same `run_id` from `ppo_295480_steps.zip` with sacred overnight argv (select=220, eval=50k, warmup=2, min_ts=100k, patience=5, unlimited). Lock pid=**19244**, parent=**53852**.
+- **Confirm (~04:15):** live_status timesteps **376k**↑, phase=`learning`, sps≈199, `ep_rew_mean`↑, dual-writer refuse intact. No new Continue needed; do not start competing overnight trains.
 
 ### ~04:08 — Reliability P0: heartbeat join + Start/Continue no-kill (**SHIP**)
 - **Bug 1:** validation heartbeat could overwrite `phase=early_stopped` with `validating` (Event set, thread not joined). Fixed: join+gen-token; refuse non-terminal writes after `early_stopped`; stop heartbeat before terminal write.

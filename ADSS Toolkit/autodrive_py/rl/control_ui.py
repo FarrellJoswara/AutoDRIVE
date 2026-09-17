@@ -1600,7 +1600,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w3-ux-soft-20260917"
+UI_BUILD = "w4-auto-train-thin-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1822,6 +1822,15 @@ details.glossary summary::before{content:"? ";color:#8cf}
     <button type="button" onclick="act('watch')" title="Opens lag-behind Watch (--follow --every 8 --compact). Separate process; KPIs unofficial.">Open watch --follow</button>
     <button type="button" onclick="act('stop_watch')">Stop Watch</button>
   </div>
+  <div class="row" style="opacity:0.55">
+    <button id="auto_train_btn" type="button" disabled title="EXPERIMENTAL preview only — CLI scaffold exists (python -m rl.auto_train). UI spawn deferred until chaos drills. Never starts beside overnight soak.">Auto-train (EXPERIMENTAL)</button>
+    <label for="auto_train_enable" title="Opt-in preview only. Does not enable unattended overnight chaining.">Enable preview</label>
+    <input id="auto_train_enable" type="checkbox" onchange="syncAutoTrainPreview()"
+           title="Check to read the warning. Button stays non-spawning this wave.">
+    <span class="small" id="auto_train_hint">disabled — W4 thin CLI only; no UI spawn / no overnight companion</span>
+  </div>
+  <p class="hint warn" id="auto_train_warn" style="display:none">WARNING: Auto-train UI will not Start/Continue/kill the protected overnight soak.
+  Use <code>python -m rl.auto_train --dry-run</code> (or <code>--execute --smoke</code> when idle). Reward mutation and holdout training are refused forever this campaign.</p>
   <p class="hint"><b>Stop</b> = operator halt (clears lock when verified dead) then <b>Continue</b> from last <b>complete</b> zip.
   Do not Task-Manager-kill mid-save — that can corrupt checkpoints. Soft-stop ≠ hard kill.</p>
   <p class="hint">Watch: click the OpenCV map window first, then q/Esc or the window X
@@ -1855,6 +1864,18 @@ let previewTimer = null;
 let lastRunId = null;
 const STATUS_MS = 750;
 function syncN(){ document.getElementById('n_envs_val').textContent = document.getElementById('n_envs').value; }
+function syncAutoTrainPreview(){
+  const on = document.getElementById('auto_train_enable') && document.getElementById('auto_train_enable').checked;
+  const warn = document.getElementById('auto_train_warn');
+  const hint = document.getElementById('auto_train_hint');
+  const btn = document.getElementById('auto_train_btn');
+  if (warn) warn.style.display = on ? 'block' : 'none';
+  if (hint) hint.textContent = on
+    ? 'preview only — button still does not spawn; chaos drills required for enablement'
+    : 'disabled — W4 thin CLI only; no UI spawn / no overnight companion';
+  // Keep disabled even when preview checked — refuse live spawn this wave.
+  if (btn) btn.disabled = true;
+}
 function syncBudget(){
   const on = document.getElementById('stop_on_budget').checked;
   const ts = document.getElementById('timesteps');
@@ -2186,6 +2207,7 @@ async function act(op, extra){
   else if (op === 'delete_model') msgEl.textContent = 'Deleting…';
   else if (op === 'gen_maps') msgEl.textContent = 'Generating maps… (a few seconds)';
   else if (op === 'verify_seals') msgEl.textContent = 'Verifying pack seals…';
+  else if (op === 'auto_train') msgEl.textContent = 'Auto-train preview…';
   else if (op === 'tensorboard') msgEl.textContent = 'Starting TensorBoard…';
   else msgEl.textContent = 'Working…';
   const body = new URLSearchParams(Object.assign({
@@ -2479,6 +2501,13 @@ class Handler(BaseHTTPRequestHandler):
             msg = _generate_maps(count, seed)
         elif op == "verify_seals":
             msg = _verify_seals()
+        elif op == "auto_train":
+            # Preview/refuse only — never spawn beside overnight; chaos drills gate enablement.
+            msg = _set_msg(
+                "Refuse Auto-train UI spawn (W4 thin): use `python -m rl.auto_train --dry-run` "
+                "(or `--execute --smoke` when no live train.lock). Never Start/Continue/kill "
+                f"{PROTECTED_OVERNIGHT_RUN}; no reward mutation; no holdout."
+            )
         elif op == "tensorboard":
             msg = _ensure_tensorboard()
             with _state_lock:

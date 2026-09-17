@@ -609,19 +609,35 @@ class RacingEnv(gym.Env):
         return obs, float(reward), terminated, truncated, info
 
 
-def resolve_map_yaml(map_id: str | Path, maps_root: Path | None = None) -> Path:
-    """Resolve a map id or path to a yaml file. Falls back to first generated map / demo."""
+def resolve_map_yaml(
+    map_id: str | Path,
+    maps_root: Path | None = None,
+    *,
+    strict: bool = False,
+) -> Path:
+    """Resolve a map id or path to a yaml file.
+
+    When ``strict=True`` (train/eval/official), never silently substitute another
+    map if the requested id is missing — that is CAMPAIGN_BUGFIX **B0.1**.
+    Soft fallback to ``map*.yaml`` / ``demo`` remains for Watch/demo helpers only.
+    """
     p = Path(map_id)
     if p.suffix in {".yaml", ".yml"} and p.exists():
         return p
     root = maps_root or (Path(__file__).resolve().parent / "maps")
-    candidate = root / str(map_id) / f"{map_id}.yaml"
+    mid = str(map_id)
+    candidate = root / mid / f"{mid}.yaml"
     if candidate.exists():
         return candidate
-    # search
-    matches = sorted(root.glob(f"**/{map_id}.yaml"))
+    # search exact stem
+    matches = sorted(root.glob(f"**/{mid}.yaml"))
     if matches:
         return matches[0]
+    if strict:
+        raise FileNotFoundError(
+            f"No map found for '{mid}' under {root} "
+            "(strict: refuse silent fallback to another map*.yaml / demo)"
+        )
     any_maps = sorted(root.glob("**/map*.yaml"))
     if any_maps:
         return any_maps[0]
@@ -629,3 +645,18 @@ def resolve_map_yaml(map_id: str | Path, maps_root: Path | None = None) -> Path:
     if demo.exists():
         return demo
     raise FileNotFoundError(f"No map found for '{map_id}' under {root}")
+
+
+def assert_resolved_map_id(requested: str | Path, resolved: Path) -> None:
+    """Fail if resolved yaml stem does not match the requested map id (B0.1)."""
+    req = Path(requested)
+    if req.suffix in {".yaml", ".yml"}:
+        want = req.stem
+    else:
+        want = str(requested)
+    got = Path(resolved).stem
+    if want != got:
+        raise FileNotFoundError(
+            f"Map id mismatch: requested {want!r} but resolved {resolved} (stem={got!r}). "
+            "Refusing silent wrong-map train/eval."
+        )

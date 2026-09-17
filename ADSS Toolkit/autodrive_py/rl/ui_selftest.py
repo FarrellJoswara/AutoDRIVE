@@ -578,10 +578,22 @@ def test_http_surface() -> None:
             'id="fast_probe"' in html and "NON-OFFICIAL" in html and ("never promotes" in html.lower() or "does not promote" in html.lower()),
         )
         check("index has verify seals button", "verify_seals" in html and "Verify pack seals" in html)
+        check(
+            "index has Auto-train experimental stub",
+            'id="auto_train_btn"' in html
+            and "EXPERIMENTAL" in html
+            and "disabled" in html[html.find("auto_train_btn") : html.find("auto_train_btn") + 120],
+        )
+        check(
+            "index Auto-train warn mentions overnight/CLI",
+            'id="auto_train_warn"' in html
+            and "auto_train" in html
+            and ("overnight" in html.lower() or "chaos" in html.lower()),
+        )
         check("index has soft-stop Continue hint", "Soft-stop" in html or "complete" in html.lower())
         check(
             "index build stamp bumped",
-            'id="ui_build"' in html and ("w3-ux-soft" in html or "20260917" in html),
+            'id="ui_build"' in html and ("w4-auto-train" in html or "w3-ux-soft" in html or "20260917" in html),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
         )
         check(

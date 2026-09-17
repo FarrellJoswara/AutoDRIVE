@@ -5,7 +5,63 @@
 **Sources of truth for MUST order:** `CAMPAIGN_CRITIQUE.md` + `ideas_review/campaign_racer.md` (+ minimalist KEEP / reliability vetoes)  
 **Companion brief:** `CAMPAIGN_RESEARCH.md` (COMPLETE)
 
-Append one entry per resume tick. Newest first.
+Append one entry per resume tick. Newest first.  
+**Soft inbox:** [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (Suggestion seat — not mandates)
+
+---
+
+## STANDING — Bugfix/Perf hunter (stable cores) — ~04:11 Chicago
+- **id:** `20260917-bugfix-stable-cores-t0`
+- **type:** audit / patch (user soft suggestion — standing)
+- **scope:** contracts · racing_env · live_status · atomic checkpoint/`train.lock` · map_pack · observation · Subproc. Skip UI reskin + DEFER (knee/AMP/continuous/embed).
+- **overnight:** observe-only `overnight_soak_20260917_082739` — no kill; in-memory train still on pre-fix code until Continue.
+- **artifact:** [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md) (P0/P1/P2 + PERF).
+- **P0 SHIP (this tick):**
+  1. `atomic_save_sb3` — removed unlink-on-lock path (data-loss); restore `.bak` on failed replace.
+  2. `acquire_run_lock` — `O_EXCL` exclusive create (dual-writer TOCTOU).
+  3. `LiveStatusCallback` — never clobber `early_stopped` / `validating`.
+  4. `find_last_complete_checkpoint` — accept `*.zip.bak` for Continue recovery.
+- **tests:** `rl/.venv` `python -m rl._bugfix_p0_checks` → **9/9 PASS**.
+- **P1 next:** atomic CheckpointCallback; atomic `best_model_meta.json`; map_pack refuse corrupt manifest.
+- **PERF parked:** cast_lidar / obs buffer / worker memmap — measure before change; no sacred timeout edits.
+- **Resume-me:** Bugfix/Perf — next tick re-audit + ship P1-1/2/3 if free; keep overnight observe-only.
+
+---
+
+## W6 — Standing Suggestion bot seat + Wave 1 triage — ~04:11 Chicago
+- **id:** `20260917-W6-suggestion-bot`
+- **type:** tick / wave (user soft suggestion)
+- **proposal:** Add a standing **Suggestion** seat (like user W3/W4/W5 soft asks): periodically invents soft improvement ideas (UX, train, perf, pipeline, AutoDRIVE transfer) and submits them as **suggestions**, not mandates. First wave already in `CAMPAIGN_SUGGESTIONS.md` (`20260917-W6-sug-wave1`, 5 ideas).
+- **overnight plan:** Observe-only `overnight_soak_20260917_082739`. Suggestion bot never Start/Continue/kill/morph soak; never retune sacred knobs; never ship without Integrator gate.
+
+### Process (SHIP seat + inbox)
+
+1. Each ~10m tick (**or every other tick**): Suggestion bot appends **3–7** soft ideas to `CAMPAIGN_SUGGESTIONS.md` + a short board proposal pointing at wave ids.
+2. Board triages each idea **SHIP / DEFER / SKIP** (same personality votes + Integrator gate).
+3. Orchestrator builds **SHIP only**, optional behind race MUST when free hands.
+4. Soft ≠ override MUST order, W2/W3 SKIP lists, or Reliability Blocks.
+
+### Seat vote — standing Suggestion bot → **SHIP**
+
+- **Researcher:** **Go** — process mirror of user soft waves (W3 UX, W4 auto-train, W5 bugfix); inbox + board keeps ideas out of orchestrator freestyle; cites governance ship gate.
+- **Racer:** **Approve** — ideas welcome if they stay behind collision/Continue/FTGΔ; Block any wave that pretends chrome = podium.
+- **Minimalist:** **Approve** — one markdown inbox + short board pulses; refuse a second product/UI framework or “suggestion daemon” that auto-codes.
+- **Reliability:** **Approve** — soft inbox cannot touch overnight math, kill-tree, dual-Start, or seals; every SHIP still needs board entry.
+- **Integrator:** **SHIP** the **seat + inbox + Wave 1 triage** (docs/process only this chunk). No huge implementations.
+
+### Wave 1 triage (`CAMPAIGN_SUGGESTIONS.md`)
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| S-20260917-W6-01 | Watch compact honesty strip | **SHIP** (bundle with W3 Watch compact / `--every`; free hands only) |
+| S-20260917-W6-02 | Reward / curriculum plain-language clarity | **SHIP** (bundle with W3 glossary; no reward API) |
+| S-20260917-W6-03 | Map curriculum unlock checklist | **DEFER** product UI — **SHIP** checklist copy as glossary bullets OK; no auto-Start |
+| S-20260917-W6-04 | Eval wall-clock honesty cue | **SHIP** tooltip/status copy only; **SKIP** timeout shorten / denser overnight eval |
+| S-20260917-W6-05 | Bridge-readiness constraint card | **SHIP** document-only (RESEARCH §5); **SKIP** bridge/Jetson code |
+
+**Orchestrator:** implement Wave 1 **SHIP** items only as thin copy/overlay/glossary when free; leave DEFER/SKIP alone. Soft suggestion ≠ starve MUST #3 A/B or #4 FTGΔ.
+
+**STANDING Resume-me:** Suggestion bot — next tick (or every other ~10m): invent **3–7** new soft ideas → append newest wave to `CAMPAIGN_SUGGESTIONS.md` → open short board proposal for triage → do **not** mandate, auto-code, or touch overnight. Diversify areas; skip duplicates of SKIP forever (GPU theater, continuous outer, reward Discord, bridge product). Soft ≠ MUST override.
 
 ---
 
