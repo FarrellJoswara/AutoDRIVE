@@ -158,7 +158,7 @@ Campaign / history (do not delete — organize via index):
 | Thing | Path / meaning |
 | ----- | -------------- |
 | `train.lock` | `models/<run_id>/train.lock` — live PID claim. Start/Continue refuse if another live lock exists. |
-| `CURRENT_RUN.txt` | `logs/CURRENT_RUN.txt` — operator pin so UI ranks this run over short smokes. |
+| `CURRENT_RUN.txt` | `logs/CURRENT_RUN.txt` — operator pin so UI/Watch rank this run over short smokes. Helpers: `ui_ops.read_operator_run_pin` / `write_operator_run_pin`. |
 | Dual-writer refuse | Two writers on one `run_id` = refuse. Never “fix” by killing overnight from Start. |
 
 Sacred overnight preset knobs (UI “Overnight”): patience **5**, min_improve **0.5**, eval every **50k**, warmup **2**, min_ts **100k**, select **220**, budget **OFF** (unlimited safety ceiling).

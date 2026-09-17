@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .live_status import find_latest_status, pick_status_for_operator, write_live_status
+from .ui_ops import read_operator_run_pin, write_operator_run_pin
 
 
 def _write(runs: Path, run_id: str, timesteps: int, *, sleep_s: float = 0.0) -> Path:
@@ -81,6 +82,16 @@ def main() -> int:
         check(
             "missing pin falls back to highest timesteps",
             missing is not None and missing[1].get("run_id") == "overnight_soak_demo",
+        )
+
+    print("operator CURRENT_RUN pin")
+    with tempfile.TemporaryDirectory() as tmp:
+        logs = Path(tmp) / "logs"
+        check("missing pin returns None", read_operator_run_pin(logs) is None)
+        write_operator_run_pin(logs, "overnight_soak_demo")
+        check(
+            "write/read roundtrip",
+            read_operator_run_pin(logs) == "overnight_soak_demo",
         )
 
     print("all checks passed" if fails == 0 else f"{fails} check(s) failed")

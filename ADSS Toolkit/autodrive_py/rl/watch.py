@@ -30,6 +30,7 @@ from .eval_protocol import protocol_timeout_s
 from .ftg import FollowTheGap
 from .live_status import pick_status_for_operator, read_live_status, resolve_latest_weights
 from .racing_env import RacingEnv, nearest_centerline_progress, resolve_map_yaml
+from .ui_ops import read_operator_run_pin
 from .viewer import GHOST_COLOR_BGR, MapViewer, agent_color
 from .watch_kpi import (
     FleetKpi,
@@ -603,16 +604,6 @@ def _weights_newer(path: Path, loaded_path: Path | None, loaded_mtime: float) ->
     return mtime > loaded_mtime
 
 
-def _operator_run_pin(rl_root: Path) -> str | None:
-    """Optional ``logs/CURRENT_RUN.txt`` pin — same file Control UI uses."""
-    pin = Path(rl_root) / "logs" / "CURRENT_RUN.txt"
-    try:
-        text = pin.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return text or None
-
-
 def _run_follow(args) -> int:
     """Lag-behind twins: train stats from JSON + N local rollouts of latest weights."""
     from stable_baselines3 import PPO
@@ -621,9 +612,10 @@ def _run_follow(args) -> int:
     runs_root = rl_root / "runs"
     models_root = rl_root / "models"
     maps_root = rl_root / "maps"
+    logs_root = rl_root / "logs"
     map_yaml = resolve_map_yaml(args.map, maps_root)
     pin_run = bool(args.run_id)
-    operator_pin = None if pin_run else _operator_run_pin(rl_root)
+    operator_pin = None if pin_run else read_operator_run_pin(logs_root)
 
     status_path: Path | None = None
     status: dict | None = None
@@ -656,7 +648,7 @@ def _run_follow(args) -> int:
                 status = read_live_status(status_path) or status
             return
         found = pick_status_for_operator(
-            runs_root, preferred_run_id=_operator_run_pin(rl_root)
+            runs_root, preferred_run_id=read_operator_run_pin(logs_root)
         )
         if found:
             new_path, new_status = found

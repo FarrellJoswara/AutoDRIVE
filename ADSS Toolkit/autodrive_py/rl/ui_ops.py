@@ -59,6 +59,29 @@ RESERVED_MAP_PREFIXES = {"map"}  # protocol namespace: map0/map1/map2
 MIN_COMPLETE_ZIP_BYTES = 1024
 
 
+def read_operator_run_pin(logs_dir: Path) -> str | None:
+    """Read ``logs/CURRENT_RUN.txt`` (one run_id line) or None if missing/blank.
+
+    Control UI and Watch use this pin so a short A/B smoke does not eclipse
+    overnight when several trains are live.
+    """
+    pin = Path(logs_dir) / "CURRENT_RUN.txt"
+    try:
+        text = pin.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
+def write_operator_run_pin(logs_dir: Path, run_id: str) -> Path:
+    """Write operator pin; returns the pin path."""
+    logs = Path(logs_dir)
+    logs.mkdir(parents=True, exist_ok=True)
+    path = logs / "CURRENT_RUN.txt"
+    path.write_text(str(run_id).strip() + "\n", encoding="utf-8")
+    return path
+
+
 def resolve_stop_budget(
     *,
     stop_on_budget: bool = True,
@@ -651,9 +674,20 @@ def map_labels(maps_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
-def coach_hints(live: dict | None, *, watch_opened: bool, n_envs: int) -> list[str]:
+def coach_hints(
+    live: dict | None,
+    *,
+    watch_opened: bool,
+    n_envs: int,
+    live_run_count: int = 0,
+) -> list[str]:
     hints = []
     live = live or {}
+    if int(live_run_count or 0) >= 2:
+        hints.append(
+            f"{int(live_run_count)} live train.lock(s) - use Live runs Focus to bind banner; "
+            "Start from this panel stays refused (multi-train = separate ownership)."
+        )
     crash = live.get("crash_rate_estimate")
     sps = live.get("steps_per_sec")
     if crash is not None:
