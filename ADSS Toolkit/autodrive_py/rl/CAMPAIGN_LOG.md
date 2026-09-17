@@ -7,12 +7,13 @@
 
 ---
 
-## Keep-alive loop (mandatory — ~03:58+)
+## Keep-alive loop (mandatory — ~04:00+ AGGRESSIVE)
 
-- **Sentinel:** `AGENT_LOOP_TICK_autodrive-rl-campaign` (~50 min).
-- **On EVERY tick:** parent MUST execute [`campaign_tick.md`](campaign_tick.md) — full review board (Researcher → Racer/Minimalist/Reliability votes → Orchestrator ships approved only). **Not orchestrator-only.**
+- **Sentinel:** `AGENT_LOOP_TICK_autodrive-rl-campaign` — **every 10 min (600s)**.
+- **Cadence change (~04:00):** 50m ticks were too slow / padded the 9h window. User mandate: ideas constantly worked; lots of well-implemented small features each tick. See [`campaign_tick.md`](campaign_tick.md).
+- **On EVERY tick:** parent MUST (1) resume Researcher + Racer/Minimalist/Reliability **in parallel** for NEXT proposal batch → `CAMPAIGN_BOARD.md`; (2) resume Orchestrator to ship **MULTIPLE** approved small features in parallel (spawn sibling implementers); protect overnight; **push often**. **Not orchestrator-only / not single-feature trickle.**
 - **Deadline:** after 12:54 America/Chicago 2026-09-17, STOP loop; do not re-arm.
-- Prior loop PID ~46964 (orchestrator-only prompt) aborted; re-armed with full-board prompt pointing at `campaign_tick.md`. Do not kill `train_ppo` when re-arming.
+- Prior loops: PID ~46964 (orchestrator-only, 50m) aborted; PID ~52836 (full-board, 50m) stopped for cadence cut. Do not kill `train_ppo` when re-arming.
 
 ## Governance (mandatory — 03:57+)
 
