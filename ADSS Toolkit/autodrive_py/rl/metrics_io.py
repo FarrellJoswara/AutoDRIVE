@@ -1,4 +1,8 @@
-"""Metrics + leaderboard helpers (contracts.md §6–7)."""
+"""Metrics + leaderboard helpers (contracts.md §6–7).
+
+Train/eval write rows; ``compare_models`` ranks by ``adjusted_time``.
+Also owns atomic SB3 zip save + ``train.lock`` acquire/release used by ``train_ppo``.
+"""
 
 from __future__ import annotations
 
@@ -326,21 +330,43 @@ def read_leaderboard(
     return out
 
 
+def _zip_looks_complete(path: Path) -> bool:
+    """True if ``path`` is a non-tiny zip that opens and passes ``testzip``."""
+    path = Path(path)
+    try:
+        if not path.is_file() or path.stat().st_size <= 1024:
+            return False
+    except OSError:
+        return False
+    try:
+        import zipfile
+
+        with zipfile.ZipFile(path, "r") as zf:
+            return zf.testzip() is None
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
 def find_last_complete_checkpoint(run_dir: Path) -> Path | None:
     """Prefer last complete checkpoint zip; else latest_model; else best_model.
 
     Also accepts ``*.zip.bak`` left by a failed ``atomic_save_sb3`` replace so
-    Continue can recover instead of claiming no checkpoint.
+    Continue can recover instead of claiming no checkpoint. Skips zips that
+    fail a zipfile open/test (partial SB3 writes).
     """
+    import zipfile  # noqa: F401 — used by _zip_looks_complete; keep import local
+
     run_dir = Path(run_dir)
     ckpt_dir = run_dir / "checkpoints"
     if ckpt_dir.is_dir():
         zips = sorted(
-            [p for p in ckpt_dir.glob("*.zip") if p.stat().st_size > 1024],
+            [
+                p
+                for p in ckpt_dir.glob("*.zip")
+                if not p.name.startswith(".") and _zip_looks_complete(p)
+            ],
             key=lambda p: p.stat().st_mtime,
         )
-        # Skip obvious partials
-        zips = [p for p in zips if not p.name.startswith(".")]
         if zips:
             return zips[-1]
     for name in (
@@ -350,7 +376,7 @@ def find_last_complete_checkpoint(run_dir: Path) -> Path | None:
         "best_model.zip.bak",
     ):
         p = run_dir / name
-        if p.is_file() and p.stat().st_size > 1024:
+        if _zip_looks_complete(p):
             return p
     return None
 

@@ -1,4 +1,8 @@
-"""Frozen held-out eval protocol loader + runners (official race scores)."""
+"""Frozen held-out eval protocol loader + runners (official race scores).
+
+``eval_protocol.yaml`` + sealed maps → comparable FTG/PPO ``adjusted_time``.
+Used by ``eval_cli``, mid-train RaceBest, and ``auto_train`` official steps.
+"""
 
 from __future__ import annotations
 

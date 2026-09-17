@@ -118,6 +118,7 @@ Get-Content "rl\runs\overnight_soak_20260917_082739\live_status.json"
 | [`train_ppo.py`](train_ppo.py) | PPO train loop, RaceBest, early-stop, locks |
 | [`racing_env.py`](racing_env.py) | Gym env + reward / stall / collision |
 | [`live_status.py`](live_status.py) | Atomic JSON trail; `find_latest_status` / `pick_status_for_operator` |
+| [`checkpoint_io.py`](checkpoint_io.py) | Thin re-export of lock/atomic helpers from `metrics_io` (optional import path) |
 | [`watch.py`](watch.py) + [`watch_kpi.py`](watch_kpi.py) | Lag-behind viewer + race KPI overlay |
 | [`map_pack.py`](map_pack.py) + `maps/map_pack.json` | Roles + seals |
 | [`auto_train.py`](auto_train.py) | Thin outer chain (dry-run default); **refuses** live overnight |

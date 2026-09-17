@@ -100,6 +100,7 @@ Integrator records: `SHIP` | `SKIP` | `DEFER` + one line.
 
 | File | Role |
 | ---- | ---- |
+| `HANDOFF.md` | **Human entrypoint** — how to run, sacred soak, multi-run, resume, tests (not ship permission) |
 | `CAMPAIGN_GOVERNANCE.md` | This standing process (stable) |
 | `CAMPAIGN_BOARD.md` | Append-only dated entries; **source of truth for ship permission** |
 | `CAMPAIGN_SUGGESTIONS.md` | Soft idea inbox (Suggestion seat); **not** ship permission until board triage |
