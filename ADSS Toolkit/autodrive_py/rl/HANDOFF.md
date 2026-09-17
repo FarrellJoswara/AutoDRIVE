@@ -165,6 +165,36 @@ Sacred overnight preset knobs (UI “Overnight”): patience **5**, min_improve 
 
 ---
 
+## Map pack & train locks
+
+Roles live in `maps/map_pack.json` (source of truth for what trainers may touch):
+
+| Role | Meaning |
+| ---- | ------- |
+| `train_ok` | Free to train |
+| `validation` | Mid-train model selection only — **never** train |
+| `holdout` | Sealed official scoring — **never** train |
+
+```powershell
+python -m rl.map_pack list --train-safe --ids
+python -m rl.map_pack list --holdout --ids
+python -m rl.map_pack verify          # nonzero if a sealed hash drifted
+python -m rl.test_map_pack
+```
+
+If Start says refuse holdout/validation → pick a `train_ok` map (or explicit allow only with board + eyes open).
+
+### `train.lock` cheat sheet
+
+| Situation | Do |
+| --------- | -- |
+| Lock + live PID (overnight) | **Leave it.** Observe `live_status`. |
+| Lock + dead PID | Clear stale lock (UI helper / `clear_stale_lock`), then Continue same `run_id`. |
+| Several live locks | Multi-run: pin `CURRENT_RUN.txt`, Focus in UI when available; do not dual-Start one panel onto two writers. |
+| Want a disposable A/B | New `run_id` via CLI is OK; never morph overnight argv mid-flight. |
+
+---
+
 ## Multi-run reality
 
 Operators often have **several** live `train.lock`s (overnight + disposable A/B smokes).
@@ -178,7 +208,7 @@ What to check:
 
 1. `rl/logs/CURRENT_RUN.txt` — should be the run you care about (usually overnight).
 2. `find_live_run_locks` / Models list — multiple `[locked pid=…]`.
-3. Prefer Focus / pin (when UI exposes it) or rewrite `CURRENT_RUN.txt`, then refresh status.
+3. Prefer Control **Focus** on the Live runs list (writes `CURRENT_RUN.txt`) or rewrite the pin by hand, then refresh status.
 4. Ranking preference (already in Control): **pin → highest live timesteps → `--resume`/`--unlimited` → leaf PID**.
 
 Do **not** “simplify” by killing multi-train support or sweeping overnight with an unmocked Stop during selftest.

@@ -1,4 +1,10 @@
-"""Phase 4: PPO training on RacingEnv + honest best_model / resume / fingerprint."""
+"""Phase 4: PPO training on RacingEnv + honest best_model / resume / fingerprint.
+
+Entry: ``python -m rl.train_ppo`` or Control UI Start/Continue.
+Writes ``models/<run_id>/`` (zips, ``train.lock``, ``config.json``) and
+``runs/<run_id>/live_status.json``. Sacred early-stop floors live in ``ui_ops``
+overnight preset — do not lower them to ship features.
+"""
 
 from __future__ import annotations
 

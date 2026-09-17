@@ -1,5 +1,7 @@
 # AutoDRIVE F1TENTH RL — Implementation Plan
 
+**Start here for operators:** [`HANDOFF.md`](HANDOFF.md). This file is the longer roadmap — not the overnight runbook.
+
 Actionable plan derived from 12 personality reviews → `IDEAS_TRIMMED.md`. **Plan only — no code in this document.**
 
 Companion: [`IDEAS_TRIMMED.md`](IDEAS_TRIMMED.md) · contracts: [`contracts.md`](contracts.md) · backlog source: [`IDEAS_MEGA.md`](IDEAS_MEGA.md)
