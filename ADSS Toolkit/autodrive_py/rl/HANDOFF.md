@@ -28,7 +28,7 @@ Frozen interface: [`contracts.md`](contracts.md). Longer plan: [`PLAN.md`](PLAN.
 
 | Item | Why |
 | ---- | --- |
-| **`overnight_soak_20260917_082739`** | Protected overnight soak. **Never kill** without a deliberate Continue restart of the *same* `run_id`. |
+| **`overnight_soak_20260917_082739`** | Overnight soak **finished** (`early_stopped` @ ~1.35M ts, best map3 **180.6s**). Artifacts are the source of truth — do not delete. Continue same `run_id` only if you intend a new budget. |
 | Early-stop floors | `select_timeout` ≥ **220**, `race_eval_every` ≥ **50k**, warmup ≥ **2**, `min_timesteps` ≥ **100k**. Do not lower defaults to “ship faster.” |
 | Contracts **2.0.0** | Obs / action / λ=10 score. Refuse-load on mismatch. |
 | Holdout / validation maps | Never train on sealed holdouts or the pinned validation map without explicit allow + board. |
@@ -116,20 +116,19 @@ Refuses: any live `train.lock`, `overnight_soak_*` run_ids, holdout/validation m
 | Artifact | Path |
 | -------- | ---- |
 | Protected `run_id` | `overnight_soak_20260917_082739` |
-| Lock | `rl/models/overnight_soak_20260917_082739/train.lock` |
-| Status | `rl/runs/overnight_soak_20260917_082739/live_status.json` |
-| Log | `rl/logs/overnight_soak_20260917_082739.log` |
-| Operator pin | `rl/logs/CURRENT_RUN.txt` (often this run_id) |
-| Narrative | [`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md) § Protected training run |
-
-**Why not kill:** hours of resume-safe progress (`--resume`, same run_id). Killing without Continue loses the live process; wrong Start can dual-write or latch the UI onto a disposable smoke.
-
-Quick alive check (do not kill):
+| **Final status** | **`early_stopped`** @ **1,345,488** ts — best map3 train-eval **180.6s** adj / 0 collisions |
+| Models | `rl/models/overnight_soak_20260917_082739/` (`best_model.zip`, `latest_model.zip`, `checkpoints/`) |
+| Status trail | `rl/runs/overnight_soak_20260917_082739/live_status.json` |
+| Log | `rl/logs/overnight_continue_restore.log` (Continue session) |
+| Operator pin | `rl/logs/CURRENT_RUN.txt` (still points here; Focus pin only) |
+| Narrative | [`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md) § Protected training run — campaign **CLOSED** |
 
 ```powershell
 Get-Content "rl\runs\overnight_soak_20260917_082739\live_status.json"
-# expect phase learning|validating, rising timesteps
+# expect phase early_stopped, timesteps ~1345488
 ```
+
+To resume training on this run: Control UI **Focus** this run_id → **Continue** (new budget). Do not Start a second writer on the same folder.
 
 ---
 

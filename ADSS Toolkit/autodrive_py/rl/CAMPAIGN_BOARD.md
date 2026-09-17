@@ -1,13 +1,23 @@
 # CAMPAIGN_BOARD — Standing researcher ticks
 
-**Campaign:** 9h (start ~03:54 America/Chicago, 2026-09-17)  
-**Protected run:** `overnight_soak_20260917_082739` — DO NOT KILL without Continue  
+**Campaign:** 9h (start ~03:54 America/Chicago, 2026-09-17) — **CLOSED** ~14:48 Chicago (keepalive stopped at 12:54 deadline; tokens exhausted; human closeout)  
+**Protected run:** `overnight_soak_20260917_082739` — **DONE** (`early_stopped` @ 1,345,488 ts; best map3 **180.6s**)  
 **Sources of truth for MUST order:** `CAMPAIGN_CRITIQUE.md` + `ideas_review/campaign_racer.md` (+ minimalist KEEP / reliability vetoes)  
 **Companion brief:** `CAMPAIGN_RESEARCH.md` (COMPLETE)
 
 Append one entry per resume tick. Newest first.  
 **Soft inbox:** [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (Suggestion seat — not mandates)  
 **UI inbox:** [`CAMPAIGN_UI.md`](CAMPAIGN_UI.md) (UI seat — incremental Control/Watch chrome; not mandates)
+
+---
+
+## RESULTS — Human closeout — ~14:48 America/Chicago
+- **id:** `20260917-closeout`
+- **type:** campaign close / cleanup
+- **overnight:** **early_stopped** cleanly @ ts=1345488; `best_model.zip` map3 adj **180.6s** / 0 collisions; no live `train.lock`; stale `CURRENT_PID` + dead keepalive pid files removed; `CURRENT_RUN` pin kept on soak run_id
+- **SHIP:** commit `_pin_selftest.py`, leaderboard overnight row, HANDOFF/LOG/BOARD status updates; pycache scrub outside `.venv`
+- **Standing bots:** do not re-arm 10m keepalive unless a **new** campaign is started
+- **Open (not blocking close):** MUST #3 crashΔ DEFER (stall-heavy); official FTGΔ still +8.52s on older overnight-best eval — re-eval `best_model.zip` on official_v2 when ready
 
 ---
 

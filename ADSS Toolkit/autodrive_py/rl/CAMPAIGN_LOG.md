@@ -3,19 +3,17 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** Watch overlay honesty SHIP (20260917-meta-watch-honesty); MUST #4 FTGΔ DONE (Δ+8.52); MUST #3 crashΔ DEFER; overnight soak ALIVE — do not kill.
-**Human handoff:** friends start at [`HANDOFF.md`](HANDOFF.md) (runbook + sacred soak + multi-run).
+**Status:** **CLOSED** (2026-09-17 ~14:48 Chicago) — campaign keepalive stopped at deadline; overnight soak **early_stopped** cleanly.
+**Head note:** Overnight `overnight_soak_20260917_082739` finished @ **1,345,488** ts (`early_stopped`, patience=5). Best map3 train-eval **180.6s** adj / 0 collisions. MUST #4 FTGΔ official still **+8.52s** behind FTG (PPO 206.68 vs 198.16). MUST #3 crashΔ **DEFER**. W8 multi-run UI shipped.
+**Human handoff:** friends start at [`HANDOFF.md`](HANDOFF.md) (runbook + soak result + multi-run).
 
 ---
 
 ## Keep-alive loop (mandatory — ~04:00+ AGGRESSIVE)
 
-- **Sentinel:** `AGENT_LOOP_TICK_autodrive-rl-campaign` — **every 10 min (600s)**.
-- **Cadence change (~04:00):** 50m ticks were too slow / padded the 9h window. User mandate: ideas constantly worked; lots of well-implemented small features each tick. See [`campaign_tick.md`](campaign_tick.md).
-- **On EVERY tick:** parent MUST (1) resume Researcher + Racer/Minimalist/Reliability **in parallel** for NEXT proposal batch → `CAMPAIGN_BOARD.md`; (2) resume Orchestrator to ship **MULTIPLE** approved small features in parallel (spawn sibling implementers); protect overnight; (3) **`git status` + commit+push** any stable reviewed SHIP (tests green) — **after each wave**, continuously through the night, not once. Exclude pycache / logs / large zips / `.venv`. **Not orchestrator-only / not single-feature trickle.**
-- **Orchestrator standing order:** push after **each** wave/chunk lands; do not batch uncommitted SHIP piles until morning.
-- **Deadline:** after 12:54 America/Chicago 2026-09-17, STOP loop; do not re-arm.
-- Cursor-attached loops die ~60s; use detached [`campaign_keepalive.ps1`](campaign_keepalive.ps1) (PID in `logs/campaign_keepalive.pid`; ticks in `logs/campaign_loop_ticks.log`). Parent: read latest tick → run `campaign_tick.md`. Do not kill `train_ppo` when re-arming.
+- **Status:** **STOPPED** at deadline (~12:54 America/Chicago 2026-09-17). Do **not** re-arm unless starting a new campaign.
+- Historical: sentinel `AGENT_LOOP_TICK_autodrive-rl-campaign` was every 10 min; see [`campaign_tick.md`](campaign_tick.md).
+- Detached keepalive (`campaign_keepalive.ps1`) already exited; stale `cleanup_keepalive.pid` removed on closeout.
 
 ## Governance (mandatory — 03:57+)
 
@@ -46,11 +44,12 @@ MUST 1–5 gated by critique+racer+minimalist; reliability **P0 dual-writer/hear
 | Field | Value |
 | ----- | ----- |
 | **run_id** | `overnight_soak_20260917_082739` |
-| **Status** | ACTIVE — restored after selftest Stop; DO NOT KILL without Continue |
-| **live_status (~04:20 Chicago)** | timesteps≈**428k**↑, steps/s≈201, phase=`learning`, n_envs=8, vec=subproc |
-| **PIDs (lock / parent)** | **19244** / **53852** (Continue from `ppo_295480_steps.zip`) |
+| **Status** | **DONE** — `early_stopped` @ 2026-09-17T10:25:49Z (Chicago ~05:25). No live lock. |
+| **Final timesteps** | **1,345,488** (last ckpt `ppo_1345480_steps.zip`; 53 checkpoints on disk) |
+| **Best (map3 train-eval)** | **180.6s** adjusted_time, 0 collisions, progress≈0.99 (`best_model.zip`) |
+| **Resumed from** | `ppo_295480_steps.zip` (post-selftest Continue); sacred floors held |
 | **Sacred argv** | select=220, eval=50k, warmup=2, min_ts=100k, patience=5, unlimited |
-| **GPU** | ~20–40% util — evidence for **KILL GPU theater**, not a mandate |
+| **Next** | Optional Continue same `run_id` only if you want a new budget; else evaluate `best_model.zip` on official_v2 vs FTG |
 
 ---
 
