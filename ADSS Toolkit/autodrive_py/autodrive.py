@@ -131,6 +131,7 @@ class F1TENTH:
         # F1TENTH commands
         self.throttle_command   = None
         self.steering_command   = None
+        self.reset_command      = 0
     
     # Parse F1TENTH sensor data
     def parse_data(self, data, verbose=False):
@@ -175,6 +176,8 @@ class F1TENTH:
 
     # Generate F1TENTH control commands
     def generate_commands(self, verbose=False):
+        if self.reset_command is None:
+            self.reset_command = 0
         if verbose:
             print('\n-------------------------------')
             print('Transmit Data to F1TENTH: ' + self.id)
@@ -182,7 +185,12 @@ class F1TENTH:
             # Monitor F1TENTH control commands
             print('Throttle Command: {}'.format(self.throttle_command))
             print('Steering Command: {}'.format(self.steering_command))
-        return {str(self.id) + ' Throttle': str(self.throttle_command), str(self.id) + ' Steering': str(self.steering_command)}
+            print('Reset Command: {}'.format(self.reset_command))
+        return {
+            str(self.id) + ' Throttle': str(self.throttle_command),
+            str(self.id) + ' Steering': str(self.steering_command),
+            str(self.id) + ' Reset': str(self.reset_command),
+        }
 
 ################################################################################
 

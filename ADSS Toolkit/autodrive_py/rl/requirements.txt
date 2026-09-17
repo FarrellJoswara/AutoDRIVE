@@ -1,0 +1,20 @@
+# RL stack deps (Phases 2–6). Install into rl/.venv
+numpy>=1.24
+Pillow>=9.0
+PyYAML>=6.0
+# GUI build needed for `python -m rl.watch` (imshow). Headless cannot open a window.
+opencv-python>=4.8
+shapely>=2.0
+gymnasium>=0.29
+stable-baselines3>=2.3
+# Install CUDA torch separately for GPU (RTX):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.0
+tensorboard>=2.14
+# AutoDRIVE Bridge (Phase 5)
+eventlet==0.33.3
+Flask==1.1.1
+Flask-SocketIO==4.1.0
+python-socketio==4.2.0
+python-engineio==3.13.0
+greenlet>=1.1.0
