@@ -40,16 +40,54 @@ Append one entry per resume tick. Newest first.
 ---
 
 ## Meta-spawner coverage
-- **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI (SHIP’d) · bugfix (P0 + P1-2) · suggestion/UI bots · Tick0 MUST smokes
-- **Gaps found (~04:28):** MUST #3 crashΔ inconclusive · MUST #4 FTGΔ was in-flight (now DONE) · no secrets/onboarding/watch-honesty seats · A/B analyzer missing · anti-thrash (dual eval + overnight validating) · P1-1 CheckpointCallback atomic still open
+- **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI (SHIP’d) · bugfix (P0 + P1-2) · suggestion/UI bots · Tick0 MUST smokes · **secrets/onboarding** (`20260917-meta-secrets-onboard`)
+- **Gaps found (~04:28):** MUST #3 crashΔ inconclusive · MUST #4 FTGΔ was in-flight (now DONE) · ~~no secrets/onboarding~~ · watch-honesty seat · A/B analyzer missing (tool landed; crashΔ still null) · anti-thrash (dual eval + overnight validating) · P1-1 CheckpointCallback atomic still open
 - **Spawned:**
   - [Collision A/B analyzer] → `rl/_campaign_ab_report.py` (cp1252-safe) — all pairs inconclusive; see `20260917-meta-ab-report`
   - [FTGΔ collector] → **DONE** `20260917-meta-ftg-delta` — PPO official_v2 **206.68** vs FTG **198.16** → **Δ +8.52 s** (did not beat)
-  - [Secrets + friend-onboarding] → child in flight
+  - [Secrets + friend-onboarding] → **DONE** `20260917-meta-secrets-onboard` — secrets **CLEAN**; onboard **PARTIAL**; see entry below
   - [Watch overlay honesty] → child in flight
 - **Next spawn candidates:** preserve crash_rate across validating overwrite (coord bugfix) · P1-1 atomic ckpt · CURRENT_RUN pin selftest · Windows lock CreateTime (P2-1) · venv health · dead-code (after simplify) · auto_train pause-when-locks
-- **Anti-thrash:** pause new disposable trains while overnight validating; do not launch third official eval
+- **Anti-thrash:** **pause new disposable trains** while overnight still `validating`; do not launch third official eval; dual `control_ui` / leftover `eval_cli` thrash = observe-only (do not kill soak). Soft ≠ hard mandate.
 - **Overnight:** observe-only `overnight_soak_20260917_082739` @ ~545k validating (no_improve=2/5) PIDs **19244/53852**
+
+---
+
+## RESULTS — Secrets hygiene + friend onboard + anti-thrash — ~04:35 America/Chicago
+- **id:** `20260917-meta-secrets-onboard`
+- **type:** result / meta hygiene
+- **overnight:** observe-only — did **not** kill/morph `overnight_soak_20260917_082739` (PIDs **19244**/**53852** ALIVE; lock pid=19244; phase **`validating`** @ ~545k, eval_count=5, no_improve=2/5).
+
+### Job A — Secrets / credential hygiene → **CLEAN**
+- `git ls-files` under `rl/` (+ nearby filters): no `.venv`, `.env`, `*.pem`, credentials, or large checkpoint `*.pt`/`*.zip` tracked.
+- Content patterns (AWS/GitHub/OpenAI/Slack/JWT/Bearer/DB URLs/`BEGIN PRIVATE KEY`/hardcoded password assignments): **0 hits**.
+- Trivial overnight-safe harden: `rl/.gitignore` ignores `.env` / `.env.*` / `*.pem` / `id_rsa*` / `credentials.json`.
+- Helper: `python -m rl._secrets_scan` → CLEAN (path + pattern name only; never prints match text).
+
+### Job B — Friend-onboarding dry-run → **PARTIAL**
+Windows stranger checklist (docs dry-run; no new disposable train):
+
+| Step | Notes |
+| ---- | ----- |
+| venv + pip | README Quickstart OK (`py -3.13 -m venv rl/.venv`) |
+| cwd | Must be `ADSS Toolkit/autodrive_py` — easy miss from repo root |
+| `start_ui` / `start_train` | Use `.venv` python; set `PYTHONUTF8=1` (cp1252 help) |
+| Watch | Documented separate `--follow` process |
+| Overnight refuse | Strong in HANDOFF + `auto_train`; lighter in README Start |
+
+**Friction (≤5):** (1) README↔HANDOFF bounce (HANDOFF dirty mid-rewrite); (2) wrong cwd breaks `python -m rl.*`; (3) fresh clone needs `trackgen` if `maps/map0` missing; (4) overnight live → Start refuse / multi-run latch under-documented in README Start; (5) live dual UI/eval thrash confuses “which process is mine.”
+
+**Soft README one-liners (board only — prefer not editing README while HANDOFF dirty):**
+1. Always `cd` to `ADSS Toolkit/autodrive_py` before `python -m rl.*`.
+2. If overnight soak is live: prefer Watch/TB; pause disposable Start until soak leaves `validating` / FTGΔ work settles.
+3. First-time: `trackgen --num_maps 3` before `start_train` if `rl/maps/map0` missing.
+
+### Job C — Anti-thrash (observe)
+- Overnight **validating** — timesteps paused by design; not hung.
+- Observed dual `eval_cli --official` (exited after FTGΔ) + dual `control_ui :7860` + dual `ui_selftest`; no `watch` at snapshot.
+- **Recommend:** pause new disposable trains until overnight leaves `validating`. Soft ≠ kill mandate. Sacred soak untouched.
+
+**Artifacts:** `rl/_secrets_scan.py`, `rl/.gitignore` (env/pem lines), this board entry.
 
 ---
 
