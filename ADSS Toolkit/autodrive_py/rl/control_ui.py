@@ -46,6 +46,7 @@ from .ui_ops import (
     seal_verify_summary,
     start_guard,
     start_preview,
+    safe_run_id,
 )
 
 RL_DIR = Path(__file__).resolve().parent
@@ -642,6 +643,138 @@ def _preferred_operator_run_id() -> str | None:
     return text or None
 
 
+def _set_operator_run_pin(run_id: str) -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    (LOGS_DIR / "CURRENT_RUN.txt").write_text(str(run_id).strip() + "\n", encoding="utf-8")
+
+
+def _list_live_runs(*, selected_run: str | None = None) -> list[dict]:
+    """Compact multi-train inventory for the Control status box (W8)."""
+    preferred = _preferred_operator_run_id()
+    with _state_lock:
+        bound = _train_run_id
+        ui_pid = (
+            _train_proc.pid
+            if _train_proc is not None and _train_proc.poll() is None
+            else None
+        )
+    rows: list[dict] = []
+    for hit in find_live_run_locks(MODELS_DIR):
+        rid = str(hit.get("run_id") or "")
+        if not rid:
+            continue
+        live = read_live_status(RUNS_DIR / rid / "live_status.json") or {}
+        pid = hit.get("pid")
+        overnight = rid == PROTECTED_OVERNIGHT_RUN or rid.startswith("overnight_soak_")
+        if selected_run is not None:
+            selected = rid == selected_run
+        else:
+            selected = bool(
+                (preferred and rid == preferred) or (bound and rid == bound)
+            )
+        rows.append(
+            {
+                "run_id": rid,
+                "pid": pid,
+                "timesteps": live.get("timesteps"),
+                "phase": live.get("phase") or "?",
+                "steps_per_sec": live.get("steps_per_sec"),
+                "overnight": overnight,
+                "protected": overnight,
+                "selected": selected,
+                "focused": selected,
+                "ui_owned": ui_pid is not None and pid == ui_pid,
+            }
+        )
+    rows.sort(
+        key=lambda r: (
+            0 if r.get("overnight") else 1,
+            0 if r.get("selected") else 1,
+            -(int(r["timesteps"]) if isinstance(r.get("timesteps"), (int, float)) else -1),
+        )
+    )
+    return rows
+
+
+def _resolve_selected_run(
+    *,
+    ui_owned_run: str | None,
+    ui_alive: bool,
+    live_rows: list[dict],
+) -> str | None:
+    """Banner / Watch / Stop bind to one selected run_id (W8-02).
+
+    Order: UI-owned alive → CURRENT_RUN pin if still live → highest live
+    timesteps (overnight >> short A/B smokes) → UI-owned / pin trail → None.
+    Never silently flips away from a still-live selected/pinned run.
+    """
+    live_ids = {str(r["run_id"]) for r in live_rows}
+    preferred = _preferred_operator_run_id()
+
+    if ui_alive and ui_owned_run:
+        return ui_owned_run
+    if preferred and preferred in live_ids:
+        return preferred
+    if ui_owned_run and ui_owned_run in live_ids:
+        return ui_owned_run
+    if live_rows:
+        best = max(
+            live_rows,
+            key=lambda r: (
+                int(r["timesteps"])
+                if isinstance(r.get("timesteps"), (int, float))
+                else -1
+            ),
+        )
+        return str(best["run_id"])
+    if ui_owned_run:
+        return ui_owned_run
+    return preferred
+
+
+def _start_lock_warn(live_rows: list[dict] | None = None) -> str | None:
+    """Visible cue when Start will refuse because N live locks exist (W8-04)."""
+    rows = live_rows if live_rows is not None else _list_live_runs()
+    if not rows:
+        return None
+    ids = ", ".join(str(r["run_id"]) for r in rows[:6])
+    extra = f" (+{len(rows) - 6} more)" if len(rows) > 6 else ""
+    return (
+        f"{len(rows)} train(s) locked ({ids}{extra}) — Start refused until Stop. "
+        "Multi-train is supported via separate CLI/UI ownership, not dual-Start from this panel."
+    )
+
+
+def _focus_run(run_id: str) -> str:
+    """Pin status / ranking to a live (or known) run_id without Start/Stop/kill."""
+    global _train_run_id, _train_log
+    rid = str(run_id or "").strip()
+    if not safe_run_id(rid):
+        return _set_msg(f"Refuse focus: bad run_id {run_id!r}")
+    model_dir = MODELS_DIR / rid
+    if not model_dir.is_dir() and not (RUNS_DIR / rid).is_dir():
+        return _set_msg(f"Refuse focus: no models/runs dir for {rid}")
+    _set_operator_run_pin(rid)
+    with _state_lock:
+        _train_run_id = rid
+        cand = LOGS_DIR / f"{rid}.log"
+        _train_log = cand if cand.is_file() else _train_log
+    _invalidate_ext_train_cache()
+    owner = lock_owner(MODELS_DIR, rid)
+    alive = bool(owner and owner.get("alive"))
+    note = f"Focused → {rid}"
+    if rid == PROTECTED_OVERNIGHT_RUN:
+        note += " (protected overnight — Stop sweep never kills this run_id)"
+    elif alive:
+        note += (
+            f" (live pid={owner.get('pid')}; banner/Watch/Continue pin only — "
+            "Stop still skips protected overnight)"
+        )
+    else:
+        note += " (not live — status may show last trail; Start still refuses other live locks)"
+    return _set_msg(note)
+
+
 def _live_timesteps_for_run(run_id: str | None) -> int:
     if not run_id:
         return -1
@@ -846,19 +979,28 @@ def _train_busy(*, force: bool = True) -> str | None:
                 cand = LOGS_DIR / f"{run_guess}.log"
                 if cand.is_file():
                     _train_log = cand
+        live_locks = find_live_run_locks(MODELS_DIR)
+        multi = ""
+        if len(live_locks) > 1:
+            ids = ", ".join(str(h.get("run_id")) for h in live_locks[:8])
+            multi = f" ({len(live_locks)} live locks: {ids})"
         return (
             f"Training already running outside this UI: pid={pid}"
             + (f" run_id={run_guess}" if run_guess else "")
-            + ". Status should show RUNNING - use Stop first to restart."
+            + multi
+            + ". Status should show RUNNING - use Stop first to restart "
+            "(or Focus a run in Live runs - dual-Start from this panel stays refused)."
         )
 
     # PID scan can false-negative; a live train.lock is still ownership proof.
     live_locks = find_live_run_locks(MODELS_DIR)
     if live_locks:
+        ids = ", ".join(str(h.get("run_id")) for h in live_locks[:8])
         hit = live_locks[0]
         return (
-            f"Training lock held: {hit.get('run_id')} (pid={hit.get('pid')}). "
-            "Status should show RUNNING - use Stop first to restart."
+            f"Training lock held: {len(live_locks)} live — {ids} "
+            f"(showing {hit.get('run_id')} pid={hit.get('pid')}). "
+            "Start refused while any lock is live; Focus selects status/Continue pin only."
         )
     return None
 
@@ -1459,7 +1601,7 @@ def _status_payload() -> dict:
 
     with _state_lock:
         proc = _train_proc
-        run_id = _train_run_id
+        ui_run_id = _train_run_id
         log = str(_train_log) if _train_log else None
         msg = _last_msg
         ui_n_envs = _train_n_envs
@@ -1474,24 +1616,37 @@ def _status_payload() -> dict:
         with _state_lock:
             _last_exit_code = exit_code
 
-    train_alive = bool(proc is not None and proc.poll() is None)
-    train_pid = proc.pid if proc and train_alive else None
-    # UI may have been restarted while train_ppo kept going — still report RUNNING.
-    # Always sync run_id to the preferred external train (highest timesteps /
-    # CURRENT_RUN pin) so a short A/B smoke cannot stick the banner on ~6k.
-    if not train_alive:
+    ui_alive = bool(proc is not None and proc.poll() is None)
+    train_pid = proc.pid if proc and ui_alive else None
+    train_alive = ui_alive
+    # External train_ppo still counts as RUNNING, but selection uses CURRENT_RUN /
+    # max timesteps — do not latch onto a short A/B smoke via process order.
+    if not ui_alive:
         ext = _find_external_train()
         if ext is not None:
             train_alive = True
-            train_pid, run_guess = ext
-            if run_guess:
-                run_id = run_guess
-                with _state_lock:
-                    _train_run_id = run_guess
-                    cand = LOGS_DIR / f"{run_guess}.log"
-                    if cand.is_file():
-                        _train_log = cand
-                        log = str(cand)
+            train_pid, _ext_guess = ext
+
+    inventory = _list_live_runs(selected_run="")
+    selected = _resolve_selected_run(
+        ui_owned_run=ui_run_id,
+        ui_alive=ui_alive,
+        live_rows=inventory,
+    )
+    run_id = selected
+    if selected and not ui_alive:
+        with _state_lock:
+            if _train_run_id != selected:
+                _train_run_id = selected
+            cand = LOGS_DIR / f"{selected}.log"
+            if cand.is_file():
+                _train_log = cand
+                log = str(cand)
+        # Prefer selected lock's pid when external.
+        for row in inventory:
+            if row.get("run_id") == selected and row.get("pid") is not None:
+                train_pid = row.get("pid")
+                break
 
     tb_ui = bool(tb is not None and tb.poll() is None)
     tb_port = _port_in_use(TB_HOST, TB_PORT)
@@ -1560,12 +1715,27 @@ def _status_payload() -> dict:
 
     coach = coach_hints(live or None, watch_opened=watch_opened, n_envs=int(n_envs_live or 1))
 
+    live_runs = _list_live_runs(selected_run=selected or "")
+    bound = selected or run_id or live.get("run_id")
+    start_warn = _start_lock_warn(live_runs)
+    bound_note = (
+        f"targets: {bound or '—'} (banner/status). "
+        "Continue = Models row run_id. Stop = non-protected train_ppo "
+        f"(never {PROTECTED_OVERNIGHT_RUN}). Watch --follow = map + n_envs."
+    )
+
     return {
         "contracts_version": CONTRACTS_VERSION,
         "obs_dim": obs_dim(N_LIDAR_DEFAULT),
         "train_alive": train_alive,
         "train_pid": train_pid,
-        "run_id": run_id or live.get("run_id"),
+        "run_id": bound,
+        "selected_run": bound,
+        "bound_run_id": bound,
+        "bound_note": bound_note,
+        "live_runs": live_runs,
+        "live_run_count": len(live_runs),
+        "start_lock_warn": start_warn,
         "log_path": log,
         "status_path": status_path,
         "timesteps": timesteps,
@@ -1653,11 +1823,22 @@ def _preview_payload(
     )
     preview["fast_probe"] = bool(fast_probe)
     preview["busy_reason"] = _train_busy(force=False)
+    live_locks = find_live_run_locks(MODELS_DIR)
+    preview["live_run_count"] = len(live_locks)
+    if live_locks:
+        ids = ", ".join(str(h.get("run_id")) for h in live_locks[:6])
+        preview["live_lock_warn"] = (
+            f"{len(live_locks)} live train.lock(s): {ids}. "
+            "Start refused from this panel while any lock is live "
+            "(Focus pin only selects status ranking - dual-Start stays refused)."
+        )
+    else:
+        preview["live_lock_warn"] = None
     return preview
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w7-ui-bot-20260917"
+UI_BUILD = "w8-multi-run-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1709,6 +1890,13 @@ details.glossary summary::-webkit-details-marker{display:none}
 details.glossary summary::before{content:"? ";color:#8cf}
 .glossary dl{margin:8px 0 4px 0;display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:4px 12px;font-size:12px}
 .glossary dt{color:#9cf;margin:0} .glossary dd{margin:0;color:#bbb}
+#live_runs{margin:8px 0 4px 0;padding:0;list-style:none;font-size:12px;max-height:160px;overflow:auto;border:1px solid #333;background:#141414}
+#live_runs li{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid #2a2a2a}
+#live_runs li:last-child{border-bottom:none}
+#live_runs li.selected{background:#1a2430;border-left:3px solid #48c}
+#live_runs li .badge{color:#fc8;font-size:11px}
+#live_runs li button{padding:2px 8px;margin:0;font-size:11px}
+#bound_targets{color:#9cf;font-size:12px;margin:6px 0 2px 0}
 </style></head><body>
 <h1>AutoDRIVE RL — control</h1>
 <p class="hint">ui build: <b id="ui_build">__UI_BUILD__</b> · hard-refresh (Ctrl+F5) if this looks stale</p>
@@ -1765,6 +1953,9 @@ details.glossary summary::before{content:"? ";color:#8cf}
   <div id="banner" class="state-Idle" title="Idle / Learning / Validating (= scheduled race eval — not hung) / EarlyStop / Stopping / Crashed. Mid-train Validating ≠ official 400s×5.">Idle</div>
   <div id="banner_reason" title="When Validating: scheduled race eval — not hung. Official protocol stays 400s / 5 seeds — do not densify overnight.">no trainer</div>
   <div class="sec" style="margin-top:8px">Live train status <span class="small">(from live_status.json — auto-refresh 0.75s)</span></div>
+  <div id="bound_targets">bound: —</div>
+  <div class="small" style="margin:4px 0">Live runs (Focus = CURRENT_RUN pin for status ranking; does not Start/Stop/kill)</div>
+  <ul id="live_runs"><li class="small">no live train.lock</li></ul>
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
   <div>run_id: <b id="rid">-</b></div>
@@ -1907,10 +2098,12 @@ details.glossary summary::before{content:"? ";color:#8cf}
   </div>
 
   <div class="row">
-    <button id="train_toggle" class="stopped" type="button" onclick="toggleTrain()">Start training</button>
-    <button type="button" onclick="act('watch')" title="Opens lag-behind Watch (--follow --every 8 --compact). Separate process; KPIs unofficial.">Open watch --follow</button>
+    <button id="train_toggle" class="stopped" type="button" onclick="toggleTrain()"
+            title="Start refused while any train.lock is live. Stop sweeps non-protected train_ppo only (overnight soak protected).">Start training</button>
+    <button type="button" onclick="act('watch')" title="Opens lag-behind Watch (--follow --every 8 --compact). Uses map + n_envs from this panel; KPIs unofficial.">Open watch --follow</button>
     <button type="button" onclick="act('stop_watch')">Stop Watch</button>
   </div>
+  <p class="hint" id="op_targets">ops target: status/Focus pin above · Continue = Models row · Stop = non-protected trains (overnight never)</p>
   <div class="row" style="opacity:0.55">
     <button id="auto_train_btn" type="button" disabled title="EXPERIMENTAL preview only — CLI scaffold exists (python -m rl.auto_train). UI spawn deferred until chaos drills. Never starts beside overnight soak.">Auto-train (EXPERIMENTAL)</button>
     <label for="auto_train_enable" title="Opt-in preview only. Does not enable unattended overnight chaining.">Enable preview</label>
@@ -2108,6 +2301,9 @@ async function refreshPreview(){
     if (p.holdout_warn && !allow) lines.push('REFUSED   : not train-safe — tick "allow sealed / pinned map" to override');
     else if (p.holdout_warn) lines.push('WARNING   : this map is sealed or pinned; official claims on it are void');
     if (p.busy_reason) lines.push('BLOCKED   : ' + p.busy_reason);
+    else if (p.live_lock_warn) lines.push('WARN      : ' + p.live_lock_warn);
+    if (p.live_run_count != null && p.live_run_count > 0)
+      lines.push('live_locks: ' + p.live_run_count);
     el.textContent = lines.join('\\n');
     el.style.color = (p.busy_reason || p.budget_error || (p.holdout_warn && !allow)) ? '#f88' : '#bdb';
   } catch (e) { /* transient */ }
@@ -2133,6 +2329,7 @@ async function loadModels(){
     }
     if (!j.runs || !j.runs.length) { host.textContent = 'no models under rl/models/'; return; }
     window.__runsCache = j.runs;
+    const bound = window.__boundRunId || null;
     let html = '<table><tr><th>run_id</th><th>artifacts</th><th>timeline</th><th>contracts</th><th>actions</th></tr>';
     j.runs.forEach(run => {
       const rid = esc(run.run_id);
@@ -2142,11 +2339,12 @@ async function loadModels(){
       if (run.checkpoint) arts.push('ckpt(' + esc(run.checkpoint.split(/[\\\\/]/).pop()) + ')');
       const state = run.active ? ' <span class="ok">[training]</span>'
         : (run.locked_by ? ' <span class="warn">[locked pid=' + esc(run.locked_by) + ']</span>' : '');
+      const focusMark = (bound && run.run_id === bound) ? ' <span class="small">[focused]</span>' : '';
       const tl = (run.timeline || []).slice(0, 4).map(e => {
         const when = e.modified ? String(e.modified).replace('T', ' ').slice(0, 16) : '?';
         return esc(e.kind) + ' ' + esc(e.size_mb) + 'MB @ ' + esc(when);
       }).join('<br>') || '<span class="small">—</span>';
-      html += '<tr><td>' + rid + state + '</td><td>' + (arts.join(', ') || '<span class="bad">empty</span>') +
+      html += '<tr' + (bound && run.run_id === bound ? ' style="background:#1a2430"' : '') + '><td>' + rid + state + focusMark + '</td><td>' + (arts.join(', ') || '<span class="bad">empty</span>') +
         '</td><td class="small">' + tl + '</td><td>' + esc(run.contracts_version || '?') + '</td><td>' +
         (run.has_best ? '<button type="button" onclick="loadModel(\\'' + rid + '\\',\\'best\\')">Load best</button>' : '') +
         (run.has_latest ? '<button type="button" onclick="loadModel(\\'' + rid + '\\',\\'latest\\')">Load latest</button>' : '') +
@@ -2184,6 +2382,31 @@ function genMaps(){
     seed: document.getElementById('gen_seed').value
   }).then(refreshPreview);
 }
+function renderLiveRuns(rows, boundId){
+  const el = document.getElementById('live_runs');
+  if (!el) return;
+  const list = rows || [];
+  if (!list.length) {
+    el.innerHTML = '<li class="small">no live train.lock</li>';
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const rid = r.run_id || '?';
+    const sel = r.selected || r.focused || rid === boundId;
+    const badge = r.overnight || r.protected ? ' <span class="badge">[overnight]</span>' : '';
+    const ts = r.timesteps != null ? r.timesteps : '-';
+    const sps = r.steps_per_sec != null ? Number(r.steps_per_sec).toFixed(0) : '-';
+    return '<li class="' + (sel ? 'selected' : '') + '">'
+      + '<span><b>' + esc(rid) + '</b>' + badge + '</span>'
+      + '<span class="small">pid=' + esc(r.pid) + ' · ' + esc(r.phase) + ' · ts=' + esc(ts) + ' · /s=' + esc(sps) + '</span>'
+      + (sel ? '<span class="small">focused</span>'
+           : '<button type="button" onclick="focusRun(\'' + esc(rid).replace(/'/g, '') + '\')">Focus</button>')
+      + '</li>';
+  }).join('');
+}
+function focusRun(runId){
+  act('focus_run', {run_id: runId}).then(refresh);
+}
 async function refresh(){
   try {
     const r = await fetch('/api/status');
@@ -2197,6 +2420,22 @@ async function refresh(){
     setTrainToggle(j.train_alive);
     document.getElementById('pid').textContent = j.train_pid || '-';
     document.getElementById('rid').textContent = j.run_id || '-';
+    window.__liveRunCount = j.live_run_count != null ? j.live_run_count : ((j.live_runs || []).length);
+    window.__startLockWarn = j.start_lock_warn || null;
+    window.__boundRunId = j.bound_run_id || j.run_id || null;
+    const boundEl = document.getElementById('bound_targets');
+    if (boundEl) {
+      const n = window.__liveRunCount;
+      boundEl.textContent = (j.bound_note || ('bound: ' + (j.bound_run_id || j.run_id || '—')))
+        + (n ? (' · live_locks=' + n) : '');
+    }
+    const opT = document.getElementById('op_targets');
+    if (opT) {
+      opT.textContent = 'ops: status/Stop/Watch→' + (j.bound_run_id || j.run_id || '—')
+        + ' · Continue=Models row · Stop=non-protected (overnight never)';
+    }
+    renderLiveRuns(j.live_runs || [], j.bound_run_id || j.run_id);
+    window.__startLockWarn = j.start_lock_warn || null;
     document.getElementById('ts').textContent = j.timesteps != null ? j.timesteps : '-';
     document.getElementById('rew').textContent = j.ep_rew_mean != null ? Number(j.ep_rew_mean).toFixed(3) : '-';
     document.getElementById('ne').textContent = j.n_envs != null ? j.n_envs : '-';
@@ -2282,7 +2521,26 @@ async function openTensorBoard(ev){
   return false;
 }
 function toggleTrain(){
-  act(trainAlive ? 'stop' : 'start');
+  if (trainAlive) {
+    const rid = document.getElementById('rid').textContent || '?';
+    const pid = document.getElementById('pid').textContent || '?';
+    if (!confirm(
+      'Stop training targeting selected run_id=' + rid + ' pid=' + pid + '?\\n\\n' +
+      'Stop sweeps non-protected train_ppo only — protected overnight is never killed.'
+    )) return;
+    act('stop');
+    return;
+  }
+  const n = window.__liveRunCount || 0;
+  const warn = window.__startLockWarn;
+  if (n >= 1 || warn) {
+    if (!confirm(
+      (warn || (n + ' live train.lock(s) already present')) + '\\n\\n' +
+      'Start from this panel is refused while any lock is live ' +
+      '(multi-train = separate CLI/UI ownership, not dual-Start). Continue to see refuse?'
+    )) return;
+  }
+  act('start');
 }
 async function act(op, extra){
   const msgEl = document.getElementById('msg');
@@ -2292,6 +2550,7 @@ async function act(op, extra){
   else if (op === 'stop') msgEl.textContent = 'Stopping…';
   else if (op === 'watch') msgEl.textContent = 'Launching watch…';
   else if (op === 'stop_watch') msgEl.textContent = 'Stopping watch…';
+  else if (op === 'focus_run') msgEl.textContent = 'Focusing run (status pin)…';
   else if (op === 'load_model') msgEl.textContent = 'Loading model into watch…';
   else if (op === 'delete_model') msgEl.textContent = 'Deleting…';
   else if (op === 'gen_maps') msgEl.textContent = 'Generating maps… (a few seconds)';
@@ -2570,6 +2829,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif op == "stop":
             msg = _stop_all()
+        elif op == "focus_run":
+            msg = _focus_run(run_id)
         elif op == "watch":
             msg = _launch_watch(map_id, n_envs)
         elif op == "stop_watch":

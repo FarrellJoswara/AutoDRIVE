@@ -45,7 +45,7 @@
 **wave-id:** `20260917-W8-ui-multi-run`  
 **board:** `20260917-W8-multi-run-ui`  
 **count:** 4 incremental + DEFER fancy + SKIP kill-multi · all **soft**  
-**Implement this tick?** **No** — outside allowlist (new controls / JS). Design + board mini-gate SHIP’d; code on next free UI tick.
+**Implement this tick?** **Yes** — W8-01…04 code SHIP’d (`UI_BUILD=w8-multi-run-20260917`).
 
 ### Design intent (keep multi-train)
 
@@ -63,9 +63,9 @@ Operators already run **several concurrent trains** and see multiple live locks.
   - Thin `<ul id="live_runs">` under Live train status (same-DOM; no Gradio). Overnight badge when `run_id` matches `overnight_soak_*` (or protected id).
   - Click row = select run (sets client + optional query/`selected_run` for status).
 - **risks / refuse:** Read-only list only; no auto-Stop; no kill-tree; Stop path stays mocked in selftest while soak live.
-- **triage:** SHIP design · implement next UI tick
+- **triage:** SHIP
 - **board:** `20260917-W8-multi-run-ui`
-- **shipped:** —
+- **shipped:** DONE `w8-multi-run-20260917`
 
 #### U-20260917-W8-02 — Banner bound to selected run
 - **soft:** yes
@@ -77,9 +77,9 @@ Operators already run **several concurrent trains** and see multiple live locks.
   - Default select: UI-owned `_train_run_id` if alive → else overnight/protected if among live locks → else first live lock → else latest status.
   - Never silently flip selection mid-poll unless selected run dies.
 - **risks / refuse:** No sacred retune; keep honesty / Validating gloss.
-- **triage:** SHIP design · couple to W8-01
+- **triage:** SHIP
 - **board:** `20260917-W8-multi-run-ui`
-- **shipped:** —
+- **shipped:** DONE `w8-multi-run-20260917` (with W8-01)
 
 #### U-20260917-W8-03 — Watch / Continue / Stop target clarity
 - **soft:** yes
@@ -91,9 +91,9 @@ Operators already run **several concurrent trains** and see multiple live locks.
   - Continue from Models table already names `run_id` — keep; optional highlight when that row is selected.
   - Stop confirm (if any) must echo selected run_id + pid.
 - **risks / refuse:** Do not broaden Stop to “kill all locks”; Stop remains selected/UI-owned tree only.
-- **triage:** SHIP design · couple to W8-01
+- **triage:** SHIP
 - **board:** `20260917-W8-multi-run-ui`
-- **shipped:** —
+- **shipped:** DONE `w8-multi-run-20260917` (with W8-01)
 
 #### U-20260917-W8-04 — Warn before Start when N locks live
 - **soft:** yes
@@ -104,9 +104,9 @@ Operators already run **several concurrent trains** and see multiple live locks.
   - Preview / Start path: if `len(live_locks) >= 1`, show warn listing run_ids (“N trains locked — Start refused until Stop; multi-train is supported via separate CLI/UI ownership, not dual-Start from this panel”).
   - Do **not** change refuse semantics this wave (still refuse dual-Start from Control while any lock live) unless a later board explicitly SHIPs true multi-Start from one UI.
 - **risks / refuse:** Warn ≠ enable dual-writer; never `_kill_train_tree` to “make room.”
-- **triage:** SHIP design · couple to W8-01
+- **triage:** SHIP
 - **board:** `20260917-W8-multi-run-ui`
-- **shipped:** —
+- **shipped:** DONE `w8-multi-run-20260917` (with W8-01)
 
 #### U-20260917-W8-05 — Fancy multi-run dashboard
 - **soft:** yes

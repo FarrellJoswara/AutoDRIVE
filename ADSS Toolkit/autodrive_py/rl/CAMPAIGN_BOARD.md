@@ -39,6 +39,21 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — W8 multi-run live list + Focus — 2026-09-17 ~04:27 America/Chicago
+- **id:** `20260917-W8-multi-run-ui-ship`
+- **type:** result
+- **amends:** `20260917-W8-multi-run-ui`
+- **overnight:** observe-only — Focus/selftest did not kill `overnight_soak_20260917_082739` (~478k+ learning).
+- **U-01 Live-runs list:** **DONE** — `/api/status` `live_runs` + `<ul id="live_runs">` + overnight badge + Focus.
+- **U-02 Banner bound:** **DONE** — `bound_run_id` / `bound_note`; CURRENT_RUN pin via Focus; ranking still prefers pin → max timesteps.
+- **U-03 Op targets:** **DONE** — `#bound_targets` + `#op_targets` clarify status/Continue/Stop/Watch.
+- **U-04 Start warn:** **DONE** — preview `live_lock_warn` + multi-lock busy_reason; dual-Start still refused.
+- **DEFER/SKIP untouched:** fancy dashboard DEFER; kill-multi SKIP.
+- **UI_BUILD:** `w8-multi-run-20260917`
+- **Tests:** `.venv` `python -m rl.ui_selftest` → all checks passed (Stop mocked).
+
+---
+
 ## W8 — Multi-run Control UI (soft) — ~04:22 America/Chicago
 - **id:** `20260917-W8-multi-run-ui`
 - **type:** tick / wave (user soft suggestion)

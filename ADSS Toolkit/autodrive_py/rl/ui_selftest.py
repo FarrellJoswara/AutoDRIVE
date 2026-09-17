@@ -595,13 +595,22 @@ def test_http_surface() -> None:
             "index build stamp bumped",
             'id="ui_build"' in html
             and (
-                "w7-ui-bot" in html
+                "w8-multi-run" in html
+                or "w7-ui-bot" in html
                 or "w6-sug-wave1" in html
                 or "w4-auto-train" in html
                 or "w3-ux-soft" in html
                 or "20260917" in html
             ),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
+        )
+        check(
+            "index has live-runs list (W8)",
+            'id="live_runs"' in html and "Focus" in html and "bound_targets" in html,
+        )
+        check(
+            "index has Start/Stop target clarity (W8)",
+            'id="op_targets"' in html and "toggleTrain" in html and "__startLockWarn" in html,
         )
         check(
             "index has glossary drawer",
@@ -628,10 +637,27 @@ def test_http_surface() -> None:
             and 'id="banner_reason"' in html
             and "#banner.state-" in html,
         )
+        check(
+            "index has live_runs multi-train list",
+            'id="live_runs"' in html
+            and 'id="bound_targets"' in html
+            and "focus_run" in html
+            and "w8-multi-run" in html,
+        )
 
         st = _http(base, "/api/status")
         for key in ("banner", "coach", "presets", "steps_per_sec", "crash_rate_estimate", "vec_env_active"):
             check(f"status exposes {key}", key in st)
+        check("status exposes live_runs list", isinstance(st.get("live_runs"), list), str(type(st.get("live_runs"))))
+        check("status exposes bound_run_id", "bound_run_id" in st)
+        check(
+            "status live_runs rows shaped",
+            all(
+                isinstance(r, dict) and "run_id" in r and "phase" in r
+                for r in (st.get("live_runs") or [])
+            ),
+            f"n={len(st.get('live_runs') or [])}",
+        )
         check("status banner has a state", bool(st["banner"].get("state")), str(st["banner"]))
         check("status maps carry seal labels", any(m.get("sealed") for m in st["maps"]),
               f"labels={[m.get('label') for m in st['maps']]}")
@@ -767,6 +793,18 @@ def test_http_surface() -> None:
 
             r = _http(base, "/api/action", {"op": "gen_maps", "count": "0", "seed": "1"})
             check("Generate refuses bad count", "Generate refused" in r["msg"], r["msg"])
+
+            r = _http(base, "/api/action", {"op": "focus_run", "run_id": "../evil"})
+            check("Focus refuses traversal", "Refuse focus" in r["msg"], r["msg"])
+
+            r = _http(base, "/api/action", {"op": "focus_run", "run_id": "overnight_soak_20260917_082739"})
+            check(
+                "Focus overnight pins without kill",
+                ("Selected" in r["msg"] or "Focused" in r["msg"]) and "overnight" in r["msg"].lower(),
+                r["msg"],
+            )
+            pin = (cui.LOGS_DIR / "CURRENT_RUN.txt").read_text(encoding="utf-8").strip()
+            check("Focus wrote CURRENT_RUN pin", pin == "overnight_soak_20260917_082739", pin)
 
             r = _http(base, "/api/action", {"op": "stop"})
             check(
