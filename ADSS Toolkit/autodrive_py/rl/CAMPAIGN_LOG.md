@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** `83fa8a1` Watch/glossary on remote; overnight Continue live (~376k @ 04:15); this push = campaign W5/W6 + lock/atomic/map-strict + thin auto_train.
+**Head note:** W7 UI allowlist + B0.1 strict map refuse; overnight Continue live (~428k @ 04:20); prior `83fa8a1` Watch/glossary on remote.
 
 ---
 
@@ -45,7 +45,7 @@ MUST 1–5 gated by critique+racer+minimalist; reliability **P0 dual-writer/hear
 | ----- | ----- |
 | **run_id** | `overnight_soak_20260917_082739` |
 | **Status** | ACTIVE — restored after selftest Stop; DO NOT KILL without Continue |
-| **live_status (~04:15 Chicago)** | timesteps≈**376k**↑, steps/s≈199, phase=`learning`, n_envs=8, vec=subproc; mid-val pauses honest (`validating` @ ~345k then resumed) |
+| **live_status (~04:20 Chicago)** | timesteps≈**428k**↑, steps/s≈201, phase=`learning`, n_envs=8, vec=subproc |
 | **PIDs (lock / parent)** | **19244** / **53852** (Continue from `ppo_295480_steps.zip`) |
 | **Sacred argv** | select=220, eval=50k, warmup=2, min_ts=100k, patience=5, unlimited |
 | **GPU** | ~20–40% util — evidence for **KILL GPU theater**, not a mandate |
@@ -149,6 +149,14 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Shipped / Tests
 
+### ~04:20 — W7 UI bot allowlist + B0.1 wrong-map refuse
+- **Board:** `20260917-W7-ui-bot` behind MUST/bugfix P0.
+- **B0.1 SHIP:** `resolve_map_yaml(strict=True)` + `assert_resolved_map_id` on train_ppo / eval_cli / eval_protocol / run_ftg / progress_probe; Watch soft fallback kept; `assert_train_safe` missing-yaml refuse.
+- **B0.2 already SHIP:** `acquire_run_lock` O_EXCL (prior tick).
+- **UI allowlist:** banner state tint + left accent; `.sec` headers + spacing; `UI_BUILD=w7-ui-bot-20260917`; glossary U-03 verified present.
+- **Tests:** `.venv` `python -m rl._bugfix_p0_checks` → **16/16 PASS**; overnight observe-only.
+- **Overnight (~04:20):** `overnight_soak_20260917_082739` ALIVE ≈**428k** learning, sps≈201, n_envs=8 subproc; PIDs 19244/53852 untouched.
+
 ### ~04:18 — “Reset to ~6k” false alarm (UI multi-train latch)
 - **Not a resume/SB3 bug.** Protected overnight `overnight_soak_20260917_082739` still live: Continue from `ppo_295480_steps.zip`, `reset_num_timesteps=False`, live_status **~395k** `phase=validating` (map3), ckpts through `ppo_395480_steps.zip`. Learning **not** lost.
 - **Cause:** campaign short A/B smokes (`cf_ab50k_*` ~12–16k, earlier `tick0_ab_*` ~5.6k) running beside overnight. `_find_external_train` picked first leaf `train_ppo` (process order) → UI banner showed ~6k as if soak reset; `_train_busy` then stuck `_train_run_id` on that smoke.
@@ -158,7 +166,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ### ~04:20 — W6 Wave 1 thin SHIP (Suggestion bot)
 - **Board:** `20260917-W6-sug-wave1-ship` amends `20260917-W6-suggestion-bot`.
 - **S-01–05:** DONE as docs/tooltips/glossary/compact strip polish; S-03 product checklist still DEFER; no overnight touch; no reward mutation; no bridge code.
-- **Code:** `watch` compact honesty strip (phase|crash%); Control glossary + `#bridge_card`; Validating banner gloss; README bridge note; `UI_BUILD=w6-sug-wave1-20260917`.
+- **Code:** `watch` compact honesty strip (phase|crash%); Control glossary + `#bridge_card`; Validating banner gloss; README bridge note; `UI_BUILD=w7-ui-bot-20260917` (W6 copy + parallel UI seat stamp).
 - **Tests:** `.venv` `test_watch_overlay` + `ui_selftest` (Stop mocked).
 
 ### ~04:15 — Overnight confirm: still learning after selftest Stop incident

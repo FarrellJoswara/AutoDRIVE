@@ -21,7 +21,7 @@ Append one entry per resume tick. Newest first.
 - **S-03 Map checklist:** product UI still **DEFER**; glossary `train_ok` checklist bullets **DONE**.
 - **S-04 Eval wall-clock honesty:** **DONE** copy only (400s×5 / do-not-densify tooltips + hint); **SKIP** denser overnight eval.
 - **S-05 Bridge-readiness card:** **DONE** document-only (`#bridge_card` + README §); **SKIP** Jetson/bridge code.
-- **UI_BUILD:** `w6-sug-wave1-20260917`
+- **UI_BUILD:** `w7-ui-bot-20260917` (W6 glossary/bridge landed in same Control HTML; W7 seat bumped stamp)
 - **Tests:** `.venv` `python -m rl.test_watch_overlay`; `python -m rl.ui_selftest` (Stop mocked — do not sweep overnight).
 
 ---
@@ -54,9 +54,9 @@ Append one entry per resume tick. Newest first.
 | -- | ---- | ---- |
 | U-20260917-W7-01 | Status banner readability (contrast / reason) | **SHIP now** (allowlist — contrast/labels) |
 | U-20260917-W7-02 | Section headers + spacing rhythm | **SHIP now** (allowlist — spacing/labels) |
-| U-20260917-W7-03 | Glossary expand (curriculum / map roles) | **DEFER code** this tick if time-box; **SHIP copy** next free hands (allowlist) |
+| U-20260917-W7-03 | Glossary expand (curriculum / map roles) | **SHIP now** (allowlist — already in drawer from W6 copy wave; confirm + stamp) |
 
-**Orchestrator (this tick):** docs + U-01 + U-02; leave U-03 for next UI tick if not free. Soft ≠ MUST/bugfix override.
+**Orchestrator (this tick):** docs + U-01 + U-02 + U-03 (glossary already present — stamp under `w7-ui-bot`). Soft ≠ MUST/bugfix override.
 
 **STANDING Resume-me:** UI bot — next tick (or every other ~10m): propose **1–3** small Control/Watch increments → log `CAMPAIGN_UI.md` → auto-approve only allowlist else mini-gate → `ui_selftest` → do **not** mandate, redesign, embed Watch, or touch overnight. Soft ≠ MUST / Bugfix P0.
 
