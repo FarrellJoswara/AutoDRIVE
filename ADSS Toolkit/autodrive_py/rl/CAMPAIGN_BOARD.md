@@ -55,7 +55,7 @@ Append one entry per resume tick. Newest first.
 | 1 | Overnight lock audit | **PASS** — `ui_ops` select=220, eval floor=50k, warmup=2, min_ts=100k; live `config.json` mirrors (unlimited, patience=5, allow_holdout/validation=false, collision_first=false). `AUDIT_PASS`. |
 | 2 | Holdout refuse smoke | **PASS** — `assert_train_safe` map2/map3 raises; `train_ppo --map map2|map3` exit=2; `start_guard` Refuse Start; seals intact. |
 | 3 | Collision-first A/B | **PASS (wiring)** / **inconclusive crashΔ** — disposable Dummy CPU twins `tick0_ab2_base_20260917_040725` vs `tick0_ab2_cf_*` @ 24 576 ts; `collision_first` false/true in config; mid-run `crash_rate_estimate=0.0` both (stall-heavy early policy). No overnight morph. |
-| 4 | Official FTGΔ | **IN FLIGHT** — read-only `eval_cli --official --policy ppo --model …/best_model.zip` (best @ 50k val finisher 181.75 s map3); stdout buffered until exit; FTG pin 198.16 s. Append PPO `official_v2` row + Δ when process exits. |
+| 4 | Official FTGΔ | **PASS (lose)** — PPO `official_v2` row `eval_ppo_eval_overnight_best_20260917_0412`: adj=**206.68** s, n=15, DNF=false, progress≈0.990; FTG pin **198.16** s → **Δ=+8.52 s** (PPO behind). Seals intact; overnight not stopped. |
 | 5 | Continue soak proof | **PASS (disposable)** — `tick0_ab2_base_*` Stop→`--resume` same `run_id`: timesteps **24576 → 48128**; overnight untouched. |
 
 **Do not:** treat mid-train 220 s val as official; Quiet `--allow-holdout`; kill overnight to demo Continue.

@@ -16,3 +16,4 @@ eval_ppo_smoke_racecore_a,ppo,gym,60.0,,0,2,2026-09-17T06:02:39Z,2.0.0,official,
 ftg_official_v1,ftg,gym,80.0,,2,2,2026-09-17T06:03:44Z,2.0.0,official,official_v1,True,0.013381195044312,2
 ftg_official_v2,ftg,gym,198.20000000000002,198.20000000000002,0,3,2026-09-17T06:16:20Z,2.0.0,official,official_v2,False,0.9901935462080019,2
 ftg_official_v2,ftg,gym,198.16,198.16,0,15,2026-09-17T06:26:21Z,2.0.0,official,official_v2,False,0.9901390006180976,2
+eval_ppo_eval_overnight_best_20260917_0412,ppo,gym,206.68,206.68,0,15,2026-09-17T09:29:10Z,2.0.0,official,official_v2,False,0.9901435874416078,2

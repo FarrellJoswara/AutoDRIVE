@@ -194,7 +194,7 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - **Holdout refuse:** `assert_train_safe` + CLI `train_ppo` map2/map3 exit=2 + `start_guard` Refuse Start; seals OK.
 - **Collision-first A/B:** disposable `tick0_ab2_{base,cf}_20260917_040725` Dummy/cpu 24 576; flag wired; crash_rate mid-run 0.0 both → no crashΔ yet at this budget.
 - **Continue proof:** disposable base resume same `run_id` 24576→48128; overnight not used for demo.
-- **FTGΔ:** official_v2 PPO eval of overnight `best_model.zip` still running (read-only); will append leaderboard + Δ vs FTG 198.16 when complete.
+- **FTGΔ:** official_v2 PPO `eval_ppo_eval_overnight_best_20260917_0412` adj=**206.68** s (n=15, finisher) vs FTG **198.16** → **Δ=+8.52 s** (lose). Leaderboard row appended; overnight untouched.
 
 ### ~04:20 — W7 UI bot allowlist + B0.1 wrong-map refuse
 - **Board:** `20260917-W7-ui-bot` behind MUST/bugfix P0.
