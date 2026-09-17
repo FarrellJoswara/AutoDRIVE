@@ -11,6 +11,30 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## Meta-spawner coverage
+- **Covered by existing:** orchestrator · board/ideas · continuous commits/support-loop · cleanup · docs/HANDOFF · W8 multi-run UI (SHIP’d) · bugfix (P0 + P1-2) · suggestion/UI bots · Tick0 MUST smokes
+- **Gaps found (~04:28):** MUST #3 crashΔ inconclusive · MUST #4 FTGΔ was in-flight (now DONE) · no secrets/onboarding/watch-honesty seats · A/B analyzer missing · anti-thrash (dual eval + overnight validating) · P1-1 CheckpointCallback atomic still open
+- **Spawned:**
+  - [Collision A/B analyzer] → `rl/_campaign_ab_report.py` (cp1252-safe) — all pairs inconclusive; see `20260917-meta-ab-report`
+  - [FTGΔ collector] → **DONE** `20260917-meta-ftg-delta` — PPO official_v2 **206.68** vs FTG **198.16** → **Δ +8.52 s** (did not beat)
+  - [Secrets + friend-onboarding] → child in flight
+  - [Watch overlay honesty] → child in flight
+- **Next spawn candidates:** preserve crash_rate across validating overwrite (coord bugfix) · P1-1 atomic ckpt · CURRENT_RUN pin selftest · Windows lock CreateTime (P2-1) · venv health · dead-code (after simplify) · auto_train pause-when-locks
+- **Anti-thrash:** pause new disposable trains while overnight validating; do not launch third official eval
+- **Overnight:** observe-only `overnight_soak_20260917_082739` @ ~545k validating (no_improve=2/5) PIDs **19244/53852**
+
+---
+
+## RESULTS — Meta A/B honesty report (MUST #3) — 2026-09-17 ~04:28 America/Chicago
+- **id:** `20260917-meta-ab-report`
+- **type:** result / gap-fill
+- **tool:** `python -m rl._campaign_ab_report`
+- **overnight:** observe-only
+- **Pairs:** `cf_ab50k` → INCONCLUSIVE_MISSING_CRASH (wiring OK, 49k/49k, crash fields dropped after final-val trail); `tick0_ab2` → INCONCLUSIVE_MISSING_CRASH; `tick0_ab` → INCONCLUSIVE_ZERO_CRASH
+- **Verdict:** MUST #3 wiring PASS; **crash↓ not proven**. Mid-train 187.8s / best_adj 220 train_eval ≠ official. Ticket: preserve crash_rate on validating overwrite (bugfix owns `live_status.py`).
+
+---
+
 ## RESULTS — MUST #4 FTGΔ (official_v2 PPO vs FTG pin) — ~04:29 America/Chicago
 - **id:** `20260917-meta-ftg-delta`
 - **type:** result / honesty
@@ -40,7 +64,7 @@ Append one entry per resume tick. Newest first.
 - **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739`.
 - **SHIP:** RaceBest promote writes `best_model_meta.json` via `atomic_write_json` (was torn `.write_text`).
 - **Tests:** `.venv` `python -m rl._bugfix_p0_checks` → **19/19 PASS**.
-- **Note:** Left mid-flight W8 `control_ui.py` WIP uncommitted (UI seat owns wiring).
+- **Note:** W8 `control_ui.py` multi-run wiring completed in follow-up (`20260917-W8-multi-run-ui-ship`); overnight untouched.
 
 ---
 
@@ -68,12 +92,13 @@ Append one entry per resume tick. Newest first.
 - **amends:** `20260917-W8-multi-run-ui`
 - **overnight:** observe-only — Focus/selftest did not kill `overnight_soak_20260917_082739` (~478k+ learning).
 - **U-01 Live-runs list:** **DONE** — `/api/status` `live_runs` + `<ul id="live_runs">` + overnight badge + Focus.
-- **U-02 Banner bound:** **DONE** — `bound_run_id` / `bound_note`; CURRENT_RUN pin via Focus; ranking still prefers pin → max timesteps.
-- **U-03 Op targets:** **DONE** — `#bound_targets` + `#op_targets` clarify status/Continue/Stop/Watch.
-- **U-04 Start warn:** **DONE** — preview `live_lock_warn` + multi-lock busy_reason; dual-Start still refused.
+- **U-02 Banner bound:** **DONE** — `_resolve_selected_run` (UI-owned → CURRENT_RUN pin → max timesteps) drives banner/`bound_run_id`; no latch onto ~6k A/B smokes.
+- **U-03 Op targets:** **DONE** — `#bound_targets` + `#op_targets`; Stop confirm echoes selected run_id+pid; Models `[focused]` highlight.
+- **U-04 Start warn:** **DONE** — preview `live_lock_warn` + Start confirm when N locks; `start_lock_warn` on status; dual-Start still refused.
 - **DEFER/SKIP untouched:** fancy dashboard DEFER; kill-multi SKIP.
 - **UI_BUILD:** `w8-multi-run-20260917`
-- **Tests:** `.venv` `python -m rl.ui_selftest` → all checks passed (Stop mocked).
+- **Tests:** `.venv` `python -m rl.ui_selftest` (incl. `test_multi_run_selection`) → all checks passed (Stop mocked).
+- **Finish note:** completed half-wired helpers (status bind + Start/Stop confirms) left local mid-flight; no overnight kill.
 
 ---
 
@@ -87,10 +112,10 @@ Append one entry per resume tick. Newest first.
 
 | Id | Idea | Gate |
 | -- | ---- | ---- |
-| U-20260917-W8-01 | Live-runs list (locks + live_status: run_id, timesteps, phase, overnight badge) | **SHIP** design now · **implement next UI tick** (mini-gate — not allowlist) |
-| U-20260917-W8-02 | Status banner bound to **selected** run (not “whichever file was last”) | **SHIP** design · couple to W8-01 |
-| U-20260917-W8-03 | Clear which run Watch / Continue / Stop targets | **SHIP** design · couple to W8-01 |
-| U-20260917-W8-04 | Warn before Start when N live locks already present | **SHIP** design · couple to W8-01 |
+| U-20260917-W8-01 | Live-runs list (locks + live_status: run_id, timesteps, phase, overnight badge) | **SHIP’d** implement `w8-multi-run-20260917` |
+| U-20260917-W8-02 | Status banner bound to **selected** run (not “whichever file was last”) | **SHIP’d** with W8-01 |
+| U-20260917-W8-03 | Clear which run Watch / Continue / Stop targets | **SHIP’d** with W8-01 |
+| U-20260917-W8-04 | Warn before Start when N live locks already present | **SHIP’d** with W8-01 |
 | U-20260917-W8-05 | Fancy multi-run dashboard / Gradio reskin | **DEFER** |
 | U-20260917-W8-06 | Kill / refuse multi-train support to “simplify” UI | **SKIP** (hard) |
 

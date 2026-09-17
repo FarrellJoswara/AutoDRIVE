@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** Support-loop armed (~18m); **P1-2** atomic `best_model_meta` SHIP’d; W8 multi-run UI design on remote `283417c` (Control WIP left local for UI seat); overnight Continue live — do not kill.  
+**Head note:** Meta-spawner coverage live; MUST #4 FTGΔ **DONE** (PPO 206.68 vs FTG 198.16, Δ+8.52); MUST #3 A/B still inconclusive; overnight Continue ~545k validating — do not kill.  
 **Human handoff:** friends start at [`HANDOFF.md`](HANDOFF.md) (runbook + sacred soak + multi-run).
 
 ---
@@ -109,6 +109,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 ---
 
 ## Timeline
+
+### ~04:30 — Meta-spawner coverage (gap net)
+- Standing `## Meta-spawner coverage` on board; A/B honesty report `20260917-meta-ab-report` (MUST #3 still inconclusive).
+- Children: FTGΔ collector (DONE), secrets/onboarding + watch honesty (in flight).
+- Anti-thrash: pause new disposable trains; overnight ~545k validating untouched.
+- Commit: board + log + `leaderboard.csv` official PPO row (if not already pushed).
 
 ### ~04:29 — MUST #4 FTGΔ collected (`20260917-meta-ftg-delta`)
 - Official PPO `official_v2` row: **206.68 s** (n=15, DNF=False, maps map0/2/4 @ 400 s) vs FTG pin **198.16 s** → **Δ = +8.52 s** (lose).
