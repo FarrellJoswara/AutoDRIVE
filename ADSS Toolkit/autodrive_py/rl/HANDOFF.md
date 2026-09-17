@@ -58,7 +58,7 @@ cd "ADSS Toolkit/autodrive_py"
 
 Buttons: **Start training**, **Continue**, **Stop**, **Open Watch**, TensorBoard. Knobs: map, timesteps, `n_envs`, overnight preset, early-stop patience.
 
-**W8 multi-run (`UI_BUILD=w8-multi-run-20260917`)** — hard-refresh (Ctrl+F5) if the page looks stale:
+**W8 multi-run (shipped)** — hard-refresh (Ctrl+F5) if the Live runs list is missing (page may show a later `UI_BUILD` stamp):
 
 | Control | Behavior |
 | ------- | -------- |
@@ -69,7 +69,7 @@ Buttons: **Start training**, **Continue**, **Stop**, **Open Watch**, TensorBoard
 | **Stop** | Confirm echoes **selected** `run_id`+pid; protected overnight is never swept |
 | **ops target** hint | Shows which run status / Focus / Continue / Stop are talking about |
 
-If `ui build:` on the page is older than `w8-multi-run-20260917`, reload — you are looking at a cached HTML shell.
+If the page has no **Live runs** list, hard-refresh — you are looking at a cached pre-W8 HTML shell.
 
 ### Train (headless, no UI)
 
@@ -222,7 +222,7 @@ If Start says refuse holdout/validation → pick a `train_ok` map (or explicit a
 ## Multi-run reality
 
 Operators often have **several** live `train.lock`s (overnight + disposable A/B smokes).
-**W8 shipped** in Control (`UI_BUILD=w8-multi-run-20260917`) so this is operable without killing multi-train support.
+**W8 shipped** in Control so this is operable without killing multi-train support (original stamp `w8-multi-run-20260917`; later `UI_BUILD` values still include these controls).
 
 ### What you see
 
@@ -234,7 +234,7 @@ Operators often have **several** live `train.lock`s (overnight + disposable A/B 
 
 ### If the banner still looks wrong
 
-1. Hard-refresh UI; check `ui build: w8-multi-run-20260917`.
+1. Hard-refresh UI; confirm **Live runs** list is present.
 2. Click **Focus** on the overnight row (or rewrite `rl/logs/CURRENT_RUN.txt`).
 3. Confirm Models list shows multiple `[locked pid=…]` — expected under multi-run.
 4. Watch without `--run_id` also prefers `CURRENT_RUN` / highest timesteps (`pick_status_for_operator`).
@@ -279,7 +279,7 @@ python -m rl.auto_train --dry-run
 
 | Symptom | Check |
 | ------- | ----- |
-| Banner stuck on tiny timesteps | Multi-run latch — Focus overnight in Live runs (or pin `CURRENT_RUN.txt`); confirm `UI_BUILD` ≥ `w8-multi-run-20260917` |
+| Banner stuck on tiny timesteps | Multi-run latch — Focus overnight in Live runs (or pin `CURRENT_RUN.txt`); hard-refresh if Live runs list missing |
 | Start refused with locks live | Intentional dual-writer guard — Stop selected non-protected run first, or use a separate CLI train |
 | Continue won’t start | Stale lock with dead PID, or missing checkpoint |
 | Watch map mismatch banner | Watched map ∉ run `config.json` maps / hash changed |
