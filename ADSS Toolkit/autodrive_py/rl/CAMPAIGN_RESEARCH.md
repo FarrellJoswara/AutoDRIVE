@@ -1,11 +1,15 @@
 # CAMPAIGN_RESEARCH.md — Evidence-based guidance (9h)
 
-**Role:** Research lead brief for the orchestrator.  
-**Scope:** GPU/CPU, continuous retrain, fast validation, UI ROI, map curriculum, explicit non-builds.  
-**Sources:** `PLAN.md`, `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md`, `CAMPAIGN_LOG.md`, `research_notes.md`, `ideas_review/02_speed.md`, plus mechanisms in `train_ppo.py`, `racing_env.py`, `control_ui.py` / `ui_ops.py`, `live_status.py`, `eval_protocol.*`, `map_pack.py`.  
-**Rule:** Docs only — no implementation from this file.
+**Status:** COMPLETE (standing researcher — tick 0, ~2026-09-17 03:59 America/Chicago).  
+**Role:** Standing research brief for the orchestrator (resumed ~every 50 min with proposals).  
+**Scope:** GPU/CPU, continuous retrain, fast validation, UI ROI, map curriculum, explicit non-builds, MUST Go/No-Go evidence.  
+**Sources:** `PLAN.md`, `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md`, `CAMPAIGN_LOG.md`, `CAMPAIGN_BOARD.md`, `research_notes.md`, `ideas_review/{02_speed,campaign_racer,campaign_minimalist,campaign_reliability}.md`, plus mechanisms in `train_ppo.py`, `racing_env.py`, `control_ui.py` / `ui_ops.py`, `live_status.py`, `eval_protocol.*`, `map_pack.py`.  
+**Rule:** Docs only — no implementation from this file unless fixing a research-proven bug.
 
-**Protected run (do not kill without restart):** `overnight_soak_20260917_082739` — live ~252 steps/s, n_envs=8 Subproc, RTX 3060 ~20–40% / 1.6 GiB — already shows CPU-bound rollouts ([`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md)).
+**Protected run (do not kill without Continue restart):** `overnight_soak_20260917_082739`  
+Live snapshot (tick 0): timesteps≈**208k**, steps/s≈**245**, phase=`learning`, n_envs=8 Subproc, `crash_rate_estimate=0.0`, lock held, `latest_model` writing. Sacred overnight knobs **present in `config.json`**: `race_eval_every=50000`, `select_timeout_s=220`, warmup_evals=2, min_timesteps=100000, patience=5, unlimited. GPU ~20–40% still = **CPU-bound**, not a CUDA mandate ([`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md)).
+
+**Overnight note:** this soak has `collision_first: false` / `speed_gate: false` (ttc_truncate true). Collision-first MUST work is a **parallel short smoke**, not a mid-run morph of the protected soak.
 
 ---
 
@@ -207,6 +211,22 @@ Hard skips aligned with critique + PLAN serialization:
 
 ---
 
+## 7. Standing researcher — MUST queue evidence (tick 0)
+
+Aligned with critique + racer + minimalist (+ reliability where it gates continuous). Full Go/No-Go narrative lives in [`CAMPAIGN_BOARD.md`](CAMPAIGN_BOARD.md).
+
+| # | MUST | Verdict | Evidence (tick 0) | Next proof |
+| - | ---- | ------- | ----------------- | ---------- |
+| 1 | Overnight early-stop regression lock | **GO — audit/smoke only** | `ui_ops`: select=220, floor=50k, warmup=2, min_ts=100k, Overnight preset wired; live soak config matches; still `learning` past 100k | Re-run `_overnight_soak_smoke` **only if** touching RaceBest/`ui_ops` constants; never lower them |
+| 2 | Continue-train soak | **GO — prove (deferred)** | `continue_train_argv` + ui_selftest paths exist; PLAN_PROGRESS still lists “Overnight continue soak after UI Stop” as **P1** | Short separate Stop→Continue same `run_id` **or** post-soak Continue — **do not** kill protected overnight to “prove” |
+| 3 | Collision-first → crash_rate down | **GO — short A/B** | Flags wired (`--collision-first`); overnight has flag **off**; live crash_rate=0 is not an A/B | ≤100k twin smokes with/without flag; compare `crash_rate_estimate`; no reward Discord; don’t touch overnight |
+| 4 | Official FTG vs PPO (FTGΔ) | **GO — read-only eval** | Leaderboard: FTG `official_v2` finisher ≈**198.16** s (n=15); **no** PPO `kind=official` / `official_v2` row yet | Eval current `best_model` (or last complete zip) under `official_v2`; publish Δ even if lose; seals intact |
+| 5 | Holdout/validation refuse | **GO — smoke** | `assert_train_safe` shipped; ui_selftest Start refuses map2/map3; overnight `allow_holdout/validation=false` | CLI `train_ppo --map map2|map3` exit≠0; pack `verify` before any official append |
+
+**Reliability veto (before any continuous outer product):** heartbeat join race after `early_stopped`; Start/Continue→`_kill_train_tree` on busy false-negative can kill the protected soak ([`campaign_reliability.md`](ideas_review/campaign_reliability.md)). Continuous outer loop remains **NO-GO** this window.
+
+---
+
 ## Go / No-Go checklist (orchestrator gate before shipping a feature)
 
 Every feature must pass **all** applicable rows. Fail any → **No-Go** (cut the feature, not the guard).
@@ -258,3 +278,5 @@ Every feature must pass **all** applicable rows. Fail any → **No-Go** (cut the
 ### One-line decision rule
 
 **Go** only if the feature moves **official adjusted_time vs pinned FTG on sealed maps**, **overnight Continue integrity**, or **measured crash-rate / steps/sec honesty** — without touching sacred guards. Everything else is **No-Go** for this 9h window.
+
+**Standing:** Resume this researcher each tick with the latest proposal; append `CAMPAIGN_BOARD.md` and refresh §7 evidence — do not drive-by feature code unless a research-proven bug.

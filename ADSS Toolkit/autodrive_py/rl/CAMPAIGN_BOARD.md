@@ -1,35 +1,45 @@
-# Campaign board (append-only)
+# CAMPAIGN_BOARD — Standing researcher ticks
 
-Process: [`CAMPAIGN_GOVERNANCE.md`](CAMPAIGN_GOVERNANCE.md). Newest entries first under each date.
+**Campaign:** 9h (start ~03:54 America/Chicago, 2026-09-17)  
+**Protected run:** `overnight_soak_20260917_082739` — DO NOT KILL without Continue  
+**Sources of truth for MUST order:** `CAMPAIGN_CRITIQUE.md` + `ideas_review/campaign_racer.md` (+ minimalist KEEP / reliability vetoes)  
+**Companion brief:** `CAMPAIGN_RESEARCH.md` (COMPLETE)
+
+Append one entry per resume tick. Newest first.
 
 ---
 
-## 2026-09-17
+## Tick 0 — 2026-09-17 ~03:59 America/Chicago (first board)
 
-### W1 — Overnight constant audit + holdout refuse smoke
-- **id:** `20260917-W1-overnight-holdout-verify`
-- **type:** chunk
-- **time:** 03:59 America/Chicago
-- **proposal:** Verify-only: assert `ui_ops` sacred overnight constants still ≥ floors; smoke `train_ppo --map map2` and `--map map3` exit ≠0 without allow flags; `map_pack verify`. **No constant changes. Do not touch overnight soak process.**
-- **files:** read `ui_ops.py`, `train_ppo.py`, `map_pack.py`; run smokes only
-- **research checklist (CAMPAIGN_RESEARCH §Go/No-Go):**
-  - [x] A sacred: contracts untouched; overnight constants verify≥floors; holdout refuse exercised; dual-writer N/A; protected run untouched
-  - [x] B honesty: no official append
-  - [x] C throughput: N/A — not throughput work
-  - [x] D continuous: not proposing continuous
-  - [x] E maps: refuse sealed/validation train
-  - [x] F acceptance: holdout smoke; overnight soak smoke **only if** constants changed (they won't)
-- **votes:**
-  - Researcher: **Go** — verify/smoke only; cite `ui_ops` MID_TRAIN=220, FLOOR=50k, WARMUP=2, MIN_TS=100k; `assert_train_safe` in train_ppo (~767). Aligns RESEARCH spend list.
-  - Racer: **Approve** — MUST #1+#5; honesty gates for sealed beat-FTG.
-  - Minimalist: **Approve** — no new subsystem; refuse path only.
-  - Reliability: **Approve** — does not lower sacred constants; overnight soak left alone.
-- **gate:** **SHIP** — research Go + 3 Approves + 0 Blocks. Overnight plan: observe only.
-- **result:** _(pending execute)_
+**Live soak:** timesteps≈208k · steps/s≈245 · phase=`learning` · crash_rate≈0.0 · n_envs=8 subproc · lock held  
+**Config sacred check:** eval_every=50k · select_timeout=220 · warmup=2 · min_ts=100k · patience=5 · unlimited · allow_holdout=false  
+**Flag note:** soak `collision_first=false` (expected — curriculum A/B is separate)
 
-### SKIP logged (no board freestyle)
-- Continuous-train outer scaffold — **No-Go** (research §2/§6, racer KILL#5, minimalist refuse, reliability P0).
-- GPU theater / n_envs knee sweep — **DEFER** until after Continue+collision MUST; research: theater until knee measured; not this chunk.
-- Fancy UI reskin — **No-Go** (design test fail).
+### MUST Go / No-Go (orchestrator next actions)
+
+| # | Item | Go/No-Go | Evidence | Action now | Do not |
+| - | ---- | -------- | -------- | ---------- | ------ |
+| 1 | **Overnight early-stop regression lock** | **GO** (verify only) | Constants in `ui_ops.py` match sacred floors; live `config.json` mirrors them; run already past min_ts grace without EarlyStop | Constant audit + leave soak alone; re-smoke `_overnight_soak_smoke` **only if** editing RaceBest/`ui_ops` | Lower select/eval/warmup/min_ts; kill overnight; “tune” early-stop for continuous |
+| 2 | **Continue-train soak** | **GO** (prove — still deferred) | Path shipped (`continue_train_argv`, ui_selftest); PLAN_PROGRESS still **P1**: overnight Continue-after-Stop soak | Prove on a **short disposable** run (Stop→complete ckpt→Continue same `run_id`→timesteps↑) **or** after soak ends | Stop protected soak just to demo Continue |
+| 3 | **Collision-first → crash_rate down** | **GO** (short A/B) | `--collision-first` wired; overnight flag off; live crash_rate=0 is **not** controlled evidence | ≤100k twin smokes ±flag; compare `live_status.crash_rate_estimate`; no mid-run reward Discord | Morph overnight rewards/flags; raise budget to 500k+ before crash moves |
+| 4 | **Official FTGΔ (PPO vs pinned FTG)** | **GO** (read-only eval) | FTG `official_v2` finisher ≈**198.16** s on board; **zero** PPO `official_v2` rows | Official eval of current `best_model` / last complete zip under `official_v2`; publish Δ even if lose; seals intact | Shorten official timeout; retune FTG; call mid-train 220s “official” |
+| 5 | **Holdout / validation refuse** | **GO** (smoke) | `assert_train_safe` + ui_selftest Start refuse map2/map3; soak allow flags false | CLI refuse smoke + pack `verify` before any official append | Quiet `--allow-holdout`; train map3 “for convenience” |
+
+### Personality consensus (tick 0)
+
+- **Racer:** MUST 1→5 order stands; FTGΔ without a PPO official row is flying blind.
+- **Minimalist:** KEEP overnight/Continue/holdout/collision/FTGΔ; refuse continuous outer + GPU theater.
+- **Reliability:** Continuous outer **NO-GO** until heartbeat-join + Start-kill-on-false-busy are addressed; don’t touch overnight math to feel “continuous.”
+
+### Priority for next ~50 min (if orchestrator picks one ship)
+
+1. Holdout refuse CLI smoke (cheap, parallel to overnight) **and/or** overnight constant audit (read-only).  
+2. Schedule Continue soak on a **non-protected** short run.  
+3. Queue collision-first A/B when a free GPU/CPU slot exists (not the overnight workers).  
+4. When a complete zip is stable enough, kick **official** PPO vs FTG (read-only).
+
+### Explicit NO-GO this tick
+
+GPU/CUDA/AMP · Watch chrome · Bridge/Jetson · algo zoo / residual / FTG-BC · continuous-until-plateau product · densifying mid-train eval · killing `overnight_soak_20260917_082739`
 
 ---
