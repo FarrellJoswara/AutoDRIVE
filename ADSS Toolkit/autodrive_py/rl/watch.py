@@ -28,7 +28,7 @@ import numpy as np
 from .contracts import CONTRACTS_VERSION, obs_dim
 from .eval_protocol import protocol_timeout_s
 from .ftg import FollowTheGap
-from .live_status import find_latest_status, read_live_status, resolve_latest_weights
+from .live_status import pick_status_for_operator, read_live_status, resolve_latest_weights
 from .racing_env import RacingEnv, nearest_centerline_progress, resolve_map_yaml
 from .viewer import GHOST_COLOR_BGR, MapViewer, agent_color
 from .watch_kpi import (
@@ -603,6 +603,16 @@ def _weights_newer(path: Path, loaded_path: Path | None, loaded_mtime: float) ->
     return mtime > loaded_mtime
 
 
+def _operator_run_pin(rl_root: Path) -> str | None:
+    """Optional ``logs/CURRENT_RUN.txt`` pin — same file Control UI uses."""
+    pin = Path(rl_root) / "logs" / "CURRENT_RUN.txt"
+    try:
+        text = pin.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
 def _run_follow(args) -> int:
     """Lag-behind twins: train stats from JSON + N local rollouts of latest weights."""
     from stable_baselines3 import PPO
@@ -613,6 +623,7 @@ def _run_follow(args) -> int:
     maps_root = rl_root / "maps"
     map_yaml = resolve_map_yaml(args.map, maps_root)
     pin_run = bool(args.run_id)
+    operator_pin = None if pin_run else _operator_run_pin(rl_root)
 
     status_path: Path | None = None
     status: dict | None = None
@@ -622,7 +633,7 @@ def _run_follow(args) -> int:
         if status is None:
             print(f"Waiting for {status_path} ...")
     else:
-        found = find_latest_status(runs_root)
+        found = pick_status_for_operator(runs_root, preferred_run_id=operator_pin)
         if found:
             status_path, status = found
             print(f"Following {status_path}")
@@ -638,13 +649,15 @@ def _run_follow(args) -> int:
         return 8
 
     def _refresh_status() -> None:
-        """Re-read live_status; when unpinned, always chase the newest run."""
+        """Re-read live_status; when unpinned, prefer CURRENT_RUN / highest timesteps."""
         nonlocal status_path, status
         if pin_run:
             if status_path is not None:
                 status = read_live_status(status_path) or status
             return
-        found = find_latest_status(runs_root)
+        found = pick_status_for_operator(
+            runs_root, preferred_run_id=_operator_run_pin(rl_root)
+        )
         if found:
             new_path, new_status = found
             if status_path is None or new_path != status_path:

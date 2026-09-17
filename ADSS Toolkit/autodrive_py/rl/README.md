@@ -1,10 +1,24 @@
-"""
-F1TENTH RL Stack
+# F1TENTH RL Stack
 
-Multi-phase reinforcement-learning stack for solo F1TENTH / RoboRacer time-attack.
-Frozen interface: [contracts.md](contracts.md). Research: [research_notes.md](research_notes.md).
+Multi-phase reinforcement-learning stack for solo F1TENTH / RoboRacer time-attack
+(gym PPO → AutoDRIVE Bridge later).
 
 **Branch:** `rl/phase-1-research`
+
+## Start here
+
+| Need | Open |
+| ---- | ---- |
+| **Human handoff (friend who wasn’t here overnight)** | **[`HANDOFF.md`](HANDOFF.md)** — runbook, sacred soak, multi-run, resume, tests |
+| Contracts / obs layout | [`contracts.md`](contracts.md) |
+| Campaign ship gate + overnight narrative | [`CAMPAIGN_GOVERNANCE.md`](CAMPAIGN_GOVERNANCE.md), [`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md) |
+| Roadmap / progress | [`PLAN.md`](PLAN.md), [`PLAN_PROGRESS.md`](PLAN_PROGRESS.md) |
+| Soft ideas / UI chrome / bugfix (not mandates) | `CAMPAIGN_SUGGESTIONS.md`, `CAMPAIGN_UI.md`, `CAMPAIGN_BUGFIX.md` |
+| Personality archives | `ideas_review/`, `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md` |
+
+**Sacred:** never kill `overnight_soak_20260917_082739` without Continue; do not lower early-stop floors. Details in HANDOFF.
+
+Frozen interface: [contracts.md](contracts.md). Research: [research_notes.md](research_notes.md).
 
 ## Control UI (minimal)
 

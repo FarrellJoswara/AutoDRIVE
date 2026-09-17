@@ -1,4 +1,10 @@
-"""Operator helpers for control_ui (testable without Gradio/browser)."""
+"""Operator helpers for control_ui (testable without Gradio/browser).
+
+Locks, presets, Continue argv, banner classification, map labels, coach hints.
+Multi-run inventory: :func:`find_live_run_locks` + :func:`lock_owner`.
+Status-file ranking across runs lives in ``live_status.pick_status_for_operator``
+(Control UI still ranks live PIDs via its own pin / timesteps scorer).
+"""
 
 from __future__ import annotations
 

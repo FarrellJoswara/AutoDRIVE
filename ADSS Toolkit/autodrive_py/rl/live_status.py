@@ -1,4 +1,9 @@
-"""Cheap train-side live status trail (JSON only — no OpenCV / rendering)."""
+"""Cheap train-side live status trail (JSON only — no OpenCV / rendering).
+
+Train writes ``rl/runs/<run_id>/live_status.json``; Control UI and Watch poll it.
+Under multi-run (several live trains), prefer :func:`pick_status_for_operator`
+over raw :func:`find_latest_status` so a short A/B smoke does not eclipse overnight.
+"""
 
 from __future__ import annotations
 
@@ -80,7 +85,10 @@ def read_live_status(path: Path) -> dict[str, Any] | None:
 
 
 def find_latest_status(runs_root: Path) -> tuple[Path, dict[str, Any]] | None:
-    """Pick the newest ``live_status.json`` under ``rl/runs/``."""
+    """Pick the newest ``live_status.json`` under ``rl/runs/`` (mtime only).
+
+    Prefer :func:`pick_status_for_operator` when several trains may be live.
+    """
     runs_root = Path(runs_root)
     if not runs_root.is_dir():
         return None
@@ -95,6 +103,77 @@ def find_latest_status(runs_root: Path) -> tuple[Path, dict[str, Any]] | None:
     if best is None:
         return None
     return best[1], best[2]
+
+
+def _status_timesteps(data: dict[str, Any]) -> int:
+    try:
+        return int(data.get("timesteps") or -1)
+    except (TypeError, ValueError):
+        return -1
+
+
+def pick_status_for_operator(
+    runs_root: Path,
+    *,
+    preferred_run_id: str | None = None,
+    candidate_run_ids: list[str] | None = None,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Choose a ``live_status.json`` when multiple runs exist (multi-train safe).
+
+    Preference order:
+
+    1. ``preferred_run_id`` (e.g. contents of ``logs/CURRENT_RUN.txt``) if present
+    2. Highest ``timesteps`` among ``candidate_run_ids`` (live locks), if given
+    3. Highest ``timesteps`` among all status files
+    4. Fall back to :func:`find_latest_status` (mtime)
+
+    Returns ``(path, payload)`` or ``None``. Does not start/stop processes.
+    """
+    runs_root = Path(runs_root)
+    if not runs_root.is_dir():
+        return None
+
+    if preferred_run_id:
+        pinned = runs_root / str(preferred_run_id).strip() / "live_status.json"
+        data = read_live_status(pinned)
+        if data:
+            return pinned, data
+
+    def _scan(ids: list[str] | None) -> tuple[Path, dict[str, Any]] | None:
+        best: tuple[int, float, Path, dict[str, Any]] | None = None
+        if ids is not None:
+            paths = []
+            for rid in ids:
+                rid = str(rid or "").strip()
+                if not rid:
+                    continue
+                paths.append(runs_root / rid / "live_status.json")
+        else:
+            paths = list(runs_root.glob("*/live_status.json"))
+        for status_path in paths:
+            data = read_live_status(status_path)
+            if not data:
+                continue
+            try:
+                mtime = status_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            score = (_status_timesteps(data), mtime)
+            if best is None or score > (best[0], best[1]):
+                best = (score[0], score[1], status_path, data)
+        if best is None:
+            return None
+        return best[2], best[3]
+
+    if candidate_run_ids:
+        hit = _scan(list(candidate_run_ids))
+        if hit is not None:
+            return hit
+
+    hit = _scan(None)
+    if hit is not None:
+        return hit
+    return find_latest_status(runs_root)
 
 
 def resolve_latest_weights(run_models_dir: Path, status: dict[str, Any] | None = None) -> Path | None:
