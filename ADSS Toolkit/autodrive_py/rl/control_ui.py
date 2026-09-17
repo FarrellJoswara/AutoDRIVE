@@ -1845,7 +1845,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w10-stall-p18-20260917"
+UI_BUILD = "w10-js-fix-focusrun-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -2408,7 +2408,7 @@ function renderLiveRuns(rows, boundId){
       + '<span><b>' + esc(rid) + '</b>' + badge + '</span>'
       + '<span class="small">pid=' + esc(r.pid) + ' · ' + esc(r.phase) + ' · ts=' + esc(ts) + ' · /s=' + esc(sps) + '</span>'
       + (sel ? '<span class="small">focused</span>'
-           : '<button type="button" onclick="focusRun(\'' + esc(rid).replace(/'/g, '') + '\')">Focus</button>')
+           : '<button type="button" onclick="focusRun(\\'' + esc(rid).replace(/'/g, '') + '\\')">Focus</button>')
       + '</li>';
   }).join('');
 }
