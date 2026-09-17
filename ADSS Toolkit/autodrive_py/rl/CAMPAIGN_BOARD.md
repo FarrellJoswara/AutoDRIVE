@@ -11,6 +11,46 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## Wave — Close official FTGΔ (+8.52 s) + stall-metric — ~04:33 America/Chicago
+- **id:** `20260917-ftgdelta-close-wave`
+- **type:** tick / research wave + thin SHIP
+- **overnight:** observe-only — `overnight_soak_20260917_082739` ~**569k** `learning`, sps≈203, n_envs=8 subproc, PIDs **19244/53852** ALIVE; CPU≈77%/20 logical — **do not starve**; **no kill / no morph / no sacred early-stop retune**
+- **context:** MUST #4 sealed lose (PPO `official_v2` **206.68** vs FTG **198.16**, Δ=+8.52, finisher). MUST #3 collision A/B **crashΔ null** at 24k **and** 50k (stall-heavy; both arms crash_rate=0.0) → **DEFER** further crash A/B smokes tonight.
+
+### Collision A/B residual
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| C-01 | Longer disposable collision-first A/B (50–100k+) for crashΔ | **DEFER** tonight — need longer budget **and/or** a regime where wall-hits actually occur; overnight CPU already high; 50k already null |
+
+### FTGΔ close — thin ideas (multi-lens)
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| F-01 | Let overnight RaceBest improve past 295k snapshot; **re-eval official_v2 when CPU free** (sidecar will localize Δ) | **DEFER** eval launch now (anti-thrash / soak learning) — schedule next free window |
+| F-02 | Persist official **per_map** sidecar on leaderboard append (`logs/official_per_map_<run_id>.json`) | **SHIP’d** `metrics_io.write_official_per_map_sidecar` |
+| F-03 | Live **stall_rate_estimate** / `stalls_estimate` (Monitor `stall` already in keywords) | **SHIP’d** `live_status` — diagnoses stall-heavy curriculum without Discord |
+| F-04 | Disposable reward-shaping fork (speed unlock / stall soft-penalty) fingerprinted new `run_id` | **DEFER** — design only until F-01 re-eval + overnight survival; no mid-soak Discord |
+| F-05 | Observation add-ons (L/R/F clearances / DR) | **DEFER** — contracts risk; after longer train plateaus |
+| F-06 | Sacred early-stop floor retune to “ship faster” | **SKIP** (hard) |
+| F-07 | Kill overnight / third concurrent official eval thrash | **SKIP** (hard) |
+
+**Honesty note:** mid-train RaceBest `train_eval` ≈**188.95 s** on **map3** @ 220 s ≠ official. Gap to close is sealed-map lap time (+8.52 s), not crash DNF (official collisions=0, progress≈0.990).
+
+### Personality votes — FTGΔ thin tools → **SHIP (F-02/F-03)**; DEFER rest
+
+- **Researcher:** **Go** F-02/F-03 — falsifiable next official; stall metric explains MUST #3 nulls. **Defer** F-01 launch while soak learning. **No-Go** F-06/F-07.
+- **Racer:** **Approve** F-02 (localize where seconds leak) · **Approve** F-03 (stall≠crash) · **Block** F-06/F-07 · F-04 only after overnight continues + honest re-eval · **Approve** C-01 DEFER (crash theater tonight).
+- **Minimalist:** **Approve** F-02/F-03 (tiny side-channel + one status field) · **Block** reward Discord / obs contract churn / denser overnight eval.
+- **Reliability:** **Approve** F-02/F-03 (append-only sidecar; additive live_status keys; overnight process untouched — new fields only after Continue/restart workers) · **Block** F-07 · no sacred floor change.
+- **Integrator:** **SHIP** F-02 + F-03 this tick; **DEFER** C-01 + F-01/F-04/F-05; **SKIP** F-06/F-07. Need research Go + ≥2 Approves — **met**.
+
+**Orchestrator:** docs + thin code landed; bugfix asserts green; commit board/log + `live_status`/`metrics_io`/`_bugfix_p0_checks`. Overnight untouched.
+
+**Resume-me:** when overnight not validating / CPU free → official re-eval of newer RaceBest → read `official_per_map_*.json` vs FTG pin; only then consider F-04 disposable fork.
+
+---
+
 ## RESULTS — Tick #2 wave SHIP (P1-1/3/5 + W8) — ~04:32 America/Chicago
 - **id:** `20260917-tick2-wave-ship`
 - **type:** result / implement
@@ -94,8 +134,9 @@ Append one entry per resume tick. Newest first.
   - [Secrets + friend-onboarding] → **DONE** `20260917-meta-secrets-onboard` — CLEAN / PARTIAL
   - [Watch overlay honesty] → **DONE** `20260917-meta-watch-honesty` — validating≠stale; pin via `read_operator_run_pin`; `test_watch_overlay` **14/14**
 - **Next spawn candidates:** **P1-8** crash_rate merge on val trail · P1-1 atomic ckpt · CURRENT_RUN pin selftest · P2-1 CreateTime lock · venv health · auto_train pause-when-locks
-- **Anti-thrash:** soft pause new disposable trains; overnight back to **learning** ~552k+ — still observe-only
+- **Anti-thrash:** soft pause new disposable trains; **DEFER crash A/B smokes tonight** (24k+50k crashΔ null); overnight ~569k learning — still observe-only; do not launch third official eval
 - **Overnight:** observe-only `overnight_soak_20260917_082739` PIDs **19244/53852**
+- **FTGΔ residual:** close +8.52 s — wave `20260917-ftgdelta-close-wave` (per_map sidecar + stall_rate SHIP’d; re-eval DEFER)
 
 ---
 

@@ -277,6 +277,57 @@ def main() -> int:
         fb.get("vec_env_fallback") is True and fb.get("vec_env_active") == "dummy",
         f"fallback={fb.get('vec_env_fallback')} active={fb.get('vec_env_active')}",
     )
+    check(
+        "live_status learning payload includes stall_rate_estimate key",
+        "stall_rate_estimate" in fb and "stalls_estimate" in fb,
+        f"keys={sorted(fb.keys())}",
+    )
+    # Official per-map sidecar (FTGΔ localization) — no overnight / no re-eval.
+    from rl.metrics_io import write_official_per_map_sidecar  # noqa: E402
+
+    side_dir = tmp / "official_sides"
+    side = write_official_per_map_sidecar(
+        {
+            "kind": "official",
+            "run_id": "ppo_ftgdelta_side_test",
+            "policy": "ppo",
+            "protocol_id": "official_v2",
+            "adjusted_time": 206.68,
+            "mean_lap_time": 206.68,
+            "total_collisions": 0,
+            "n_episodes": 15,
+            "mean_progress_frac": 0.99,
+            "dnf": False,
+            "tracks_eval": ["map0", "map2", "map4"],
+            "timestamp": "2026-09-17T00:00:00Z",
+            "per_map": {
+                "map0": {"mean_lap_time": 200.0, "total_collisions": 0, "n_episodes": 5},
+                "map2": {"mean_lap_time": 210.0, "total_collisions": 0, "n_episodes": 5},
+            },
+        },
+        logs_root=side_dir,
+    )
+    check(
+        "write_official_per_map_sidecar writes JSON for official+per_map",
+        side is not None and side.is_file(),
+        f"side={side}",
+    )
+    if side is not None and side.is_file():
+        side_obj = json.loads(side.read_text(encoding="utf-8"))
+        check(
+            "official per_map sidecar retains map keys",
+            set(side_obj.get("per_map", {})) >= {"map0", "map2"},
+            f"per_map={side_obj.get('per_map')}",
+        )
+    skip_side = write_official_per_map_sidecar(
+        {"kind": "smoke", "run_id": "x", "per_map": {"map0": {}}},
+        logs_root=side_dir,
+    )
+    check(
+        "write_official_per_map_sidecar no-op for non-official",
+        skip_side is None,
+        f"skip={skip_side}",
+    )
 
     # P1-2: best_model_meta must be written atomically (tmp → replace), not torn write_text
     meta_path = tmp / "best_model_meta.json"

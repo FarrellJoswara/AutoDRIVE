@@ -228,9 +228,55 @@ def write_run_artifacts(
     return run_dir
 
 
+def write_official_per_map_sidecar(
+    metrics: dict,
+    *,
+    logs_root: Path | None = None,
+) -> Path | None:
+    """Persist per-map official breakdown beside the CSV row (FTGΔ localization).
+
+    Leaderboard CSV stays aggregate; this sidecar carries ``per_map`` from
+    ``eval_protocol`` so the next official re-eval can show where PPO loses
+    seconds vs FTG without re-parsing logs. No-op for non-official / missing
+    ``per_map`` (does not invent data for prior rows).
+    """
+    if str(metrics.get("kind") or "") != "official":
+        return None
+    per_map = metrics.get("per_map")
+    if not isinstance(per_map, dict) or not per_map:
+        return None
+    root = logs_root or (Path(__file__).resolve().parent / "logs")
+    root.mkdir(parents=True, exist_ok=True)
+    rid = str(metrics.get("run_id") or "unknown")
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in rid)[:120]
+    out = root / f"official_per_map_{safe}.json"
+    payload = {
+        "run_id": rid,
+        "policy": metrics.get("policy"),
+        "protocol_id": metrics.get("protocol_id"),
+        "kind": "official",
+        "adjusted_time": metrics.get("adjusted_time"),
+        "mean_lap_time": metrics.get("mean_lap_time"),
+        "total_collisions": metrics.get("total_collisions"),
+        "n_episodes": metrics.get("n_episodes"),
+        "mean_progress_frac": metrics.get("mean_progress_frac"),
+        "dnf": metrics.get("dnf"),
+        "tracks_eval": metrics.get("tracks_eval"),
+        "timestamp": metrics.get("timestamp"),
+        "per_map": per_map,
+    }
+    atomic_write_json(out, payload)
+    return out
+
+
 def append_leaderboard(path: Path, metrics: dict) -> None:
     """Append a row. Prefer kind=official for race claims; smoke rows stay tagged."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Side-channel for FTGΔ: keep per-map times when protocol eval provides them.
+    try:
+        write_official_per_map_sidecar(metrics)
+    except OSError:
+        pass
     # Migrate header if needed
     # Header migration must preserve every row verbatim, including legacy ones.
     existing = read_leaderboard(

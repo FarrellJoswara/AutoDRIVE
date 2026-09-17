@@ -242,6 +242,7 @@ def LiveStatusCallback(*args, **kwargs):
             self._rollouts = 0
             self._ep_count = 0
             self._collision_eps = 0
+            self._stall_eps = 0
             self._progress_sum = 0.0
             self._progress_n = 0
             self._last_latest_path: str | None = None
@@ -262,6 +263,10 @@ def LiveStatusCallback(*args, **kwargs):
                 self._ep_count += 1
                 if ep.get("collision"):
                     self._collision_eps += 1
+                # Stall terminations (Monitor info_keywords includes "stall") — separate
+                # from crash_rate so stall-heavy A/B smokes are diagnosable (MUST #3).
+                if ep.get("stall"):
+                    self._stall_eps += 1
                 # Honest smoke probe: terminal progress_frac only (never promote / official).
                 try:
                     prog = ep.get("progress_frac")
@@ -341,6 +346,9 @@ def LiveStatusCallback(*args, **kwargs):
             crash_rate = (
                 float(self._collision_eps) / float(self._ep_count) if self._ep_count > 0 else None
             )
+            stall_rate = (
+                float(self._stall_eps) / float(self._ep_count) if self._ep_count > 0 else None
+            )
             mean_progress = (
                 float(self._progress_sum) / float(self._progress_n) if self._progress_n > 0 else None
             )
@@ -381,6 +389,8 @@ def LiveStatusCallback(*args, **kwargs):
                 "episode_count_estimate": int(self._ep_count),
                 "collisions_estimate": int(self._collision_eps),
                 "crash_rate_estimate": crash_rate,
+                "stalls_estimate": int(self._stall_eps),
+                "stall_rate_estimate": stall_rate,
                 # Status-only progress probe (kind=smoke) — not race score / not promote.
                 "mean_progress_frac_estimate": mean_progress,
                 "progress_probe_kind": "smoke",
