@@ -94,13 +94,18 @@ Instead:
 # .\rl\start_ui.ps1  → http://127.0.0.1:7860/
 
 # Terminal B — lag-behind multi-color twins
-python -m rl.watch --follow --map map0 --n-envs 8 --every 5 --no-beams
+# Follow defaults: --every 8 (lighter redraw on weak machines) + --compact overlay.
+python -m rl.watch --follow --map map0 --n-envs 8 --no-beams
+# denser overlay / smoother redraw if you want them:
+# python -m rl.watch --follow --map map0 --every 2 --no-compact
 # or pin a run / let n_envs come from live_status (omit --n-envs or pass 0):
 python -m rl.watch --follow --run_id 20260101_120000_ppo_gym_map0
 
-# One-shot / baseline view (not following train)
-python -m rl.watch --policy ftg --map map0 --every 2
+# One-shot / baseline view (not following train; default --every 2, compact off)
+python -m rl.watch --policy ftg --map map0
 python -m rl.watch --policy ppo --map map0 --n-envs 4 --every 5
+
+# Env overrides (when flags omitted): RL_WATCH_EVERY=10  RL_WATCH_COMPACT=0|1
 
 # Training curves only
 tensorboard --logdir rl/runs

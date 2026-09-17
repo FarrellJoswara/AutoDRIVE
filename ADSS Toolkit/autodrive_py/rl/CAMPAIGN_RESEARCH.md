@@ -1,15 +1,15 @@
 # CAMPAIGN_RESEARCH.md — Evidence-based guidance (9h)
 
-**Status:** COMPLETE (standing researcher — tick 0, ~2026-09-17 03:59 America/Chicago).  
+**Status:** COMPLETE (standing researcher `f4ac2241` — tick W3 confirm, ~2026-09-17 04:09 America/Chicago).  
 **Role:** Standing research brief for the orchestrator (resumed ~every 50 min with proposals).  
 **Scope:** GPU/CPU, continuous retrain, fast validation, UI ROI, map curriculum, explicit non-builds, MUST Go/No-Go evidence.  
 **Sources:** `PLAN.md`, `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md`, `CAMPAIGN_LOG.md`, `CAMPAIGN_BOARD.md`, `research_notes.md`, `ideas_review/{02_speed,campaign_racer,campaign_minimalist,campaign_reliability}.md`, plus mechanisms in `train_ppo.py`, `racing_env.py`, `control_ui.py` / `ui_ops.py`, `live_status.py`, `eval_protocol.*`, `map_pack.py`.  
 **Rule:** Docs only — no implementation from this file unless fixing a research-proven bug.
 
 **Protected run (do not kill without Continue restart):** `overnight_soak_20260917_082739`  
-Live snapshot (tick 0): timesteps≈**208k**, steps/s≈**245**, phase=`learning`, n_envs=8 Subproc, `crash_rate_estimate=0.0`, lock held, `latest_model` writing. Sacred overnight knobs **present in `config.json`**: `race_eval_every=50000`, `select_timeout_s=220`, warmup_evals=2, min_timesteps=100000, patience=5, unlimited. GPU ~20–40% still = **CPU-bound**, not a CUDA mandate ([`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md)).
+Live snapshot (W3 confirm ~04:09): timesteps≈**295k**, phase=`validating` (map3, select_timeout=220, patience=5, warmup_evals=2, no_improve=0), lock pid=**19244**, `collision_first=false`. Sacred knobs still in `config.json`: `race_eval_every=50000`, `select_timeout_s=220`, warmup=2, min_ts=100k, patience=5. Mid-train pause is **honest validating**, not stuck. GPU idle still = CPU-bound ([`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md)).
 
-**Overnight note:** this soak has `collision_first: false` / `speed_gate: false` (ttc_truncate true). Collision-first MUST work is a **parallel short smoke**, not a mid-run morph of the protected soak.
+**Overnight note:** soak keeps `collision_first: false` (Overnight preset). Collision-first MUST = UI expose (W2/W3 shipped) + **parallel A/B crash_rate** — never morph this soak mid-run.
 
 ---
 
@@ -183,12 +183,12 @@ Start/Stop ownership, preview, Continue, presets, map gen + thumbs, model load/d
 
 ### Gym → AutoDRIVE transfer (observe this 9h — do not build P3)
 
-Bridge `:4567` / Jetson / latency product stays **Phase 3** (after sealed holdout beat-FTG). Gym work must not drift from that eventual bridge:
+**W3 decision:** SHIP constraint note only; **SKIP** bridge / Jetson / latency product this window. Bridge `:4567` stays **Phase 3** (after sealed holdout beat-FTG). Gym work must not drift from that eventual bridge:
 
 - **Freeze contracts `2.0.0`** — obs dim / action space / beam ABI stay refuse-load on mismatch (eval, resume, Watch, Continue). No “temporary” obs reshape for gym speed.
 - **Mid-train DR already counts** — keep light LiDAR noise/dropout (and existing spawn/curriculum levers); do not invent a second DR stack or full actuator-lag theater this window.
 - **No privileged GT in observations** for faster gym wins — shaping may use map GT / contact in reward; race obs stays LiDAR + legal proprio. Do not add IPS/pose/progress channels then plan to strip at bridge.
-- **Document, don’t implement** — latency/actuator match and sim-to-sim calibration are constraints to *not violate*, not tickets to ship before FTGΔ.
+- **Document, don’t implement** — latency/actuator match and sim-to-sim calibration are constraints to *not violate*, not tickets to ship before FTGΔ / holdout podium.
 
 ### Anti-patterns
 
@@ -209,7 +209,7 @@ Hard skips aligned with critique + PLAN serialization:
 | Bridge `:4567` / Jetson / TensorRT / camera | Phase 3 gated on holdout beat-FTG |
 | SAC / Dreamer / PBT / meta-RL / constrained RL first | Algo zoo before collision + overnight |
 | Residual FTG / BC warm-start **before** crash rate drops + overnight survives | Cosplay assist |
-| Watch aesthetics / seasons / ghost carnival | Unofficial; pixels ≠ policy |
+| Watch carnival / seasons / ghost / embed-in-Control epic | Unofficial; pixels ≠ policy — **W3 exception:** compact overlay + glossary OK (operator honesty, not chrome) |
 | Map-regen-in-hot-loop / giant occupancy “sensors” | Slows CPU further; contracts freeze |
 | Unconstrained continuous retrain without patience/warmup/floor | Replays EarlyStop burn |
 | Second UI framework / Discord reward dial | Operator harm + non-repro |
@@ -220,19 +220,39 @@ Hard skips aligned with critique + PLAN serialization:
 
 ---
 
-## 7. Standing researcher — MUST queue evidence (tick 0)
+## 7. Standing researcher — MUST queue evidence (W3 confirm)
 
 Aligned with critique + racer + minimalist (+ reliability where it gates continuous). Full Go/No-Go narrative lives in [`CAMPAIGN_BOARD.md`](CAMPAIGN_BOARD.md).
 
-| # | MUST | Verdict | Evidence (tick 0) | Next proof |
-| - | ---- | ------- | ----------------- | ---------- |
-| 1 | Overnight early-stop regression lock | **GO — audit/smoke only** | `ui_ops`: select=220, floor=50k, warmup=2, min_ts=100k, Overnight preset wired; live soak config matches; still `learning` past 100k | Re-run `_overnight_soak_smoke` **only if** touching RaceBest/`ui_ops` constants; never lower them |
-| 2 | Continue-train soak | **GO — prove (deferred)** | `continue_train_argv` + ui_selftest paths exist; PLAN_PROGRESS still lists “Overnight continue soak after UI Stop” as **P1** | Short separate Stop→Continue same `run_id` **or** post-soak Continue — **do not** kill protected overnight to “prove” |
-| 3 | Collision-first → crash_rate down | **GO — short A/B** | Flags wired (`--collision-first`); overnight has flag **off**; live crash_rate=0 is not an A/B | ≤100k twin smokes with/without flag; compare `crash_rate_estimate`; no reward Discord; don’t touch overnight |
-| 4 | Official FTG vs PPO (FTGΔ) | **GO — read-only eval** | Leaderboard: FTG `official_v2` finisher ≈**198.16** s (n=15); **no** PPO `kind=official` / `official_v2` row yet | Eval current `best_model` (or last complete zip) under `official_v2`; publish Δ even if lose; seals intact |
-| 5 | Holdout/validation refuse | **GO — smoke** | `assert_train_safe` shipped; ui_selftest Start refuses map2/map3; overnight `allow_holdout/validation=false` | CLI `train_ppo --map map2|map3` exit≠0; pack `verify` before any official append |
+| # | MUST | Verdict | Evidence (W3 ~04:09) | Next proof |
+| - | ---- | ------- | -------------------- | ---------- |
+| 1 | Overnight early-stop regression lock | **PASS / hold** | Live soak ~295k in honest `validating` @220s; sacred knobs intact; Continue-restart earlier this hour survived | Touch RaceBest/`ui_ops` → re-smoke; else observe-only |
+| 2 | Continue-train soak | **PASS (CLI)** | W2: `_continue_soak_smoke` disposable run 1024→**2048**; Start/Continue no longer `_kill_train_tree` | Optional UI Stop→Continue once; never kill overnight to re-prove |
+| 3 | Collision-first → crash_rate down | **PARTIAL** | UI checkboxes + argv wired (W2/W3); overnight flag still **off** by design | **Still owed:** ≤100k A/B crash_rate with flag on vs off |
+| 4 | Official FTG vs PPO (FTGΔ) | **GO — owed** | FTG `official_v2` ≈198.16 s; still **no** PPO official_v2 row | Read-only official eval of best/complete zip; seals intact |
+| 5 | Holdout/validation refuse | **GO — smoke** | ui_selftest Start refuse map2/map3; soak allow=false | CLI refuse + pack verify before official append |
 
-**Reliability veto (before any continuous outer product):** heartbeat join race after `early_stopped`; Start/Continue→`_kill_train_tree` on busy false-negative can kill the protected soak ([`campaign_reliability.md`](ideas_review/campaign_reliability.md)). Continuous outer loop remains **NO-GO** this window.
+### Soft UX W3 vs Go/No-Go (confirm)
+
+| Decision | Verdict | Why it does / doesn’t violate |
+| -------- | ------- | ----------------------------- |
+| **SHIP** compact Watch + raise follow `--every` | **Go** | Design test: fewer misread KPIs; keeps lag-behind / unofficial; train stays headless; `test_watch_overlay` must stay green; ≠ carnival |
+| **SHIP** glossary / tooltips drawer | **Go** | Fewer wrong Starts / misread Validating·patience·official vs smoke; extend `title=` / small drawer — not second UI |
+| **SKIP** Control reskin | **Correct No-Go** | Cosmetics; risks Overnight preset / refuse copy |
+| **SKIP / DEFER** embed Watch-in-Control | **Correct** | Conditional unmet (perf + MUST queue); re-vote only after #3 A/B + operators still dual-window blocked |
+| **SKIP** bridge / Jetson | **Correct No-Go** | P3; transfer = observe constraints only (§5 note) |
+
+Soft UX is **optional** behind remaining race work — do not starve MUST #3 A/B or #4 FTGΔ.
+
+### Next-tick priorities (after MUST #2 / #3 path)
+
+1. **Finish #3:** short collision-first A/B → publish crash_rateΔ (or honest null).  
+2. **#4 FTGΔ:** official PPO row vs pinned FTG when a complete zip is ready (soak mid-validate OK to wait).  
+3. **#5 holdout CLI smoke** if not logged green this hour.  
+4. Soft: implement W3 SHIP compact Watch + glossary **only if free hands**; re-vote embed later.  
+5. Still **NO-GO:** continuous outer loop, GPU theater, reskin, bridge.
+
+**Reliability note:** Start/Continue kill-tree removed (W2) — good. Continuous outer loop still **NO-GO** until heartbeat-join race after `early_stopped` is closed ([`campaign_reliability.md`](ideas_review/campaign_reliability.md)).
 
 ---
 

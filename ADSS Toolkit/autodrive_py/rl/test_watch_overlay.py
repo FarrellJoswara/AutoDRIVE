@@ -143,6 +143,40 @@ def test_kpi_lines_drop_ghost_rows_when_ghost_disabled():
     assert lines[-1].startswith("train")
 
 
+def test_kpi_lines_compact_keeps_race_drops_session():
+    """Compact overlay: live score + short train; drops session dump / dense train row."""
+    from .watch import _kpi_lines
+
+    twins = FleetKpi(2, "PPO")
+    twins.start_episode(2)
+    twins.record({"progress": 0.1, "collision": False})
+    twins.end_episode()
+    twins.start_episode(2)
+
+    class _GhostStub:
+        def __init__(self):
+            self.kpi = FleetKpi(1, "FTG")
+            self.kpi.start_episode(1)
+
+        def line(self) -> str:
+            return "FTG  ghost dump row"
+
+    status = {
+        "timesteps": 12000,
+        "steps_per_sec": 200.0,
+        "collisions_estimate": 3,
+        "ep_rew_mean": 1.2,
+    }
+    full = _kpi_lines(twins, _GhostStub(), status, compact=False)
+    compact = _kpi_lines(twins, _GhostStub(), status, compact=True)
+    assert any(ln.startswith("PPO") for ln in compact)
+    assert any("vs FTG" in ln or "ahead" in ln or "delta" in ln for ln in compact)
+    assert len(compact) < len(full)
+    assert not any("ghost dump" in ln for ln in compact)
+    assert any(ln.startswith("train ts") for ln in compact)
+    assert not any("rew" in ln for ln in compact)
+
+
 def test_map_mismatch_and_contracts_banners():
     map_yaml = resolve_map_yaml("map0", MAPS_ROOT)
     same = {"maps": [str(map_yaml)]}

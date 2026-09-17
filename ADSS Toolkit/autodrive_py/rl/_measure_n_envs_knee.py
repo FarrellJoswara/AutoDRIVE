@@ -25,13 +25,14 @@ def _live_train_blocks(*, force: bool) -> str | None:
     """Refuse competing with a protected overnight unless --force."""
     if force:
         return None
-    from .live_status import find_latest_status, read_live_status
+    from .live_status import find_latest_status
     from .metrics_io import run_lock_path
     from .ui_ops import lock_owner
 
-    st_path = find_latest_status(RL_DIR / "runs")
-    if st_path is not None:
-        live = read_live_status(st_path) or {}
+    found = find_latest_status(RL_DIR / "runs")
+    if found is not None:
+        _st_path, live = found
+        live = live or {}
         phase = str(live.get("phase") or "")
         rid = str(live.get("run_id") or "")
         if phase in ("learning", "validating", "saving", "starting") and rid:
@@ -39,8 +40,8 @@ def _live_train_blocks(*, force: bool) -> str | None:
             if owner and owner.get("alive"):
                 return (
                     f"Refuse: live train {rid} phase={phase} pid={owner.get('pid')} "
-                    f"(steps/s≈{live.get('steps_per_sec')}). Do not steal cores from "
-                    f"a protected soak — wait for idle, or pass --force."
+                    f"(steps/s~{live.get('steps_per_sec')}). Do not steal cores from "
+                    f"a protected soak - wait for idle, or pass --force."
                 )
     # Any alive train.lock under models/
     if MODELS_DIR.is_dir():

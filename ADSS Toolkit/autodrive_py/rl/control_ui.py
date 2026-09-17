@@ -1253,10 +1253,11 @@ def _launch_watch(map_id: str, n_envs: int, *, model_path: Path | None = None) -
         "--map",
         str(map_id),
         "--every",
-        "5",
+        "8",
         "--n-envs",
         str(n_envs),
         "--no-beams",
+        "--compact",
     ]
     creationflags = 0
     if sys.platform == "win32":
@@ -1599,7 +1600,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "reliability-nokill-hbjoin+w2-20260917"
+UI_BUILD = "w3-ux-soft-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1607,23 +1608,24 @@ HTML = """<!DOCTYPE html>
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <style>
-body{font-family:Consolas,monospace;margin:16px;background:#111;color:#ddd;max-width:900px}
-h1{font-size:18px;color:#8f8} button{margin:4px 4px 4px 0;padding:8px 12px;font:inherit;cursor:pointer}
-input,select{font:inherit;padding:4px;margin:2px 8px 2px 0;background:#222;color:#eee;border:1px solid #555}
-.row{margin:10px 0} .box{border:1px solid #444;padding:10px;margin:12px 0;background:#1a1a1a}
-.budget-row{border:1px solid #485;background:#152018;padding:8px 10px;margin:12px 0;border-radius:2px}
+body{font-family:Consolas,monospace;margin:16px;background:#111;color:#ddd;max-width:920px;line-height:1.35}
+h1{font-size:18px;color:#8f8;letter-spacing:0.02em} button{margin:4px 4px 4px 0;padding:8px 12px;font:inherit;cursor:pointer;border-radius:3px;border:1px solid #555;background:#2a2a2a;color:#eee}
+button:hover{border-color:#7a7;background:#303830}
+input,select{font:inherit;padding:4px;margin:2px 8px 2px 0;background:#222;color:#eee;border:1px solid #555;border-radius:2px}
+.row{margin:10px 0} .box{border:1px solid #444;padding:12px;margin:12px 0;background:#1a1a1a;border-radius:3px}
+.budget-row{border:1px solid #485;background:#152018;padding:8px 10px;margin:12px 0;border-radius:3px}
 .ok{color:#8f8} .bad{color:#f88} .warn{color:#fc8} label{display:inline-block;min-width:220px}
 .hint{color:#888;font-size:12px;margin:4px 0 0 0} input[type=range]{width:260px;vertical-align:middle}
 .maprow{display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;margin-top:8px}
 .mapsel{flex:0 0 auto;min-width:180px}
 .mapsel select{min-width:160px;display:block;margin-top:4px}
-#map_preview_wrap{flex:0 0 auto;border:1px solid #444;background:#000;padding:4px}
+#map_preview_wrap{flex:0 0 auto;border:1px solid #444;background:#000;padding:4px;border-radius:2px}
 #map_preview{display:block;width:256px;height:256px;object-fit:contain;background:#000}
 #map_preview_label{color:#888;font-size:12px;margin-top:4px}
 a.tb{color:#8cf;font-size:15px;font-weight:bold}
 #train_toggle.running{background:#522;color:#fcc;border:1px solid #a44}
 #train_toggle.stopped{background:#253;color:#cfc;border:1px solid #484}
-#banner{font-size:16px;font-weight:bold;padding:6px 8px;border:1px solid #444;background:#181818}
+#banner{font-size:16px;font-weight:bold;padding:8px 10px;border:1px solid #444;background:#181818;border-radius:3px}
 .state-Learning{color:#8f8} .state-Idle{color:#aaa} .state-Saving{color:#8cf}
 .state-Validating{color:#8cf} .state-EarlyStop{color:#8cf}
 .state-Stopping{color:#fc8} .state-Stale{color:#fc8} .state-Crashed{color:#f88}
@@ -1633,33 +1635,70 @@ td,th{border:1px solid #333;padding:3px 5px;text-align:left;vertical-align:top}
 th{color:#8cf} td button{padding:2px 6px;margin:1px}
 .seal{color:#fc8} .small{font-size:12px;color:#999}
 #preview{white-space:pre-wrap;color:#bdb;font-size:13px}
+.term{border-bottom:1px dotted #666;cursor:help}
+details.glossary{margin:10px 0;border:1px solid #345;background:#14181c;border-radius:3px;padding:6px 10px}
+details.glossary summary{cursor:pointer;color:#8cf;font-weight:bold;list-style:none}
+details.glossary summary::-webkit-details-marker{display:none}
+details.glossary summary::before{content:"? ";color:#8cf}
+.glossary dl{margin:8px 0 4px 0;display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:4px 12px;font-size:12px}
+.glossary dt{color:#9cf;margin:0} .glossary dd{margin:0;color:#bbb}
 </style></head><body>
-<h1>AutoDRIVE RL — control (ugly)</h1>
+<h1>AutoDRIVE RL — control</h1>
 <p class="hint">ui build: <b id="ui_build">__UI_BUILD__</b> · hard-refresh (Ctrl+F5) if this looks stale</p>
+<details class="glossary" id="glossary">
+  <summary>Glossary — plain English for RL knobs</summary>
+  <dl>
+    <dt title="Not wall-clock seconds">timesteps</dt>
+    <dd>Practice steps the cars take. A safety budget / cap — not “minutes until smart.”</dd>
+    <dt>early-stop</dt>
+    <dd>Quit when validation race score stops improving for N checks (patience). Patience 0 = only stop at timesteps / manual Stop.</dd>
+    <dt>patience</dt>
+    <dd>How many no-improvement validation checks before EarlyStop. Overnight uses 5.</dd>
+    <dt>adjusted_time</dt>
+    <dd>Official race score: lap time + 10×collisions (seconds). Lower is better. Never use ep_rew for ranking.</dd>
+    <dt>holdout</dt>
+    <dd>Sealed map reserved for fair final tests. Start refuses it unless you tick “allow sealed.”</dd>
+    <dt>validation</dt>
+    <dd>Pinned mid-train race map / score used for early-stop. Banner <b>Validating</b> = this race is running (timesteps freeze briefly — not stuck).</dd>
+    <dt>n_envs</dt>
+    <dd>Parallel practice sims (CPU workers). Higher = faster data, more CPU. Watch shows this many twin cars.</dd>
+    <dt>rollouts</dt>
+    <dd>How many PPO data-collection batches finished. Rough “iteration” counter — not lap count.</dd>
+    <dt>Validating</dt>
+    <dd>Mid-train official-style race eval. Freezes timesteps while it runs; promotes best_model / ticks patience.</dd>
+    <dt>EarlyStop</dt>
+    <dd>Clean exit because learning plateaued (patience). Exit code 0 with a reason — not a crash.</dd>
+    <dt>Watch lag-behind</dt>
+    <dd>Separate window replaying latest weights. Not live train poses; KPIs are unofficial.</dd>
+    <dt>fast probe</dt>
+    <dd>Optional short NON-OFFICIAL progress sniff. Never promotes / never ticks patience. Leave off overnight.</dd>
+  </dl>
+</details>
 <div class="box">
-  <div id="banner" class="state-Idle">Idle</div>
+  <div id="banner" class="state-Idle" title="What’s happening now: Idle / Learning / Validating / EarlyStop / Stopping / Crashed">Idle</div>
   <div class="small" id="banner_reason">no trainer</div>
   <div style="margin-top:8px"><b>Live train status</b> (from live_status.json — auto-refresh 0.75s)</div>
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
   <div>run_id: <b id="rid">-</b></div>
-  <div>timesteps: <b id="ts">-</b></div>
-  <div>ep_rew_mean: <b id="rew">-</b></div>
-  <div>n_envs (parallel sims): <b id="ne">-</b> &nbsp; vec: <b id="vec">-</b></div>
+  <div><span class="term" title="Practice steps taken (not wall-clock). Safety budget when Stop-on-budget is ON.">timesteps</span>: <b id="ts">-</b></div>
+  <div>ep_rew_mean: <b id="rew">-</b> <span class="small"> — shaping signal only; rank with adjusted_time</span></div>
+  <div><span class="term" title="Parallel practice sims / CPU workers. Watch uses this many colored twins.">n_envs</span> (parallel sims): <b id="ne">-</b> &nbsp; vec: <b id="vec">-</b></div>
   <div>steps/sec: <b id="sps">-</b> &nbsp; crash rate: <b id="crash">-</b>
     &nbsp; status age: <b id="age">-</b></div>
   <div>episodes (est.): <b id="eps">-</b> &nbsp; collisions (est.): <b id="cols">-</b></div>
   <div>progress probe (smoke): <b id="prog">-</b>
     <span class="small"> — mean ep progress; not official / never promotes</span></div>
-  <div>rollouts: <b id="rolls">-</b></div>
+  <div><span class="term" title="PPO data-collection batches finished (iteration-ish). Not lap count.">rollouts</span>: <b id="rolls">-</b></div>
   <div>latest_model: <span id="latest">-</span></div>
   <div>status file: <span id="stpath">-</span></div>
   <div>log: <span id="log">-</span></div>
   <div>msg: <span id="msg" class="warn">-</span></div>
-  <p class="hint">Train stays headless. Watch map shows cars only (per-car speed); curves in TensorBoard.</p>
+  <p class="hint">Train stays headless. Watch map shows cars only (per-car speed); curves in TensorBoard.
+  Watch follow defaults: <code>--every 8 --compact</code> (snappier on weak machines; denser overlay via <code>--no-compact</code>).</p>
 </div>
 <div class="box">
-  <div><b>Coach / health</b> <span class="small">(heuristics — official ranking is adjusted_time, never ep_rew)</span></div>
+  <div><b>Coach / health</b> <span class="small">(heuristics — official ranking is <span class="term" title="Lap time + 10×collisions; lower is better.">adjusted_time</span>, never ep_rew)</span></div>
   <ul class="coach" id="coach"><li>—</li></ul>
 </div>
 <div class="box">
@@ -1728,7 +1767,7 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
   </div>
   <div class="row">
     <label for="race_eval_every"
-           title="Run a validation race-eval (and patience check) every N timesteps. 0 = auto (~10% of budget, floor 25k; ~25k when budget off) when patience &gt; 0; end-only when patience is 0. Higher N = fewer mid-train pauses.">Eval every N timesteps</label>
+           title="Run a validation race-eval (and patience check) every N timesteps. 0 = auto (~10% of budget, floor 25k; ~25k when budget off) when patience &gt; 0; end-only when patience is 0. Higher N = fewer mid-train pauses. Banner Validating = mid-train race (not stuck).">Eval every N timesteps</label>
     <input id="race_eval_every" type="number" value="0" min="0" step="1000" style="width:120px"
            oninput="schedulePreview()"
            title="0 = auto when early-stop is on (~25k when budget off). Explicit e.g. 50000 = fewer pauses. Each eval briefly freezes timesteps (banner: Validating).">
@@ -1739,16 +1778,18 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
   Banner <b>Validating</b> = mid-train race (not stuck); <b>EarlyStop</b> = clean exit 0 with reason.</p>
 
   <div class="row">
-    <label for="n_envs">Parallel sims / CPU workers</label>
-    <input id="n_envs" type="range" min="1" max="32" value="8" oninput="syncN()">
+    <label for="n_envs" title="How many parallel practice sims (CPU workers). Higher = faster data collection, more CPU. Watch follow opens this many colored twin cars.">Parallel sims / CPU workers</label>
+    <input id="n_envs" type="range" min="1" max="32" value="8" oninput="syncN()"
+           title="Applies on Start. Stop+Start to change. Weak machine? try 4–8.">
     <b id="n_envs_val">8</b>
   </div>
   <p class="hint">Applies when you press Start. Stop + Start to change.
   Higher = more CPU and faster data collection. Watch uses this many colored twin cars.</p>
 
   <div class="row">
-    <label for="allow_holdout">Allow sealed / pinned map</label>
-    <input id="allow_holdout" type="checkbox" onchange="schedulePreview()">
+    <label for="allow_holdout" title="OFF (default): Start refuses sealed [HOLDOUT] and pinned [VALIDATION] maps so official scores stay meaningful. ON = override (claims on those maps are void).">Allow sealed / pinned map</label>
+    <input id="allow_holdout" type="checkbox" onchange="schedulePreview()"
+           title="Leave off unless you intentionally want to train on holdout/validation.">
     <span class="small">off = Start refuses [HOLDOUT] and [VALIDATION] maps (keeps official scores meaningful)</span>
   </div>
   <div class="row">
@@ -1778,7 +1819,7 @@ th{color:#8cf} td button{padding:2px 6px;margin:1px}
 
   <div class="row">
     <button id="train_toggle" class="stopped" type="button" onclick="toggleTrain()">Start training</button>
-    <button type="button" onclick="act('watch')">Open watch --follow</button>
+    <button type="button" onclick="act('watch')" title="Opens lag-behind Watch (--follow --every 8 --compact). Separate process; KPIs unofficial.">Open watch --follow</button>
     <button type="button" onclick="act('stop_watch')">Stop Watch</button>
   </div>
   <p class="hint"><b>Stop</b> = operator halt (clears lock when verified dead) then <b>Continue</b> from last <b>complete</b> zip.

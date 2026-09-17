@@ -581,8 +581,16 @@ def test_http_surface() -> None:
         check("index has soft-stop Continue hint", "Soft-stop" in html or "complete" in html.lower())
         check(
             "index build stamp bumped",
-            'id="ui_build"' in html and ("w2-fast-wave" in html or "20260917" in html),
+            'id="ui_build"' in html and ("w3-ux-soft" in html or "20260917" in html),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
+        )
+        check(
+            "index has glossary drawer",
+            'id="glossary"' in html
+            and "timesteps" in html
+            and "adjusted_time" in html
+            and "holdout" in html.lower()
+            and "Validating" in html,
         )
 
         st = _http(base, "/api/status")

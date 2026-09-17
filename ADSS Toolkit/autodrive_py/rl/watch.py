@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from pathlib import Path
 
@@ -47,6 +48,34 @@ MAX_CRASH_MARKERS = 40
 MARKER_MERGE_M = 0.8
 # Hold the last frame of an episode so crash marks are actually seen.
 EPISODE_HOLD_MS = 450
+# Follow redraw default (higher = snappier on weak machines; override with --every / RL_WATCH_EVERY).
+FOLLOW_EVERY_DEFAULT = 8
+STANDALONE_EVERY_DEFAULT = 2
+
+
+def _env_bool(name: str) -> bool | None:
+    """Parse ``1/true/yes/on`` vs ``0/false/no/off``; unset → None."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    v = str(raw).strip().lower()
+    if not v:
+        return None
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _env_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return None
 
 
 def _viewer_quit(viewer: MapViewer | None, code: int = 0) -> int:
@@ -846,8 +875,12 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--every",
         type=int,
-        default=2,
-        help="Redraw every N steps (higher = lighter; try 5-10 if laggy)",
+        default=None,
+        help=(
+            "Redraw every N steps (higher = lighter / snappier on weak machines). "
+            f"Default: {FOLLOW_EVERY_DEFAULT} in --follow, {STANDALONE_EVERY_DEFAULT} standalone; "
+            "override with RL_WATCH_EVERY."
+        ),
     )
     parser.add_argument(
         "--episodes",
@@ -910,13 +943,33 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--compact",
-        action="store_true",
-        help="Fewer overlay lines (live score + beat-FTG + short train ts). Unofficial KPIs only.",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Fewer overlay lines (live score + beat-FTG + short train ts). "
+            "Default ON in --follow; OFF standalone. Env RL_WATCH_COMPACT=0|1 overrides when flag omitted."
+        ),
     )
     args = parser.parse_args(argv)
 
     if not args.follow and int(args.n_envs) <= 0:
         args.n_envs = 1
+
+    env_every = _env_int("RL_WATCH_EVERY")
+    if args.every is None:
+        if env_every is not None and env_every > 0:
+            args.every = env_every
+        else:
+            args.every = FOLLOW_EVERY_DEFAULT if args.follow else STANDALONE_EVERY_DEFAULT
+    args.every = max(1, int(args.every))
+
+    env_compact = _env_bool("RL_WATCH_COMPACT")
+    if args.compact is None:
+        if env_compact is not None:
+            args.compact = env_compact
+        else:
+            # Follow: declutter by default; standalone keeps the denser session dump.
+            args.compact = bool(args.follow)
 
     if args.follow:
         if args.episodes == 5:

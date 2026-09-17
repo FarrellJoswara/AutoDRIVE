@@ -9,6 +9,92 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## W5 — Standing bugfix / perf team — ~04:11 Chicago
+- **id:** `20260917-W5-bugfix-perf-team`
+- **type:** tick / wave (user soft suggestion)
+- **proposal:** Standing **bug-fixing / performance** process that searches for bugs + improvement opportunities on code that will **stick around** (stable cores), not throwaway / about-to-rewrite surfaces; also hunts performance boosts. Soft ask: board may SHIP process + first audit.
+- **overnight plan:** Observe-only `overnight_soak_20260917_082739`. Audit docs only this wave — no train-path morph, no kill/Continue, no reward Discord. P0 one-liners only if overnight-safe; else ticket in `CAMPAIGN_BUGFIX.md`.
+
+### Scope (in / out)
+
+| Surface | Verdict | Why |
+| ------- | ------- | --- |
+| `contracts.py`, `racing_env.py` reward/physics | **IN** | Sacred ABI + race math; sticks |
+| `live_status.py`, `metrics_io` / `checkpoint_io` atomic IO | **IN** | Overnight trail + promote safety |
+| `map_pack.py` seals / `assert_train_safe` | **IN** | Holdout integrity |
+| `train_ppo` SubprocVecEnv path | **IN** | Throughput honesty for long runs |
+| Cosmetic Control/Watch chrome, Gradio/React, bridge stubs | **OUT** | About to change / P3 / not race |
+| Continuous outer / reward auto-mutation | **OUT** | Already SKIP (W4) |
+
+### Personality votes
+
+#### Standing process: `CAMPAIGN_BUGFIX.md` + periodic stable-core audits → **SHIP**
+- **Researcher:** **Go** — Soft suggestion grounded; audit of sticky cores compounds overnight value; cite real skim findings (map resolve fallback, lock TOCTOU, Subproc silent Dummy, LiDAR Python loop, latest.zip every rollout). Out-of-scope chrome correctly excluded.
+- **Racer:** **Approve** — Finding train-integrity / sps leaks helps adjusted_time more than UI polish; refuse chrome audits.
+- **Minimalist:** **Approve** — One standing md + tick duty; no new subsystem, no refactor epic this wave.
+- **Reliability:** **Approve** — Process protects seals/locks/Continue surfaces; must not touch live soak; P0 code only if one-liner + selftest-safe.
+
+### Integrator gate (decisive)
+
+**SHIP (process + first audit):**
+1. Standing artifact [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md) — ranked P0/P1/P2 from real skim of IN-scope files.
+2. Governance: Bugfix seat / recurring duty each tick (see `CAMPAIGN_GOVERNANCE.md`).
+3. **Do not** implement large refactors this wave. Ticket fixes; overnight-safe P0 one-liners only when free hands after MUST queue.
+
+**SKIP:** Auditing / rewriting UI chrome, bridge stubs, Auto-train product expansion, reward PBT.
+
+**Acceptance (this SHIP):**
+1. Board entry exists (`20260917-W5-bugfix-perf-team`).
+2. `CAMPAIGN_BUGFIX.md` lists ≥5 ranked findings with file cites + next action.
+3. Governance mentions Bugfix / audit duty on ticks.
+4. Overnight soak untouched.
+
+**Resume-me:** Next tick — pick top P0/P1 from `CAMPAIGN_BUGFIX.md` that is small + overnight-safe; re-skim after any MUST ship that touches env/IO; do not starve collision A/B or FTGΔ for chrome.
+
+---
+
+## RESULTS — W3 SHIP soft UX — 2026-09-17 ~04:15 America/Chicago
+- **id:** `20260917-W3-soft-ux-ship`
+- **type:** result
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739`; no train-path display; no bridge/embed.
+- **SHIP 1 Watch compact + `--every`:** **DONE** — `--compact` / `--no-compact` + env `RL_WATCH_COMPACT`; follow **default compact ON**; follow `--every` default **8** (was UI-hardcoded 5; CLI follow now 8 vs standalone 2); env `RL_WATCH_EVERY`; Control UI Open Watch passes `--every 8 --compact`. Overlay keeps live race score + beat-FTG + short `train ts|/s`; drops session dump / dense train counters. README documented.
+- **SHIP 2 Glossary / tooltips:** **DONE** — `<details id="glossary">` plain-English drawer (timesteps, early-stop, patience, adjusted_time, holdout, validation, n_envs, rollouts, Validating, EarlyStop, Watch lag-behind, fast probe) + dotted `title=` hints on live status rows; thin same-DOM CSS (spacing/radius/hover only — no reskin).
+- **SKIP unchanged:** drastic Control reskin · embed Watch · bridge/Jetson.
+- **UI_BUILD:** `w3-ux-soft-20260917`
+- **Tests:** `.venv` `python -m rl.test_watch_overlay` **13/13 PASS**; `python -m rl.ui_selftest` **all checks passed** (glossary + build stamp).
+
+---
+
+## FAST implementer wave — 2026-09-17 ~04:10 America/Chicago
+
+- **id:** `20260917-W2-fast-impl-curriculum-seals`
+- **type:** ship / self-vote
+- **proposal:** Implement SHIP-aligned UI ROI without densifying mid-train eval or touching sacred overnight constants.
+- **overnight plan:** observe-only intended; **incident:** `ui_selftest` HTTP `op=stop` killed protected soak mid-validation (~295k). **Mitigation:** Continue same `run_id` from `ppo_295480_steps.zip` with overnight argv (select=220, eval=50k, warmup=2, min_ts=100k, patience=5, unlimited). Selftest Stop path now mocks `_kill_train_tree` / external scan. **Do not re-run unmocked Stop while soak is live.**
+
+### Shipped (this wave)
+
+| Item | Letter | What | Test |
+| ---- | ------ | ---- | ---- |
+| Collision-first UI | **B** | Checkbox + tooltip + Start argv `--collision-first` + preview line | `ui_selftest` index/preview collision_first |
+| Continue UX / curriculum restore | **A** | Soft-stop copy; Continue restores `collision_first`/`speed_gate` from `config.json`; confirm dialog shows flags | continue_train_argv curriculum checks |
+| Honest progress probe (status-only) | **C** (lean) | `live_status.mean_progress_frac_estimate` + `progress_probe_kind=smoke` + UI row — **no promote / not official** | index label + status payload |
+| Seal-verify button | **D** | `Verify pack seals` → `seal_verify_summary` / `verify_pack` | `test_seal_verify` + HTTP `verify_seals` → `SEALS OK \| maps_ok=6/6` |
+| n_envs knee script | **E** (deferred tooling) | `python -m rl._measure_n_envs_knee` refuses live train.lock; coach hint when sps low | refuse-on-live path; board W2 still **DEFER** full ship |
+
+### Self-vote
+
+- **Racer:** Approve B/A/D — crash curriculum exposed + Continue integrity + seals before FTGΔ. C OK if labeled smoke. E later.
+- **Minimalist:** Approve — expose existing argv/flags; no new subsystem; knee script optional.
+- **Reliability:** Approve with caveat — Stop-in-selftest must stay mocked; Continue restore after accidental kill is the correct recovery. Block any further unmocked Stop against overnight.
+- **Integrator:** **SHIP** B+A+D (+ lean C). **DEFER** knee coach as primary product (script OK). **SKIP** denser mid-train select / continuous outer.
+
+### Explicit non-goals this wave
+
+No GPU/AMP · no continuous outer loop · no lowering select/eval floors · no morph of overnight `collision_first` mid-run.
+
+---
+
 ## W4 — Auto-train pipeline triage — ~04:09 Chicago
 - **id:** `20260917-W4-auto-train-pipeline`
 - **type:** tick / wave (user soft suggestion)
