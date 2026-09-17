@@ -147,7 +147,7 @@ Campaign / history (do not delete — organize via index):
 | [`CAMPAIGN_BUGFIX.md`](CAMPAIGN_BUGFIX.md) | Stable-core bugs |
 | [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) | Soft ideas (not mandates) |
 | [`PLAN.md`](PLAN.md) / [`PLAN_PROGRESS.md`](PLAN_PROGRESS.md) | Longer roadmap |
-| [`ideas_review/`](ideas_review/) | Personality deep-dives |
+| [`ideas_review/README.md`](ideas_review/README.md) | Personality deep-dives (indexed) |
 | [`IDEAS_TRIMMED.md`](IDEAS_TRIMMED.md) / [`IDEAS_MEGA.md`](IDEAS_MEGA.md) | Idea archaeology |
 
 ---
@@ -282,6 +282,6 @@ python -m rl.auto_train --dry-run
 5. Roadmap: [`PLAN.md`](PLAN.md) → [`PLAN_PROGRESS.md`](PLAN_PROGRESS.md)
 6. Contracts: [`contracts.md`](contracts.md)
 7. Soft / UI / bugfix inboxes: `CAMPAIGN_SUGGESTIONS.md`, `CAMPAIGN_UI.md`, `CAMPAIGN_BUGFIX.md`
-8. Personality archives: `ideas_review/`, `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md`, `CAMPAIGN_RESEARCH.md`
+8. Personality archives: [`ideas_review/README.md`](ideas_review/README.md), `IDEAS_TRIMMED.md`, `CAMPAIGN_CRITIQUE.md`, `CAMPAIGN_RESEARCH.md`
 
 History is append-only for board/suggestions — **organize with links, don’t delete.**
