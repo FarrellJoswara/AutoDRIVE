@@ -54,6 +54,7 @@ from .ui_ops import (
     start_preview,
     safe_run_id,
     write_operator_run_pin,
+    clear_operator_run_pin,
 )
 
 RL_DIR = Path(__file__).resolve().parent
@@ -780,6 +781,25 @@ def _focus_run(run_id: str) -> str:
     else:
         note += " (not live - status may show last trail; Start still refuses other live locks)"
     return _set_msg(note)
+
+
+def _clear_focus() -> str:
+    """Drop CURRENT_RUN pin so banner falls back to UI-owned / highest live timesteps."""
+    global _train_run_id
+    had = bool(_preferred_operator_run_id())
+    clear_operator_run_pin(LOGS_DIR)
+    with _state_lock:
+        # Keep UI-owned live run_id if training; otherwise clear adopted pin.
+        proc = _train_proc
+        ui_alive = bool(proc is not None and proc.poll() is None)
+        if not ui_alive:
+            _train_run_id = None
+    _invalidate_ext_train_cache()
+    if had:
+        return _set_msg(
+            "Focus cleared — banner follows live train / highest timesteps (no CURRENT_RUN pin)."
+        )
+    return _set_msg("Focus already clear (no CURRENT_RUN pin).")
 
 
 def _live_timesteps_for_run(run_id: str | None) -> int:
@@ -1870,7 +1890,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w10-fix-start-pin-20260917"
+UI_BUILD = "w10-clear-focus-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1986,7 +2006,9 @@ details.glossary summary::before{content:"? ";color:#8cf}
   <div id="banner_reason" title="When Validating: scheduled race eval — not hung. Official protocol stays 400s / 5 seeds — do not densify overnight.">no trainer</div>
   <div class="sec" style="margin-top:8px">Live train status <span class="small">(from live_status.json — auto-refresh 0.75s)</span></div>
   <div id="bound_targets">bound: —</div>
-  <div class="small" style="margin:4px 0">Live runs (Focus = CURRENT_RUN pin for status ranking; does not Start/Stop/kill)</div>
+  <div class="small" style="margin:4px 0">Live runs (Focus = CURRENT_RUN pin for status ranking; does not Start/Stop/kill)
+    <button type="button" onclick="clearFocus()" title="Remove CURRENT_RUN pin. Banner falls back to the UI-owned live train, else highest live timesteps.">Clear focus</button>
+  </div>
   <ul id="live_runs"><li class="small">no live train.lock</li></ul>
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
@@ -2432,13 +2454,16 @@ function renderLiveRuns(rows, boundId){
     return '<li class="' + (sel ? 'selected' : '') + '">'
       + '<span><b>' + esc(rid) + '</b>' + badge + '</span>'
       + '<span class="small">pid=' + esc(r.pid) + ' · ' + esc(r.phase) + ' · ts=' + esc(ts) + ' · /s=' + esc(sps) + '</span>'
-      + (sel ? '<span class="small">focused</span>'
+      + (sel ? '<span class="small">focused</span> <button type="button" onclick="clearFocus()">Unfocus</button>'
            : '<button type="button" onclick="focusRun(\\'' + esc(rid).replace(/'/g, '') + '\\')">Focus</button>')
       + '</li>';
   }).join('');
 }
 function focusRun(runId){
   act('focus_run', {run_id: runId}).then(refresh);
+}
+function clearFocus(){
+  act('clear_focus').then(refresh);
 }
 async function refresh(){
   try {
@@ -2588,6 +2613,7 @@ async function act(op, extra){
   else if (op === 'watch') msgEl.textContent = 'Launching watch…';
   else if (op === 'stop_watch') msgEl.textContent = 'Stopping watch…';
   else if (op === 'focus_run') msgEl.textContent = 'Focusing run (status pin)…';
+  else if (op === 'clear_focus') msgEl.textContent = 'Clearing focus pin…';
   else if (op === 'load_model') msgEl.textContent = 'Loading model into watch…';
   else if (op === 'delete_model') msgEl.textContent = 'Deleting…';
   else if (op === 'gen_maps') msgEl.textContent = 'Generating maps… (a few seconds)';
@@ -2868,6 +2894,8 @@ class Handler(BaseHTTPRequestHandler):
             msg = _stop_all()
         elif op == "focus_run":
             msg = _focus_run(run_id)
+        elif op == "clear_focus":
+            msg = _clear_focus()
         elif op == "watch":
             msg = _launch_watch(map_id, n_envs)
         elif op == "stop_watch":

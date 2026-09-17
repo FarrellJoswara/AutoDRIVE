@@ -82,6 +82,22 @@ def write_operator_run_pin(logs_dir: Path, run_id: str) -> Path:
     return path
 
 
+def clear_operator_run_pin(logs_dir: Path) -> bool:
+    """Remove Focus pin (``CURRENT_RUN.txt``). Returns True if a pin was cleared."""
+    pin = Path(logs_dir) / "CURRENT_RUN.txt"
+    try:
+        if not pin.is_file():
+            return False
+        pin.unlink()
+        return True
+    except OSError:
+        try:
+            pin.write_text("\n", encoding="utf-8")
+            return True
+        except OSError:
+            return False
+
+
 def resolve_stop_budget(
     *,
     stop_on_budget: bool = True,
