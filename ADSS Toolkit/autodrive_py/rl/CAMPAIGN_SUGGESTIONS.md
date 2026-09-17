@@ -32,6 +32,79 @@
 
 ---
 
+## Wave 3 — 2026-09-17 ~04:36 Chicago (idea-factory cycle 2)
+
+**wave-id:** `20260917-W10-sug-wave3`  
+**board:** `20260917-W10-idea-factory`  
+**count:** 7 · all **soft**
+
+#### S-20260917-W10-01 — Preserve crash_rate across validating writes (P1-8)
+- **soft:** yes
+- **area:** reliability
+- **why:** RaceBest `_write_status` overwrote trail and blanked `crash_rate_estimate` → MUST #3 A/B `INCONCLUSIVE_MISSING_CRASH`.
+- **concrete:**
+  - Merge prior crash/stall/progress counters into RaceBest validating/learning status writes.
+- **risks / refuse:** No overnight morph; library-only until next train process.
+- **triage:** SHIP
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-02 — Stall rate in live_status + Control
+- **soft:** yes
+- **area:** train / UX
+- **why:** Tick0 A/B was stall-heavy with 0 crash%; operators need stall% separate from crash%.
+- **concrete:**
+  - Count Monitor `stall` eps; expose `stall_rate_estimate`; thin Control row.
+- **risks / refuse:** In-memory overnight still old code until Continue.
+- **triage:** SHIP
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-03 — Watch compact shows Focus pin run_id
+- **soft:** yes
+- **area:** UX
+- **why:** Carry-over W9-03; CURRENT_RUN helpers already shared.
+- **concrete:** Compact strip `run=<id>` from pin / status.
+- **risks / refuse:** No embed.
+- **triage:** DEFER
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-04 — atomic_write_json Windows lock retry (P1-4)
+- **soft:** yes
+- **area:** reliability
+- **why:** UI can raise mid-read of config while train writes.
+- **concrete:** Same retry/fallback as `write_live_status`.
+- **risks / refuse:** Overnight observe-only.
+- **triage:** DEFER (next bugfix tick)
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-05 — Spawn jitter refuse occupied base (P1-6)
+- **soft:** yes
+- **area:** train
+- **why:** After 24 rejects, base pose may still collide.
+- **concrete:** Raise / resample from centerline if base occupied.
+- **risks / refuse:** Disposable A/B only; no overnight morph.
+- **triage:** DEFER
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-06 — Obs buffer prealloc (PERF-6)
+- **soft:** yes
+- **area:** perf
+- **why:** Tiny alloc win vs LiDAR cast; measure before cast rewrite.
+- **concrete:** Preallocate obs buffer on env reset.
+- **risks / refuse:** Contracts freeze; measure sps first.
+- **triage:** DEFER
+- **board:** `20260917-W10-idea-factory`
+
+#### S-20260917-W10-07 — Continuous outer / reward Discord
+- **soft:** yes
+- **area:** train
+- **why:** SKIP-forever repeats.
+- **concrete:** —
+- **risks / refuse:** Overnight sacred.
+- **triage:** SKIP (hard)
+- **board:** `20260917-W10-idea-factory`
+
+---
+
 ## Wave 2 — 2026-09-17 ~04:30 Chicago (idea-factory)
 
 **wave-id:** `20260917-W9-sug-wave2`  

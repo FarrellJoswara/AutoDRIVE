@@ -7,9 +7,10 @@ Launch (from ADSS Toolkit/autodrive_py):
 Train stays headless. This process starts/stops train + optional TensorBoard,
 and reads live_status.json. Watch opens in a separate console.
 
-W8 multi-run (UI_BUILD=w8-multi-run-20260917): Live runs list, Focus →
-CURRENT_RUN.txt, banner prefers max live timesteps, Start lock warn, Stop
-confirm on selected run. See HANDOFF.md. Overnight soak is never kill-swept.
+W8 multi-run: Live runs list, Focus → CURRENT_RUN.txt, banner prefers max
+live timesteps, Start lock warn, Stop confirm on selected run. See HANDOFF.md.
+Overnight soak is never kill-swept. Page ``UI_BUILD`` may be a later stamp;
+hard-refresh if the Live runs list is missing.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from .ui_ops import (
     model_timeline,
     precheck_model,
     race_candidate,
+    read_operator_run_pin,
     resolve_model_choice,
     resolve_stop_budget,
     run_curriculum_flags,
@@ -51,6 +53,7 @@ from .ui_ops import (
     start_guard,
     start_preview,
     safe_run_id,
+    write_operator_run_pin,
 )
 
 RL_DIR = Path(__file__).resolve().parent
@@ -639,17 +642,11 @@ def _invalidate_ext_train_cache() -> None:
 
 def _preferred_operator_run_id() -> str | None:
     """Optional operator pin (logs/CURRENT_RUN.txt) — used when several trains run."""
-    pin = LOGS_DIR / "CURRENT_RUN.txt"
-    try:
-        text = pin.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return text or None
+    return read_operator_run_pin(LOGS_DIR)
 
 
 def _set_operator_run_pin(run_id: str) -> None:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    (LOGS_DIR / "CURRENT_RUN.txt").write_text(str(run_id).strip() + "\n", encoding="utf-8")
+    write_operator_run_pin(LOGS_DIR, run_id)
 
 
 def _list_live_runs(*, selected_run: str | None = None) -> list[dict]:

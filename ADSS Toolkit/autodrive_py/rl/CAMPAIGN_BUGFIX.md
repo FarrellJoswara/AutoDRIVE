@@ -31,7 +31,7 @@
 | **P1-5** | `live_status.py` / Monitor | Crash-rate estimate depends on Monitor `info_keywords`; Subproc + Dummy parity OK today, but any env thunk without those keywords → **silent 0 crash_rate**. | **FIXED:** `MONITOR_INFO_KEYWORDS` constant in `train_ppo._make_env` + bugfix. |
 | **P1-6** | `racing_env.py` `_apply_spawn_jitter` ~361–371 | After 24 rejects, returns **base pose** even if base were occupied (bad map start). | If base colliding, raise / resample from centerline. |
 | **P1-7** | Subproc fallback `train_ppo.py` | Fallback to Dummy used to log WARNING only; operators could believe `n_envs` parallel while serial. | **FIXED (fail-loud):** ERROR log + `vec_env_fallback` in config/`live_status`; `--require-subproc` hard-refuses Dummy. Fallback kept as safety net. |
-| **P1-8** | RaceBest / `live_status` final-val trail | After mid-train / final validation, status payload often **drops `crash_rate_estimate`** (RaceBest overwrite). MUST #3 A/B analyzer sees `INCONCLUSIVE_MISSING_CRASH` even when wiring OK (`_campaign_ab_report`). | When writing validating / post-val learning msg, **merge** prior crash/episode counters (or recompute from Monitor) instead of blanking. Coord meta-spawner; do not morph overnight. |
+| **P1-8** | RaceBest / `live_status` final-val trail | After mid-train / final validation, status payload often **drops `crash_rate_estimate`** (RaceBest overwrite). MUST #3 A/B analyzer sees `INCONCLUSIVE_MISSING_CRASH` even when wiring OK (`_campaign_ab_report`). | **FIXED (W10):** RaceBest `_write_status` merges prior crash/stall/progress trail counters instead of blanking. |
 
 ---
 

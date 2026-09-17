@@ -11,6 +11,16 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — Meta CURRENT_RUN pin selftest — ~04:42 America/Chicago
+- **id:** `20260917-meta-pin-selftest`
+- **type:** result / gap-fill
+- **tool:** `python -m rl._pin_selftest [--observe-live]`
+- **overnight:** observe-only — live pin left as `overnight_soak_20260917_082739` (temp-dir roundtrip only)
+- **SHIP:** temp read/write/blank hygiene for `ui_ops.read/write_operator_run_pin`; `--observe-live` prints Focus pin without mutate
+- **Tests:** 4/4 PASS + live OBS pin matches protected soak
+
+---
+
 ## RESULTS — W10 idea-factory cycle 2 — ~04:37 America/Chicago
 - **id:** `20260917-W10-idea-factory`
 - **type:** wave / result
