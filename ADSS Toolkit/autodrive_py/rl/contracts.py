@@ -1,4 +1,9 @@
-"""Frozen interface constants — contracts.md v2.0.0."""
+"""Frozen interface constants — contracts.md v2.0.0.
+
+Obs dim = N_LIDAR + 6 (prev action ×2, speed, IMU ×3). Action MultiDiscrete[4,11].
+Race score λ=10: ``adjusted_time = lap_time + 10·collisions``.
+Do not load v1 LiDAR-only zips into a v2 env (refuse-load in ``compat``).
+"""
 
 from __future__ import annotations
 
