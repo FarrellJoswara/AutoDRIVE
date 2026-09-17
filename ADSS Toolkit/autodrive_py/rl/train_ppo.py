@@ -40,7 +40,7 @@ from .metrics_io import (
     release_run_lock,
     write_run_artifacts,
 )
-from .racing_env import RacingEnv, resolve_map_yaml
+from .racing_env import RacingEnv, assert_resolved_map_id, resolve_map_yaml
 from .ui_ops import (
     AUTO_RACE_EVAL_EVERY_FLOOR,
     DEFAULT_EARLY_STOP_MIN_TIMESTEPS,
@@ -761,6 +761,11 @@ def main(argv=None) -> int:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--vec-env", type=str, choices=("dummy", "subproc"), default="dummy")
+    parser.add_argument(
+        "--require-subproc",
+        action="store_true",
+        help="Fail (nonzero) if SubprocVecEnv was requested but Dummy fallback is used",
+    )
     parser.add_argument("--n-steps", type=int, default=2048)
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--n-epochs", type=int, default=10)
@@ -970,7 +975,11 @@ def main(argv=None) -> int:
         for issue in pack_report.get("issues", []):
             print(f"  - {issue}")
 
-    map_yamls = [resolve_map_yaml(m, maps_root) for m in map_ids]
+    map_yamls = []
+    for m in map_ids:
+        resolved = resolve_map_yaml(m, maps_root, strict=True)
+        assert_resolved_map_id(m, resolved)
+        map_yamls.append(resolved)
     map_hashes = {p.stem: map_file_hash(p) for p in map_yamls}
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1123,7 +1132,8 @@ def main(argv=None) -> int:
     # Select best_model on the pinned validation map, never on trained geometry.
     val_id = validation_map(maps_root)
     if val_id and not args.allow_validation:
-        select_maps = [resolve_map_yaml(val_id, maps_root)]
+        select_maps = [resolve_map_yaml(val_id, maps_root, strict=True)]
+        assert_resolved_map_id(val_id, select_maps[0])
         print(f"best_model selection map: {val_id} (validation pin, not trained on)")
     else:
         select_maps = map_yamls
