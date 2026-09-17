@@ -11,6 +11,37 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — W10 idea-factory cycle 2 — ~04:37 America/Chicago
+- **id:** `20260917-W10-idea-factory`
+- **type:** wave / result
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739`. Stall/P1-8 land in-memory only after next train spawn/Continue.
+- **Prior tick ship:** Watch validating ≠ TRAIN STALE (`ad5dd05`).
+- **Ideas:** 7 soft ideas in `CAMPAIGN_SUGGESTIONS.md` Wave 3 (`S-W10-01…07`).
+
+### Triage
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| S-W10-01 | Preserve crash/stall counters across RaceBest validating (P1-8) | **SHIP** |
+| S-W10-02 | Stall rate live_status + Control row | **SHIP** |
+| S-W10-03 | Watch compact Focus run_id | **DEFER** |
+| S-W10-04 | atomic_write_json Win lock retry (P1-4) | **DEFER** |
+| S-W10-05 | Spawn jitter occupied-base refuse (P1-6) | **DEFER** |
+| S-W10-06 | Obs buffer prealloc (PERF-6) | **DEFER** |
+| S-W10-07 | Continuous outer / reward Discord | **SKIP** (hard) |
+
+### Personality votes — P1-8 + stall → **SHIP**
+
+- **Researcher:** **Go** — grounded in MUST #3 inconclusive crashΔ + BUGFIX P1-8; cite RaceBest `_write_status` blanking trail.
+- **Racer:** **Approve** — stall% vs crash% honesty helps collision-first A/B; Block denser eval.
+- **Minimalist:** **Approve** — merge keys + one Control field; refuse PERF epics.
+- **Reliability:** **Approve** — merge-only; overnight observe-only.
+- **Integrator:** **SHIP** S-01/02; `UI_BUILD=w10-stall-p18-20260917`.
+
+**Resume-me:** Next cycle — P1-4 lock retry or Watch pin overlay; never overnight kill.
+
+---
+
 ## Wave — Close official FTGΔ (+8.52 s) + stall-metric — ~04:33 America/Chicago
 - **id:** `20260917-ftgdelta-close-wave`
 - **type:** tick / research wave + thin SHIP

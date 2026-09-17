@@ -622,7 +622,7 @@ def test_http_surface() -> None:
             and 'id="op_targets"' in html
             and "focus_run" in html
             and "__startLockWarn" in html
-            and ("w9-idea-factory" in html or "w8-multi-run" in html),
+            and ("w9-idea-factory" in html or "w8-multi-run" in html or "w10-stall" in html),
         )
         check(
             "index has glossary drawer",

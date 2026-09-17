@@ -392,19 +392,42 @@ def RaceBestModelCallback(*args, **kwargs):
             # Never let validating/learning heartbeat clobber a terminal phase.
             if self.early_stopped and not is_terminal_phase(phase):
                 return
+            prev = None
+            try:
+                from .live_status import read_live_status
+
+                prev = read_live_status(self.status_path)
+            except OSError:
+                prev = None
             if not is_terminal_phase(phase):
                 # Also honor a terminal phase already on disk (join race window).
-                try:
-                    from .live_status import read_live_status
-
-                    prev = read_live_status(self.status_path)
-                except OSError:
-                    prev = None
                 if prev and is_terminal_phase(prev.get("phase")):
                     return
             payload = self._status_base()
             payload["phase"] = phase
             payload["msg"] = msg
+            # P1-8: RaceBest overwrites the trail — merge prior crash/stall counters
+            # so MUST #3 A/B analyzers do not see INCONCLUSIVE_MISSING_CRASH mid-val.
+            if prev:
+                for key in (
+                    "crash_rate_estimate",
+                    "collisions_estimate",
+                    "episode_count_estimate",
+                    "stall_rate_estimate",
+                    "stalls_estimate",
+                    "mean_progress_frac_estimate",
+                    "progress_probe_kind",
+                    "steps_per_sec",
+                    "ep_rew_mean",
+                    "rollouts",
+                    "n_updates",
+                    "n_envs",
+                    "vec_env_active",
+                    "vec_env_fallback",
+                    "latest_model",
+                ):
+                    if payload.get(key) is None and prev.get(key) is not None:
+                        payload[key] = prev[key]
             try:
                 write_live_status(self.status_path, payload)
             except OSError as exc:
