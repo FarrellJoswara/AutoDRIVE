@@ -706,13 +706,18 @@ def _resolve_selected_run(
     """Banner / Watch / Stop bind to one selected run_id (W8-02).
 
     Order: UI-owned alive → CURRENT_RUN pin if still live → highest live
-    timesteps (overnight >> short A/B smokes) → UI-owned / pin trail → None.
-    Never silently flips away from a still-live selected/pinned run.
+    timesteps (overnight >> short A/B smokes) → UI-owned trail → None.
+
+    Never keep a dead Focus/pin (e.g. finished overnight) over a live train —
+    that paints early_stopped metrics as Stale while a new Start is learning.
     """
     live_ids = {str(r["run_id"]) for r in live_rows}
     preferred = _preferred_operator_run_id()
 
-    if ui_alive and ui_owned_run:
+    if ui_alive and ui_owned_run and ui_owned_run in live_ids:
+        return ui_owned_run
+    if ui_alive and ui_owned_run and not live_ids:
+        # Spawned but lock not visible yet — trust UI-owned id.
         return ui_owned_run
     if preferred and preferred in live_ids:
         return preferred
@@ -730,6 +735,7 @@ def _resolve_selected_run(
         return str(best["run_id"])
     if ui_owned_run:
         return ui_owned_run
+    # Dead pin only when nothing is live (show last overnight trail when Idle).
     return preferred
 
 
@@ -1094,6 +1100,9 @@ def _spawn_train(
         _train_log = log_path
         _train_n_envs = _clamp_n_envs(n_envs)
         _last_exit_code = None
+    # Banner/Focus must follow THIS start — a leftover overnight pin shows
+    # early_stopped @ 1.3M + "Stale" while the new train is actually learning.
+    _set_operator_run_pin(run_id)
     _invalidate_ext_train_cache()
 
     # Keep child stdout open via inherited handle; close only our duplicate.
@@ -1634,11 +1643,22 @@ def _status_payload() -> dict:
         ui_alive=ui_alive,
         live_rows=inventory,
     )
+    # If UI thinks it owns a dead pin (finished overnight) but a different
+    # train_ppo is alive, rebind to the live lock / external argv run_id.
+    live_ids = {str(r["run_id"]) for r in inventory}
+    if train_alive and selected and selected not in live_ids and live_ids:
+        selected = _resolve_selected_run(
+            ui_owned_run=None,
+            ui_alive=False,
+            live_rows=inventory,
+        )
     run_id = selected
     if selected and not ui_alive:
         with _state_lock:
-            if _train_run_id != selected:
-                _train_run_id = selected
+            # Never clobber UI state with a dead overnight pin while locks live.
+            if selected in live_ids or not live_ids:
+                if _train_run_id != selected:
+                    _train_run_id = selected
             cand = LOGS_DIR / f"{selected}.log"
             if cand.is_file():
                 _train_log = cand
@@ -1648,6 +1668,11 @@ def _status_payload() -> dict:
             if row.get("run_id") == selected and row.get("pid") is not None:
                 train_pid = row.get("pid")
                 break
+    elif selected and ui_alive and ui_run_id and ui_run_id not in live_ids and selected in live_ids:
+        # Start landed but Focus/pin still named the finished soak — snap to live.
+        with _state_lock:
+            _train_run_id = selected
+        _set_operator_run_pin(selected)
 
     tb_ui = bool(tb is not None and tb.poll() is None)
     tb_port = _port_in_use(TB_HOST, TB_PORT)
@@ -1845,7 +1870,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w10-js-fix-focusrun-20260917"
+UI_BUILD = "w10-fix-start-pin-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
