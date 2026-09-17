@@ -9,6 +9,86 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## W4 — Auto-train pipeline triage — ~04:09 Chicago
+- **id:** `20260917-W4-auto-train-pipeline`
+- **type:** tick / wave (user soft suggestion)
+- **proposal:** Soft ask for an **Auto-train** button/pipeline that trains → evals lap/adjusted times → continuously gens maps → auto-adjusts reward/knobs → farms many “best” models unattended. Re-triage vs W2 #5 SKIP (continuous outer) after Reliability P0 no-kill/hb-join SHIP + disposable Continue soak PASS.
+- **overnight plan:** Observe-only `overnight_soak_20260917_082739`. Auto-train must **never** Start/Continue/kill/morph the protected soak. No reward Discord mid-run. No map regen in the train hot loop.
+
+### Critique (decisive)
+
+| Capability | Verdict | Why |
+| ---------- | ------- | --- |
+| Reward / sacred-knob **auto-mutation** | **SKIP forever (this campaign)** | Incomparable runs; reward hacking; poisons `race_score_key` / EarlyStop meaning; PLAN forbid Discord dial |
+| Hot map cycling **on overnight** / dual-Start while soak live | **SKIP** | Dual-writer + overnight murder risk; W2 Reliability Block still applies to *unattended* product until chaos drills |
+| Holdout / validation pin in train list | **SKIP** | `assert_train_safe` sacred; voids official claims |
+| Map **autogen** then train | **OK only offline** | `map_pack`/`trackgen` cache → `train_safe_maps()` + `assert_train_safe` + fingerprint; never gen inside `step`; never sealed ids |
+| Outer chain: train_ok → early-stop → official eval → archive → next pack seed/map | **SHIP thin scaffold only** | Matches RESEARCH §2/§5 “supervised outer shell”; does **not** change overnight math |
+| Unattended multi-hour scheduler / Overnight companion | **DEFER** | Continue+early-stop proven on **disposable** only; chaos drills (reliability §) still open; P0 cleared *code* blockers, not drill gate |
+
+### Personality votes
+
+#### A. Full auto-reward-mutation + overnight hot map cycling → **SKIP**
+- **Researcher:** **No-Go** — RESEARCH §2 Pitfall A/B + §6; reward morph = nonstationarity + leaderboard soup; overnight cycle fights dual-writer/sacred floors.
+- **Racer:** **Block** — KILL #5 still; chrome autopilot ≠ adjusted_time; farming incomparable “bests” is vanity.
+- **Minimalist:** **Block** — refuse Discord reward dial + continuous cosplay; cut the feature, not the guard.
+- **Reliability:** **Block** — unattended kill/dual-Start/sacred-math regression; chaos drills unmet.
+
+#### B. Unattended outer scheduler (Control/Overnight companion) → **DEFER**
+- **Researcher:** **Conditional unmet** — RESEARCH §2 scaffold rules OK in principle, but unattended product waits on chaos drills + soft-stop→Continue on a **non-toy** path (disposable Continue PASS ≠ overnight Continue north star closed).
+- **Racer:** **Abstain / later** — podium first (collision↓, FTGΔ); scheduler after finishers exist.
+- **Minimalist:** **Approve defer** — no second autopilot product this 9h.
+- **Reliability:** **Block enablement** until drills 1–8 green; P0 no-kill only clears *code* veto, not product veto.
+
+#### C. Thin scaffold (design + CLI; no mutation; no overnight touch) → **SHIP**
+- **Researcher:** **Go** — documented contract + `auto_train.py` that **only** chains existing primitives; frozen hparams; `train_ok` only; official eval labeled; cap `--max-runs`.
+- **Racer:** **Approve** — scaffold later was always fine; thin chain can mint comparable candidates **if** protocol fixed and maps train_ok-only.
+- **Minimalist:** **Approve** — one CLI file + refuse walls; **no** reward API; UI = disabled opt-in stub with warnings (no Gradio/React).
+- **Reliability:** **Approve thin only** — must refuse live `train.lock`, refuse `overnight_soak_*` run_ids, refuse `--allow-holdout`, never call `_kill_train_tree`, never mutate patience/select/eval floors, never auto-append `kind=official` without seals path.
+
+### Integrator gate (decisive)
+
+**SKIP (hard):** reward/knob auto-adjust · overnight hot map cycling · holdout autotrain · kill/morph protected soak · unconstrained continuous-until-plateau product · auto-`kind=official` spam.
+
+**DEFER:** enabling Auto-train as Overnight companion / unattended multi-hour UI Start; map **generation** inside the chain (operators generate offline via existing map_pack UI/CLI first); chaos-drill-gated scheduler.
+
+**SHIP (thin) — allowed implementation scope:**
+1. **Design note** (this entry + short module docstring) = contract of record.
+2. **`rl/auto_train.py` CLI scaffold** (opt-in, default dry-run):
+   - Resolve next map/seed from pack ⊆ `train_safe_maps()` → `assert_train_safe` → spawn `train_ppo` with **fingerprinted frozen** knobs (sacred early-stop floors untouched) → wait `phase=early_stopped` or clean exit → run **official** eval protocol path → archive `best_model`/metrics artifact under run dir → advance to next **declared** train_ok id / seed.
+   - Hard refuses: any live lock/PID; run_id matching protected overnight; holdout/validation maps; reward/flag mutation flags; `--max-runs` default **1** (cap ≤3 for smoke); Start while another train live.
+3. **UI:** optional **disabled-by-default** “Auto-train (EXPERIMENTAL)” control with loud warning copy; must not wire a live spawn until chaos drills — preview/refuse only this wave is OK.
+4. **Do not** implement reward search, online mapgen, or overnight chaining in this ship.
+
+### Acceptance tests (thin SHIP)
+
+1. `python -m rl.auto_train --help` documents refuses (overnight, holdout, reward mutation, live lock).
+2. Dry-run prints planned argv + map ids; exits 0; **spawns nothing**.
+3. `assert_train_safe` path: requesting map2/map3/map4 → nonzero exit; no process start.
+4. Live-lock refuse: with overnight/other `train.lock` present → nonzero; does not kill.
+5. Protected-name refuse: `--run-id overnight_soak_*` (or configured protected id) → nonzero.
+6. Single-run smoke (disposable run_id only): train_ok map → early-stop or short budget → official eval artifact written; `kind=official` only via protocol+seals; no reward keys changed in `config.json` vs template.
+7. `ui_selftest` (if UI stub added): Auto-train control **disabled** by default; enabling shows warning; Start path still no-kill.
+8. Regression: overnight sacred constants / RaceBest / dual-writer tests still green; `python -m rl.ui_selftest` PASS with soak surviving.
+
+**Orchestrator:** implement **thin SHIP only** when free hands after MUST queue; otherwise leave as design+stub ticket. Soft suggestion ≠ override collision/Continue/FTGΔ.
+
+**Resume-me:** Researcher — next tick: (1) do **not** expand Auto-train into reward PBT/mapgen product; (2) re-vote **DEFER→SHIP enablement** only after chaos drills + overnight soft-stop→Continue evidence; (3) if thin CLI lands, verify acceptance #3–#6 on disposable ids only; (4) keep overnight observe-only.
+
+---
+
+## Tick — W3 soft UX confirm — 2026-09-17 ~04:09 America/Chicago
+- **id:** `20260917-W3-soft-ux-confirm`
+- **researcher:** `f4ac2241`
+- **type:** tick / confirm
+- **soak:** observe-only — `overnight_soak_20260917_082739` @ ~**295k**, phase=`validating` (map3, timeout=220, no_improve=0), lock pid=19244, `collision_first=false`. Sacred knobs intact.
+- **W3 soft UX vs Go/No-Go:** **CONFIRMED** — SHIP compact Watch + glossary (**Go**, operator honesty); SKIP reskin / embed / bridge (**correct No-Go**). Soft optional behind race MUST; do not starve #3 A/B or #4 FTGΔ. Transfer = research constraint note only (§5) — no P3 code.
+- **MUST status:** #1 hold · #2 CLI PASS (W2 continue soak) · #3 PARTIAL (UI wired; **A/B crash_rate still owed**) · #4 FTGΔ owed · #5 smoke when free.
+- **Next tick priorities:** (1) collision-first ≤100k A/B crash_rateΔ · (2) official PPO vs FTG when zip ready · (3) holdout CLI if needed · (4) W3 SHIP Watch/glossary only if free hands · re-vote embed later.
+- **NO-GO unchanged:** continuous outer · GPU theater · Control reskin · bridge.
+
+---
+
 ## SHIP — Reliability P0 (heartbeat join + Start/Continue no-kill) — ~04:08 Chicago
 
 - **id:** `20260917-reliab-p0-nokill-hbjoin`

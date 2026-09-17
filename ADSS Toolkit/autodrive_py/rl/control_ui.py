@@ -1203,11 +1203,12 @@ def _launch_watch(map_id: str, n_envs: int, *, model_path: Path | None = None) -
             "--model",
             str(model_path),
             "--every",
-            "3",
+            "5",
             "--n-envs",
             "1",
             "--no-beams",
             "--deterministic",
+            "--compact",
         ]
         creationflags = 0
         if sys.platform == "win32":
