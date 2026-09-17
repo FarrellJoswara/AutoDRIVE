@@ -1,29 +1,29 @@
 # AutoDRIVE F1TENTH RL — Interface Contracts
 
 ```yaml
-contracts_version: "1.0.0"
+contracts_version: "2.0.0"
 ```
 
 ## 1. Purpose
 
-This document is the **Phase 1 interface lock** for the AutoDRIVE F1TENTH / RoboRacer RL stack under `autodrive_py/rl/`.
+This document is the **interface lock** for the AutoDRIVE F1TENTH / RoboRacer RL stack under `autodrive_py/rl/`.
 
 Phases **3–6** (Gym FTG, Gym PPO + registry, AutoDRIVE Bridge, cross-eval) **must** implement observation, action, reward bookkeeping, episode termination semantics, metrics schema, and model artifact layout as specified here.
 
 **Breaking change rule:** any incompatible change to obs/action shapes, discrete bin mappings, metrics field meanings, or artifact paths **requires** a `contracts_version` bump (SemVer: MAJOR for breaks, MINOR for additive non-breaking fields, PATCH for clarifications). Downstream code that reads `config.json` / `metrics.json` must refuse to load artifacts whose major version does not match the runtime contracts major.
 
-This file is documentation-only for Phase 1 (no runtime). Later phases may soft-consume earlier artifacts but must not silently reinterpret these contracts.
+**v2.0.0 vs v1.0.0:** observation width grew from `N_lidar + 2` → `N_lidar + 6` (speed + compact IMU). Artifacts / zips trained under `1.x` are **obsolete** and must not be loaded against a v2 env.
 
 ---
 
-## 2. Observation space (LiDAR-primary)
+## 2. Observation space (LiDAR + legal proprioception)
 
 ### 2.1 Design intent
 
 - Race-time observation must be buildable from **non-restricted** sensors only.
-- **LiDAR ranges** are the primary modality.
-- **Previous action** (decoded continuous controls) is always included for temporal context.
-- **Camera is out of contract for Phases 1–6** (legal in competition but deferred; do not add camera channels to the Gymnasium `observation_space` without a version bump).
+- **LiDAR ranges** remain the primary modality.
+- **Previous action**, **speed** (encoders / velocity proxy), and a **compact IMU** are always included so later sensor wiring does **not** force an input-layer reshape for those channels.
+- **Camera is out of contract** (legal in competition but deferred). Do **not** add raw pixels or a large `vision_pad` of zeros. Vision = future **MAJOR** contracts bump and/or a separate head.
 - Prefer **excluding** restricted ground-truth topics (global pose, map occupancy as GT, opponent GT, etc.) from the observation. Reward shaping may use GT **during training only** (see §4.5).
 
 ### 2.2 Downsampled LiDAR
@@ -56,74 +56,86 @@ lidar_obs = r / 10.0                         # shape (N_lidar,), ∈ [0, 1]
 
 Do **not** feed raw MultiDiscrete indices into the observation; always decode first.
 
-### 2.4 Optional speed proxy (default: OFF)
+Actuator feedback distinct from the commanded prev action is **not** duplicated in v2 (prev action is the clean temporal context).
 
-A scalar speed proxy may be appended **only** if derived without restricted race-time GT, e.g.:
-
-- consecutive LiDAR scan differencing (heuristic), or
-- wheel / drive **encoders** exposed as legal proprioception.
+### 2.4 Speed (always ON)
 
 | Field | Contract |
 | ----- | -------- |
-| Default | **Excluded** — v1.0.0 baseline obs does **not** include speed |
-| If enabled | Document `"obs_include_speed": true` and scaling in `config.json`; treat as a **MINOR** additive extension only if existing lidar+prev_action layout is preserved as a prefix |
-| Prefer | Keep speed out of obs for Phases 3–6 unless an experiment explicitly opts in |
+| Contents | 1 float: forward speed proxy |
+| Gym | Kinematic bicycle state `v` (m/s) |
+| Bridge | Wheel-encoder angle delta → `\|ω\| * wheel_radius` (or equivalent encoder speed), documented in adapter |
+| Normalize | `speed_norm = clip(v_mps / SPEED_MAX_MPS, 0, 1)` with **`SPEED_MAX_MPS = 6.0`** (must match env `v_max` / config) |
+| Range in obs | **`[0, 1]`** |
+| At `reset()` | `0.0` |
 
-Restricted topics (simulator ego pose as GT, map GT, etc.) must **not** be used to build the observation at race / eval time.
+Restricted IPS / global pose must **not** be the race-time speed source.
 
-### 2.5 Total observation dimension
+### 2.5 Compact IMU (always ON, dim = 3)
 
-**Baseline (v1.0.0):**
+| Index (within IMU slice) | Name | Phys units (pre-norm) | Normalize |
+| ------------------------ | ---- | --------------------- | --------- |
+| 0 | `yaw_rate` | rad/s | `clip(ω_z / 10.0, -1, 1)` — `YAW_RATE_MAX_RAD_S = 10.0` |
+| 1 | `ax` | m/s² longitudinal | `clip(ax / 10.0, -1, 1)` — `ACCEL_MAX_MPS2 = 10.0` |
+| 2 | `ay` | m/s² lateral | `clip(ay / 10.0, -1, 1)` |
+
+| Backend | Source |
+| ------- | ------ |
+| Gym | Bicycle proxies: `yaw_rate = (v/L)*tan(δ)`; `ax = Δv/dt`; `ay = v * yaw_rate` |
+| Bridge | `F1TENTH.angular_velocity[2]`, `F1TENTH.linear_acceleration[0]`, `[1]` |
+
+`az`, `wx`, `wy` are **not** in the v2 vector (adding them is a future MAJOR bump). At `reset()`, IMU slice is zeros.
+
+### 2.6 Total observation dimension
+
+**Baseline (v2.0.0):**
 
 ```text
-obs_dim = N_lidar + 2
-# default: 180 + 2 = 182
-# alt:     240 + 2 = 242
+obs_dim = N_lidar + 2 + 1 + 3
+#       = N_lidar + 6
+# default: 180 + 6 = 186
+# alt:     240 + 6 = 246
 ```
 
-If optional speed is enabled (non-default):
-
-```text
-obs_dim = N_lidar + 2 + 1
-```
-
-### 2.6 Gymnasium `Box` (concatenated)
+### 2.7 Gymnasium `Box` (concatenated)
 
 Observation vector layout (row-major, 1-D):
 
 ```text
-obs = concat([ lidar_obs[0:N_lidar], prev_throttle, prev_steering ])
-# indices:  0 .. N_lidar-1                 N_lidar   N_lidar+1
+obs = concat([
+  lidar_obs[0:N_lidar],   # [0, 1]
+  prev_throttle,          # [-1, 1]
+  prev_steering,          # [-1, 1]
+  speed_norm,             # [0, 1]
+  yaw_rate_n, ax_n, ay_n  # [-1, 1] each
+])
+# indices:
+#   0 .. N_lidar-1
+#   N_lidar, N_lidar+1
+#   N_lidar+2
+#   N_lidar+3 .. N_lidar+5
 ```
 
-**Bounds for the concatenated vector:**
+**Bounds:**
 
 | Slice | Indices | low | high |
 | ----- | ------- | --- | ---- |
 | LiDAR | `0 : N_lidar` | `0.0` | `1.0` |
 | Prev throttle | `N_lidar` | `-1.0` | `1.0` |
 | Prev steering | `N_lidar + 1` | `-1.0` | `1.0` |
-
-Implement as a single Gymnasium space:
+| Speed | `N_lidar + 2` | `0.0` | `1.0` |
+| IMU (3) | `N_lidar + 3 : N_lidar + 6` | `-1.0` | `1.0` |
 
 ```python
-import numpy as np
+from rl.observation import observation_bounds
 from gymnasium.spaces import Box
 
-N_lidar = 180  # or 240 if documented
-low  = np.concatenate([
-    np.zeros(N_lidar, dtype=np.float32),
-    np.array([-1.0, -1.0], dtype=np.float32),
-])
-high = np.concatenate([
-    np.ones(N_lidar, dtype=np.float32),
-    np.array([1.0, 1.0], dtype=np.float32),
-])
+low, high = observation_bounds(N_lidar=180)
 observation_space = Box(low=low, high=high, dtype=np.float32)
-# shape: (N_lidar + 2,)
+# shape: (186,) for N_lidar=180
 ```
 
-**Camera:** not part of `observation_space` for Phases 1–6.
+**Camera:** not part of `observation_space`. No zero `vision_pad` in v2.
 
 ---
 
@@ -280,13 +292,13 @@ An episode ends when any of the following is true:
 
 ## 6. Metrics schema (`metrics.json`)
 
-Written per run under `rl/models/<run_id>/metrics.json`. Field meanings are frozen for `contracts_version` `1.0.0`.
+Written per run under `rl/models/<run_id>/metrics.json`. Field meanings are frozen for `contracts_version` `2.0.0`.
 
 ### 6.1 Required fields
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `contracts_version` | string | Must be `"1.0.0"` for artifacts produced under this contract |
+| `contracts_version` | string | Must be `"2.0.0"` for artifacts produced under this contract |
 | `run_id` | string | Unique run directory name / id |
 | `policy` | string enum | `"ftg"` \| `"ppo"` |
 | `backend` | string enum | `"gym"` \| `"autodrive"` |
@@ -312,7 +324,7 @@ Written per run under `rl/models/<run_id>/metrics.json`. Field meanings are froz
 
 ```json
 {
-  "contracts_version": "1.0.0",
+  "contracts_version": "2.0.0",
   "run_id": "20260316_ppo_gym_porto",
   "policy": "ppo",
   "backend": "gym",
@@ -354,15 +366,19 @@ Must include at least:
 
 ```json
 {
-  "contracts_version": "1.0.0",
+  "contracts_version": "2.0.0",
   "run_id": "20260316_ppo_gym_porto",
   "policy": "ppo",
   "backend": "gym",
   "n_lidar": 180,
+  "obs_dim": 186,
   "action_space": "MultiDiscrete([4, 11])",
   "throttle_bins": [0.0, 0.33, 0.66, 1.0],
   "steering_bins": [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-  "obs_include_speed": false,
+  "obs_include_speed": true,
+  "obs_include_imu": true,
+  "imu_dim": 3,
+  "speed_max_mps": 6.0,
   "timeout_s": 60.0
 }
 ```
@@ -386,11 +402,12 @@ All paths above are relative to `ADSS Toolkit/autodrive_py/` (i.e. sibling of pa
 ## 8. Contract version
 
 ```yaml
-contracts_version: "1.0.0"
+contracts_version: "2.0.0"
 ```
 
 | Version | Status |
 | ------- | ------ |
-| `1.0.0` | Initial freeze — LiDAR 180 (+optional 240), MultiDiscrete `[4,11]`, collision-first reward, metrics + artifact layout as above |
+| `1.0.0` | Obsolete — LiDAR 180 + prev action only (`obs_dim = N_lidar + 2`) |
+| `2.0.0` | Current — LiDAR + prev action + speed + IMU×3 (`obs_dim = N_lidar + 6`); MultiDiscrete `[4,11]`; collision-first reward; metrics + artifact layout as above |
 
-**Compatibility:** loaders must check `contracts_version`. Same major (`1.x.x`) may add optional metrics/config fields; changing obs dim meaning, bin tables, or `adjusted_time` formula requires **`2.0.0`**.
+**Compatibility:** loaders must check `contracts_version`. Same major (`2.x.x`) may add optional metrics/config fields; changing obs dim meaning, bin tables, or `adjusted_time` formula requires **`3.0.0`**. Do not load `1.x` policy zips into a `2.x` env (input size mismatch).

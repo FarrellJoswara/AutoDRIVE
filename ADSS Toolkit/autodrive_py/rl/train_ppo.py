@@ -12,9 +12,11 @@ import numpy as np
 from .contracts import (
     CONTRACTS_VERSION,
     N_LIDAR_DEFAULT,
+    SPEED_MAX_MPS,
     STEERING_BINS,
     THROTTLE_BINS,
     TIMEOUT_S,
+    obs_dim,
 )
 from .metrics_io import make_metrics, write_run_artifacts
 from .racing_env import RacingEnv, resolve_map_yaml
@@ -308,7 +310,7 @@ def main(argv=None) -> int:
         "obs_include_speed": True,
         "obs_include_imu": True,
         "imu_dim": 3,
-        "obs_dim": int(env.observation_space.shape[-1]),
+        "obs_dim": obs_dim(args.n_lidar),
         "speed_max_mps": SPEED_MAX_MPS,
         "timeout_s": TIMEOUT_S,
         "timesteps": args.timesteps,
