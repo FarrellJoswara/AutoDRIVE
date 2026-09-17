@@ -1,5 +1,7 @@
 # Campaign keep-alive tick (parent prompt) — AGGRESSIVE CADENCE
 
+**Human friends:** start at [`HANDOFF.md`](HANDOFF.md) — this file is the agent tick prompt, not the operator runbook.
+
 **Sentinel:** `AGENT_LOOP_TICK_autodrive-rl-campaign`  
 **Interval:** **10 minutes (600s)** — not 50m. User mandate: ideas constantly worked; lots of well-implemented small features; no padding the remaining window.  
 **Deadline:** 2026-09-17 12:54 America/Chicago — after that, STOP the loop (kill loop shell PID; do not re-arm).  

@@ -1,4 +1,9 @@
-"""Map loading + LiDAR raycasting + kinematic bicycle racing env (Gymnasium)."""
+"""Map loading + LiDAR raycasting + kinematic bicycle racing env (Gymnasium).
+
+Used by ``train_ppo``, ``watch``, FTG runners, and eval. Reward shaping may use
+map GT during train; race observation stays contracts v2 (no IPS/pose channels).
+Restart train after editing this file so Subproc workers reload the env.
+"""
 
 from __future__ import annotations
 
