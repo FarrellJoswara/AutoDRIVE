@@ -400,7 +400,13 @@ def map_role(map_id: str, maps_dir: Path | None = None) -> dict[str, Any]:
 
 def start_guard(map_id: str, *, allow_holdout: bool = False, maps_dir: Path | None = None) -> tuple[bool, str]:
     """Refuse Start on a sealed holdout / pinned validation map unless overridden."""
-    info = map_role(map_id, maps_dir)
+    mid = str(map_id or "").strip()
+    if not mid:
+        return False, (
+            "Refuse Start: no track selected (empty map). "
+            "Pick a train_ok map in the Track dropdown — blank used to silently become map0."
+        )
+    info = map_role(mid, maps_dir)
     if info["train_safe"]:
         return True, ""
 
@@ -411,11 +417,11 @@ def start_guard(map_id: str, *, allow_holdout: bool = False, maps_dir: Path | No
     )
     if not allow_holdout:
         return False, (
-            f"Refuse Start: '{map_id}' is {what}. "
+            f"Refuse Start: '{mid}' is {what}. "
             "Tick 'allow sealed/pinned map' if you really mean to burn it."
         )
     return True, (
-        f"WARNING: training on '{map_id}' - {what}; official claims involving this map are void."
+        f"WARNING: training on '{mid}' - {what}; official claims involving this map are void."
     )
 
 

@@ -626,11 +626,15 @@ def resolve_map_yaml(
     map if the requested id is missing — that is CAMPAIGN_BUGFIX **B0.1**.
     Soft fallback to ``map*.yaml`` / ``demo`` remains for Watch/demo helpers only.
     """
+    mid = str(map_id).strip()
+    if not mid:
+        raise FileNotFoundError(
+            "Empty map id — refuse silent fallback to map0/demo"
+        )
     p = Path(map_id)
     if p.suffix in {".yaml", ".yml"} and p.exists():
         return p
     root = maps_root or (Path(__file__).resolve().parent / "maps")
-    mid = str(map_id)
     candidate = root / mid / f"{mid}.yaml"
     if candidate.exists():
         return candidate

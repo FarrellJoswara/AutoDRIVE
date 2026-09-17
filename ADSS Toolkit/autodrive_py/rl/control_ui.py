@@ -1186,6 +1186,12 @@ def _start_train(
     if not allowed:
         return _set_msg(guard_msg)
 
+    map_id = str(map_id or "").strip()
+    if not map_id:
+        return _set_msg(
+            "Refuse Start: Track dropdown is empty. Select a map, wait for the list to load, then Start."
+        )
+
     # NEVER _kill_train_tree() here. Busy false-negative + kill = dead overnight.
     # Refuse only; operator must Stop explicitly to kill.
 
@@ -1774,6 +1780,27 @@ def _status_payload() -> dict:
         f"(never {PROTECTED_OVERNIGHT_RUN}). Watch --follow = map + n_envs."
     )
 
+    train_maps: list[str] = []
+    validation_map_id: str | None = None
+    rid_for_cfg = bound or run_id
+    if rid_for_cfg and safe_run_id(str(rid_for_cfg)):
+        train_maps = run_map_ids(MODELS_DIR, str(rid_for_cfg))
+        cfg_path = MODELS_DIR / str(rid_for_cfg) / "config.json"
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            validation_map_id = cfg.get("validation_map")
+            if not train_maps and cfg.get("maps"):
+                train_maps = [Path(str(m)).stem for m in cfg["maps"]]
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+    if not validation_map_id:
+        try:
+            from .map_pack import validation_map as _pack_val
+
+            validation_map_id = _pack_val(MAPS_DIR)
+        except Exception:
+            validation_map_id = "map3"
+
     return {
         "contracts_version": CONTRACTS_VERSION,
         "obs_dim": obs_dim(N_LIDAR_DEFAULT),
@@ -1783,6 +1810,9 @@ def _status_payload() -> dict:
         "selected_run": bound,
         "bound_run_id": bound,
         "bound_note": bound_note,
+        "train_maps": train_maps,
+        "train_map": train_maps[0] if train_maps else None,
+        "validation_map": validation_map_id,
         "live_runs": live_runs,
         "live_run_count": len(live_runs),
         "start_lock_warn": start_warn,
@@ -1890,7 +1920,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w10-clear-focus-20260917"
+UI_BUILD = "w10-map-select-fix-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -2013,6 +2043,10 @@ details.glossary summary::before{content:"? ";color:#8cf}
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
   <div>run_id: <b id="rid">-</b></div>
+  <div>train map: <b id="train_map">-</b>
+    <span class="small"> — practice track from Start (not map3 Validating)</span></div>
+  <div>validation map: <b id="val_map">-</b>
+    <span class="small"> — mid-train best_model checks only; never means “you’re training here”</span></div>
   <div><span class="term" title="Practice steps taken (not wall-clock). Safety budget when Stop-on-budget is ON.">timesteps</span>: <b id="ts">-</b></div>
   <div>ep_rew_mean: <b id="rew">-</b> <span class="small"> — shaping signal only; rank with adjusted_time</span></div>
   <div><span class="term" title="Parallel practice sims / CPU workers. Watch uses this many colored twins.">n_envs</span> (parallel sims): <b id="ne">-</b> &nbsp; vec: <b id="vec">-</b></div>
@@ -2478,6 +2512,10 @@ async function refresh(){
     setTrainToggle(j.train_alive);
     document.getElementById('pid').textContent = j.train_pid || '-';
     document.getElementById('rid').textContent = j.run_id || '-';
+    const tm = document.getElementById('train_map');
+    if (tm) tm.textContent = (j.train_maps && j.train_maps.length) ? j.train_maps.join(',') : (j.train_map || '-');
+    const vm = document.getElementById('val_map');
+    if (vm) vm.textContent = j.validation_map || '-';
     window.__liveRunCount = j.live_run_count != null ? j.live_run_count : ((j.live_runs || []).length);
     window.__startLockWarn = j.start_lock_warn || null;
     window.__boundRunId = j.bound_run_id || j.run_id || null;
@@ -2606,6 +2644,12 @@ function toggleTrain(){
 }
 async function act(op, extra){
   const msgEl = document.getElementById('msg');
+  const mapVal = (document.getElementById('map') && document.getElementById('map').value) || '';
+  if ((op === 'start' || op === 'watch') && !mapVal) {
+    msgEl.className = 'bad';
+    msgEl.textContent = 'Pick a Track first (dropdown was empty — that used to silently train map0).';
+    return;
+  }
   msgEl.className = 'warn';
   if (op === 'start') msgEl.textContent = 'Starting training… (may take a few seconds)';
   else if (op === 'continue') msgEl.textContent = 'Resuming last complete checkpoint…';
@@ -2739,7 +2783,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/preview":
             q = parse_qs(parsed.query)
-            map_id = (q.get("map") or ["map0"])[0]
+            map_id = str((q.get("map") or [""])[0] or "").strip() or "map0"
             try:
                 timesteps = int((q.get("timesteps") or ["100000"])[0])
             except ValueError:
@@ -2812,7 +2856,8 @@ class Handler(BaseHTTPRequestHandler):
             raise
         form = parse_qs(raw)
         op = (form.get("op") or ["status"])[0]
-        map_id = (form.get("map") or ["map0"])[0]
+        # Never default blank → map0 (that silent fallback trained the wrong track).
+        map_id = str((form.get("map") or [""])[0] or "").strip()
         run_id = (form.get("run_id") or [""])[0].strip()
         which = (form.get("which") or ["best"])[0]
         allow_holdout = (form.get("allow_holdout") or ["0"])[0] in ("1", "true", "on", "yes")
