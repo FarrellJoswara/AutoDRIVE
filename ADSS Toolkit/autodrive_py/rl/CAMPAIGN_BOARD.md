@@ -11,6 +11,21 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — W7 UI bot process + allowlist chrome — 2026-09-17 ~04:21 America/Chicago
+- **id:** `20260917-W7-ui-bot-ship`
+- **type:** result
+- **amends:** `20260917-W7-ui-bot`
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739` (selftest saw live pid; Stop mocked).
+- **Process:** Standing UI seat + [`CAMPAIGN_UI.md`](CAMPAIGN_UI.md) + governance UI duty **SHIP’d**. Soft ≠ MUST / Bugfix P0.
+- **U-01 Banner readability:** **DONE** — left accent + state-tinted `#banner.*` backgrounds; `#banner_reason` higher contrast (no `.small` dim).
+- **U-02 Section headers:** **DONE** — `.sec` on Live / Coach / Train / Models / TensorBoard; thin spacing only.
+- **U-03 Glossary expand:** **DONE** (confirmed) — curriculum / map-role terms already in drawer from W6; stamped under W7.
+- **FORBIDDEN untouched:** no frameworks · no embed Watch · no sacred default retune · honesty banners kept.
+- **UI_BUILD:** `w7-ui-bot-20260917`
+- **Tests:** `.venv` `python -m rl.ui_selftest` → **all checks passed** (overnight survived).
+
+---
+
 ## RESULTS — W6 Wave 1 thin SHIP — 2026-09-17 ~04:20 America/Chicago
 - **id:** `20260917-W6-sug-wave1-ship`
 - **type:** result

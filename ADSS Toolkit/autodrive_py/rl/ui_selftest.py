@@ -594,7 +594,13 @@ def test_http_surface() -> None:
         check(
             "index build stamp bumped",
             'id="ui_build"' in html
-            and ("w6-sug-wave1" in html or "w4-auto-train" in html or "w3-ux-soft" in html or "20260917" in html),
+            and (
+                "w7-ui-bot" in html
+                or "w6-sug-wave1" in html
+                or "w4-auto-train" in html
+                or "w3-ux-soft" in html
+                or "20260917" in html
+            ),
             html[html.find("ui build") : html.find("ui build") + 90] if "ui build" in html else "",
         )
         check(
@@ -614,6 +620,13 @@ def test_http_surface() -> None:
             'id="bridge_card"' in html
             and "2.0.0" in html
             and ("RESEARCH" in html or "Phase 3" in html or "P3" in html),
+        )
+        check(
+            "index has section headers + readable banner",
+            'class="sec"' in html
+            and 'id="banner"' in html
+            and 'id="banner_reason"' in html
+            and "#banner.state-" in html,
         )
 
         st = _http(base, "/api/status")

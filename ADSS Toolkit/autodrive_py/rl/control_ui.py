@@ -1763,7 +1763,7 @@ details.glossary summary::before{content:"? ";color:#8cf}
 </details>
 <div class="box">
   <div id="banner" class="state-Idle" title="Idle / Learning / Validating (= scheduled race eval — not hung) / EarlyStop / Stopping / Crashed. Mid-train Validating ≠ official 400s×5.">Idle</div>
-  <div class="small" id="banner_reason" title="When Validating: scheduled race eval — not hung. Official protocol stays 400s / 5 seeds — do not densify overnight.">no trainer</div>
+  <div id="banner_reason" title="When Validating: scheduled race eval — not hung. Official protocol stays 400s / 5 seeds — do not densify overnight.">no trainer</div>
   <div class="sec" style="margin-top:8px">Live train status <span class="small">(from live_status.json — auto-refresh 0.75s)</span></div>
   <div>train: <span id="alive">?</span> &nbsp; pid: <span id="pid">-</span>
     &nbsp; contracts: <b id="cv">?</b> &nbsp; obs_dim: <b id="od">?</b></div>
