@@ -153,10 +153,17 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - Overnight soak **untouched** (do not kill).
 - **Pushed this mandate:** **`ae7ef0e`** (continuous commit+push tick rules) → **`283417c`** (W8 multi-run UI design SHIP + `safe_run_id`). Local WIP only: partial `control_ui.py` W8 helpers (not wired / not green yet — leave uncommitted).
 
+### ~04:27 — W8 multi-run live list + Focus SHIP
+- **Board:** `20260917-W8-multi-run-ui-ship` amends design `20260917-W8-multi-run-ui`.
+- **Code:** `/api/status` `live_runs`/`bound_run_id`; Control `<ul id="live_runs">` + Focus → `CURRENT_RUN.txt`; Start preview multi-lock warn; `UI_BUILD=w8-multi-run-20260917`.
+- **Tests:** `.venv` `ui_selftest` all passed (Stop mocked; Focus overnight pin OK).
+- **Overnight:** ALIVE ~478k+ learning; never killed.
+
 ### ~04:25 — Hours-away support loop + P1-2
 
 - Support loop: every ~18m `git status` → commit+push safe SHIP; never touch overnight PIDs; never force-push/amend remote; exclude pycache / `_ftg_pin*.log`.
 - **SHIP P1-2:** `train_ppo` RaceBest `best_model_meta.json` → `atomic_write_json`; `_bugfix_p0_checks` **19/19**.
+- **Pushed:** **`8af8a25`** (`Ship P1-2 atomic best_model_meta write.`).
 - Left W8 `control_ui.py` mid-flight for UI seat (do not fight).
 - Overnight soak ALIVE (~495k validating @ smoke) — untouched.
 
