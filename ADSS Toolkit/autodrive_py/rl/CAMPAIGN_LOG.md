@@ -3,7 +3,7 @@
 **Start:** 2026-09-17 03:54 America/Chicago  
 **Deadline:** ~2026-09-17 12:54 America/Chicago (9 hours) or credits exhausted  
 **Branch:** `rl/phase-1-research`  
-**Head note:** W8 multi-run UI design SHIP’d (`20260917-W8-multi-run-ui` — implement next UI tick; DEFER fancy dash; SKIP kill multi-train); continuous commit+push mandate (~04:22); W7 UI + B0.1 on remote `319b117`; overnight Continue live — do not kill.
+**Head note:** Support-loop armed (~18m); **P1-2** atomic `best_model_meta` SHIP’d; W8 multi-run UI design on remote `283417c` (Control WIP left local for UI seat); overnight Continue live — do not kill.
 
 ---
 
@@ -152,6 +152,13 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 - Pre-mandate remote HEAD already had W7 chrome: **`319b117`** (`Ship W7 UI bot chrome…`) on `origin/rl/phase-1-research`. Untracked only: `__pycache__`, `_ftg_pin*.log` (left uncommitted).
 - Overnight soak **untouched** (do not kill).
 - **Pushed this mandate:** **`ae7ef0e`** (continuous commit+push tick rules) → **`283417c`** (W8 multi-run UI design SHIP + `safe_run_id`). Local WIP only: partial `control_ui.py` W8 helpers (not wired / not green yet — leave uncommitted).
+
+### ~04:25 — Hours-away support loop + P1-2
+
+- Support loop: every ~18m `git status` → commit+push safe SHIP; never touch overnight PIDs; never force-push/amend remote; exclude pycache / `_ftg_pin*.log`.
+- **SHIP P1-2:** `train_ppo` RaceBest `best_model_meta.json` → `atomic_write_json`; `_bugfix_p0_checks` **19/19**.
+- Left W8 `control_ui.py` mid-flight for UI seat (do not fight).
+- Overnight soak ALIVE (~495k validating @ smoke) — untouched.
 
 ---
 

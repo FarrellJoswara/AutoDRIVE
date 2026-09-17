@@ -583,9 +583,7 @@ def RaceBestModelCallback(*args, **kwargs):
                     "timesteps": int(self.num_timesteps),
                     "metrics": metrics,
                 }
-                (self.run_dir / "best_model_meta.json").write_text(
-                    json.dumps(meta, indent=2), encoding="utf-8"
-                )
+                atomic_write_json(self.run_dir / "best_model_meta.json", meta)
                 prog = metrics.get("mean_progress_frac")
                 print(
                     f"best_model promoted @ ts={self.num_timesteps} "

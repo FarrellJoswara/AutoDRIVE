@@ -14,6 +14,7 @@ from rl.live_status import write_live_status, read_live_status, LiveStatusCallba
 from rl.metrics_io import (  # noqa: E402
     acquire_run_lock,
     atomic_save_sb3,
+    atomic_write_json,
     find_last_complete_checkpoint,
     release_run_lock,
 )
@@ -272,6 +273,35 @@ def main() -> int:
         "live_status records vec_env_fallback=true",
         fb.get("vec_env_fallback") is True and fb.get("vec_env_active") == "dummy",
         f"fallback={fb.get('vec_env_fallback')} active={fb.get('vec_env_active')}",
+    )
+
+    # P1-2: best_model_meta must be written atomically (tmp → replace), not torn write_text
+    meta_path = tmp / "best_model_meta.json"
+    atomic_write_json(
+        meta_path,
+        {"selected_by": "adjusted_time", "dnf": False, "timesteps": 1000},
+    )
+    meta1 = json.loads(meta_path.read_text(encoding="utf-8"))
+    atomic_write_json(
+        meta_path,
+        {"selected_by": "progress_frac (DNF, no scored lap)", "dnf": True, "timesteps": 2000},
+    )
+    meta2 = json.loads(meta_path.read_text(encoding="utf-8"))
+    check(
+        "P1-2 atomic_write_json best_model_meta roundtrip",
+        meta1.get("dnf") is False and meta2.get("dnf") is True and meta2.get("timesteps") == 2000,
+        f"meta1_dnf={meta1.get('dnf')} meta2={meta2}",
+    )
+    train_src = Path(__file__).with_name("train_ppo.py").read_text(encoding="utf-8")
+    uses_atomic_meta = (
+        "atomic_write_json(self.run_dir / \"best_model_meta.json\"" in train_src
+        or "atomic_write_json(self.run_dir / 'best_model_meta.json'" in train_src
+    )
+    still_torn = "best_model_meta.json\").write_text" in train_src or "best_model_meta.json').write_text" in train_src
+    check(
+        "P1-2 RaceBest uses atomic_write_json for meta",
+        uses_atomic_meta and not still_torn,
+        f"atomic={uses_atomic_meta} torn_write_text={still_torn}",
     )
 
     print()

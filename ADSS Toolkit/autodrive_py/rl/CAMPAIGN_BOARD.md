@@ -11,6 +11,16 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## RESULTS — P1-2 atomic best_model_meta — ~04:25 America/Chicago
+- **id:** `20260917-p1-2-atomic-meta`
+- **type:** result / bugfix
+- **overnight:** observe-only — did not kill/morph `overnight_soak_20260917_082739`.
+- **SHIP:** RaceBest promote writes `best_model_meta.json` via `atomic_write_json` (was torn `.write_text`).
+- **Tests:** `.venv` `python -m rl._bugfix_p0_checks` → **19/19 PASS**.
+- **Note:** Left mid-flight W8 `control_ui.py` WIP uncommitted (UI seat owns wiring).
+
+---
+
 ## RESULTS — Tick 0 MUST ships (orchestrator implementer) — 2026-09-17 ~04:25 America/Chicago
 - **id:** `20260917-tick0-must-ships`
 - **type:** result / implement

@@ -25,7 +25,7 @@
 | ID | Where | Bug / risk | Suggested fix |
 | -- | ----- | ---------- | ------------- |
 | **P1-1** | `train_ppo.py` ~1112 `CheckpointCallback` | SB3 checkpoint writes are **not** routed through `atomic_save_sb3`. Kill/disk-full mid-write → `ppo_*_steps.zip` that passes size>1024 but fails load. | Wrap with atomic helper or post-save rename from `*_tmpsave.zip`; skip incomplete in `find_last_complete_checkpoint` (zip test open). |
-| **P1-2** | `train_ppo.py` ~586 `best_model_meta.json` | Non-atomic `.write_text` beside atomic zip → torn meta / zip desync on crash. | `atomic_write_json` for meta. |
+| **P1-2** | `train_ppo.py` ~586 `best_model_meta.json` | Non-atomic `.write_text` beside atomic zip → torn meta / zip desync on crash. | **FIXED:** `atomic_write_json` for meta (+ `_bugfix_p0_checks`). |
 | **P1-3** | `map_pack.py` `load_pack` ~215–220 | Corrupt `map_pack.json` silently → empty pack + disk adopt as `train_ok` → may **train on holdout** until protocol seals force role. | Fail loud or backup+refuse; never silent empty on JSON error if file non-empty. |
 | **P1-4** | `metrics_io.py` `atomic_write_json` ~119–124 | No Windows lock retry (unlike `live_status.write_live_status`). UI reading `config.json` can raise mid-train. | Same retry/fallback pattern as live_status (non-fatal for config optional paths). |
 | **P1-5** | `live_status.py` / Monitor | Crash-rate estimate depends on Monitor `info_keywords`; Subproc + Dummy parity OK today, but any env thunk without those keywords → **silent 0 crash_rate**. | Assert keywords in `_make_env` smoke; document required keys. |
@@ -69,6 +69,7 @@
 5. **B0.1 / P0-5:** `resolve_map_yaml(..., strict=True)` + `assert_resolved_map_id` on train/eval; `assert_train_safe` refuses missing yaml + non-train_safe.  
 6. **P1-7:** Subproc→Dummy ERROR + `vec_env_fallback` flag in live_status/config; `--require-subproc`.  
 7. Tests: `python -m rl._bugfix_p0_checks` via `rl/.venv` (B0.1 + B0.2 + status).
+8. **P1-2:** RaceBest `best_model_meta.json` via `atomic_write_json` (support-loop ~04:25).
 
 **Safe for overnight:** no train process restart; library-only. Next Continue/new train picks up lock+save+map-gate fixes. Live overnight process keeps old code in memory until it exits.
 
@@ -78,7 +79,7 @@
 
 1. Re-scan for regressions around Continue + dual-writer (`ui_selftest` dual-writer section).  
 2. Ship **P1-1** atomic CheckpointCallback path if free hands.  
-3. Ship **P1-2** atomic `best_model_meta.json`.  
+3. ~~Ship **P1-2** atomic `best_model_meta.json`.~~ **DONE** (~04:25 support loop).  
 4. **P1-3** map_pack corrupt-manifest refuse.  
 5. Optional PERF-6 obs buffer if cast_lidar still dominates after measuring.  
 6. Keep overnight observe-only.
