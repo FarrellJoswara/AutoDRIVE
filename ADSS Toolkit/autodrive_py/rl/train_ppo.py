@@ -976,10 +976,14 @@ def main(argv=None) -> int:
             print(f"  - {issue}")
 
     map_yamls = []
-    for m in map_ids:
-        resolved = resolve_map_yaml(m, maps_root, strict=True)
-        assert_resolved_map_id(m, resolved)
-        map_yamls.append(resolved)
+    try:
+        for m in map_ids:
+            resolved = resolve_map_yaml(m, maps_root, strict=True)
+            assert_resolved_map_id(m, resolved)
+            map_yamls.append(resolved)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     map_hashes = {p.stem: map_file_hash(p) for p in map_yamls}
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1041,19 +1045,31 @@ def main(argv=None) -> int:
 
     vec_kind = args.vec_env
     vec_env_requested = vec_kind
+    vec_env_fallback = False
     if vec_kind == "subproc" and n_envs > 1:
         try:
             vec_env = SubprocVecEnv(env_fns)
         except Exception as exc:
-            print(f"WARNING: SubprocVecEnv failed ({exc}); falling back to DummyVecEnv")
+            # Fail-loud: operators must not believe n_envs parallel while serial.
+            print(
+                f"ERROR: SubprocVecEnv failed ({exc}); falling back to DummyVecEnv "
+                f"(vec_env_requested=subproc → vec_env_active=dummy). "
+                "steps/sec and wall-clock may look like parallel but are not."
+            )
             vec_kind = "dummy"
+            vec_env_fallback = True
             vec_env = DummyVecEnv(env_fns)
+            if bool(getattr(args, "require_subproc", False)):
+                print("ERROR: --require-subproc set; refusing Dummy fallback")
+                release_run_lock(run_dir_early)
+                return 2
     else:
         if n_envs == 1:
             vec_kind = "dummy"
         vec_env = DummyVecEnv(env_fns)
     print(
         f"vec_env_requested={vec_env_requested} vec_env_active={vec_kind} "
+        f"vec_env_fallback={vec_env_fallback} "
         f"n_envs={n_envs} maps={[p.stem for p in map_yamls]} "
         f"jitter={spawn_jitter} collision_first={args.collision_first} "
         f"speed_gate={args.speed_gate} ttc={ttc_truncate} lidar_dr={args.lidar_dr}"
@@ -1131,16 +1147,20 @@ def main(argv=None) -> int:
 
     # Select best_model on the pinned validation map, never on trained geometry.
     val_id = validation_map(maps_root)
-    if val_id and not args.allow_validation:
-        select_maps = [resolve_map_yaml(val_id, maps_root, strict=True)]
-        assert_resolved_map_id(val_id, select_maps[0])
-        print(f"best_model selection map: {val_id} (validation pin, not trained on)")
-    else:
-        select_maps = map_yamls
-        print(
-            "WARNING: no validation pin available; selecting best_model on train maps "
-            f"{[p.stem for p in map_yamls]} (selection is biased)"
-        )
+    try:
+        if val_id and not args.allow_validation:
+            select_maps = [resolve_map_yaml(val_id, maps_root, strict=True)]
+            assert_resolved_map_id(val_id, select_maps[0])
+            print(f"best_model selection map: {val_id} (validation pin, not trained on)")
+        else:
+            select_maps = map_yamls
+            print(
+                "WARNING: no validation pin available; selecting best_model on train maps "
+                f"{[p.stem for p in map_yamls]} (selection is biased)"
+            )
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return 2
 
     race_eval_every = int(args.race_eval_every)
     # early_stop_patience already resolved above (unlimited-timesteps guard).

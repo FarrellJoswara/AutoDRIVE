@@ -280,7 +280,8 @@ def classify_banner(
     if train_alive and phase == "validating":
         return {
             "state": "Validating",
-            "reason": note or "racing validation map (timesteps paused — not stuck)",
+            "reason": note
+            or "scheduled race eval — not hung (timesteps paused; mid-train ≠ official 400s×5)",
         }
     if train_alive:
         if status_age_s is not None and status_age_s > 90:

@@ -13,7 +13,7 @@ from .compat import ContractsMismatch, load_ppo_refusing_mismatch
 from .contracts import CONTRACTS_VERSION, N_LIDAR_DEFAULT, TIMEOUT_S
 from .ftg import FollowTheGap
 from .metrics_io import make_metrics
-from .racing_env import RacingEnv, resolve_map_yaml
+from .racing_env import RacingEnv, assert_resolved_map_id, resolve_map_yaml
 from .run_ftg import run_episode
 
 PROTOCOL_PATH = Path(__file__).resolve().parent / "eval_protocol.yaml"
@@ -113,7 +113,8 @@ def eval_ftg_protocol(
     for m in proto.get("maps") or []:
         mid = str(m["id"])
         track_ids.append(mid)
-        map_yaml = resolve_map_yaml(mid, maps_root)
+        map_yaml = resolve_map_yaml(mid, maps_root, strict=True)
+        assert_resolved_map_id(mid, map_yaml)
         laps, cols, rets, progress = [], 0, [], []
         for seed in seed_list:
             env = RacingEnv(
@@ -208,7 +209,8 @@ def eval_ppo_protocol(
     for m in proto.get("maps") or []:
         mid = str(m["id"])
         track_ids.append(mid)
-        map_yaml = resolve_map_yaml(mid, maps_root)
+        map_yaml = resolve_map_yaml(mid, maps_root, strict=True)
+        assert_resolved_map_id(mid, map_yaml)
         laps, cols, rets, progress = [], 0, [], []
         for seed in seed_list:
             env = RacingEnv(

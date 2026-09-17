@@ -14,7 +14,7 @@ from .eval_protocol import eval_ftg_protocol, eval_ppo_protocol, load_protocol
 from .ftg import FollowTheGap
 from .map_pack import SealBroken, assert_seals_intact
 from .metrics_io import append_leaderboard, make_metrics
-from .racing_env import RacingEnv, resolve_map_yaml
+from .racing_env import RacingEnv, assert_resolved_map_id, resolve_map_yaml
 from .run_ftg import run_episode
 
 
@@ -171,7 +171,12 @@ def main(argv=None) -> int:
             return 0
 
         episodes = max(1, int(args.episodes))
-        map_yaml = resolve_map_yaml(args.map, maps_root)
+        try:
+            map_yaml = resolve_map_yaml(args.map, maps_root, strict=True)
+            assert_resolved_map_id(args.map, map_yaml)
+        except FileNotFoundError as exc:
+            print(f"ERROR: {exc}")
+            return 2
         if args.policy == "ftg":
             metrics = eval_gym_ftg(map_yaml, episodes, args.n_lidar, args.seed)
         else:

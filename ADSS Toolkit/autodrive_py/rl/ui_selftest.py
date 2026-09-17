@@ -646,6 +646,17 @@ def test_http_surface() -> None:
 
         r = _http(base, "/api/action", {"op": "verify_seals"})
         check("verify_seals op returns seal msg", "SEAL" in r["msg"] or "PACK" in r["msg"], r["msg"])
+        r = _http(base, "/api/action", {"op": "auto_train"})
+        check(
+            "auto_train op refuses UI spawn",
+            "Refuse Auto-train" in r["msg"] and "auto_train" in r["msg"],
+            r["msg"],
+        )
+        check(
+            "auto_train refuse spawned nothing",
+            cui._train_proc is None,
+            f"proc={cui._train_proc}",
+        )
 
         # Isolate HTTP Start refuse paths from any parallel overnight / A/B train.
         old_busy = cui._train_busy

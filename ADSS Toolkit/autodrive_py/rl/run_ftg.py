@@ -9,7 +9,7 @@ from pathlib import Path
 from .contracts import CONTRACTS_VERSION, N_LIDAR_DEFAULT, TIMEOUT_S, obs_dim
 from .ftg import FollowTheGap
 from .metrics_io import make_metrics, write_run_artifacts
-from .racing_env import RacingEnv, resolve_map_yaml
+from .racing_env import RacingEnv, assert_resolved_map_id, resolve_map_yaml
 
 
 def run_episode(env: RacingEnv, policy: FollowTheGap, max_steps: int | None = None):
@@ -51,7 +51,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     maps_root = Path(__file__).resolve().parent / "maps"
-    map_yaml = resolve_map_yaml(args.map, maps_root)
+    try:
+        map_yaml = resolve_map_yaml(args.map, maps_root, strict=True)
+        assert_resolved_map_id(args.map, map_yaml)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     env = RacingEnv(map_yaml=map_yaml, n_lidar=args.n_lidar, seed=args.seed)
     policy = FollowTheGap(n_lidar=args.n_lidar)
 

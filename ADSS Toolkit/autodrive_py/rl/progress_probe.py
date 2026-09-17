@@ -15,7 +15,7 @@ import numpy as np
 from .compat import load_ppo_refusing_mismatch
 from .contracts import N_LIDAR_DEFAULT
 from .ftg import FollowTheGap
-from .racing_env import RacingEnv, resolve_map_yaml
+from .racing_env import RacingEnv, assert_resolved_map_id, resolve_map_yaml
 
 
 def _progress_frac(info: dict) -> float:
@@ -142,7 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     root = Path(args.maps_root) if args.maps_root else Path(__file__).resolve().parent / "maps"
-    map_yaml = resolve_map_yaml(args.map, root)
+    try:
+        map_yaml = resolve_map_yaml(args.map, root, strict=True)
+        assert_resolved_map_id(args.map, map_yaml)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     if args.policy == "ftg":
         out = probe_ftg(
             map_yaml,

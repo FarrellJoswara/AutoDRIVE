@@ -6,7 +6,44 @@
 **Companion brief:** `CAMPAIGN_RESEARCH.md` (COMPLETE)
 
 Append one entry per resume tick. Newest first.  
-**Soft inbox:** [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (Suggestion seat — not mandates)
+**Soft inbox:** [`CAMPAIGN_SUGGESTIONS.md`](CAMPAIGN_SUGGESTIONS.md) (Suggestion seat — not mandates)  
+**UI inbox:** [`CAMPAIGN_UI.md`](CAMPAIGN_UI.md) (UI seat — incremental Control/Watch chrome; not mandates)
+
+---
+
+## STANDING — UI bot (Control / Watch presentation) — ~04:16 Chicago
+- **id:** `20260917-W7-ui-bot`
+- **type:** tick / wave (user soft suggestion — standing)
+- **proposal:** Standing **UI** seat each tick proposes **1–3 SMALL** incremental Control UI / Watch presentation improvements (layout, spacing, glossary, a11y, Watch compact, status clarity). Not a blank-check redesign.
+- **overnight plan:** Observe-only `overnight_soak_20260917_082739`. UI bot never Start/Continue/kill/morph soak; never retune sacred knobs; never remove honesty banners. Soft ≠ override MUST order or Bugfix P0.
+
+### Process (SHIP seat + gated increments)
+
+1. Each tick (or every other ~10m): UI seat appends **1–3** small proposals to `CAMPAIGN_UI.md` + short board pulse if anything needs mini-gate.
+2. **Auto-approve allowlist only:** tooltips, spacing/contrast, labels, glossary copy, compact-mode polish, section headers — still log to `CAMPAIGN_UI.md` + bump `UI_BUILD` + run `ui_selftest`.
+3. **Board mini-gate** required for anything outside allowlist (new controls, JS behavior, Watch argv defaults beyond prior SHIP, layout that hides honesty).
+4. **FORBIDDEN without full board:** new frameworks (Gradio/React), embed Watch in browser, change Overnight sacred knob defaults, remove honesty banners / unofficial labels.
+5. Soft ≠ starve MUST #3 A/B, #4 FTGΔ, or Bugfix P0/P1.
+
+### Personality votes — standing UI bot → **SHIP (process)**
+
+- **Researcher:** **Go** — mirrors W3 soft UX success (compact Watch + glossary SHIP’d; drastic reskin SKIP); constrained seat prevents chrome freestyle; cites W3 RESULTS + W2 chrome OUT.
+- **Racer:** **Approve** — presentation-only behind race MUST; Block any wave that treats UI polish as podium work or retunes overnight.
+- **Minimalist:** **Approve** — one md + allowlist auto-approve; refuse frameworks / embed / reskin; 1–3 small deltas only.
+- **Reliability:** **Approve** — UI chrome cannot touch train math, kill-tree, dual-Start, or seals; `ui_selftest` mandatory; Stop path stays mocked while soak live.
+- **Integrator:** **SHIP** the **seat + `CAMPAIGN_UI.md` + first 3 proposals**; implement safest **1–2 allowlist** items this tick if free. No redesign epic.
+
+### First proposals (`CAMPAIGN_UI.md`) — triage
+
+| Id | Idea | Gate |
+| -- | ---- | ---- |
+| U-20260917-W7-01 | Status banner readability (contrast / reason) | **SHIP now** (allowlist — contrast/labels) |
+| U-20260917-W7-02 | Section headers + spacing rhythm | **SHIP now** (allowlist — spacing/labels) |
+| U-20260917-W7-03 | Glossary expand (curriculum / map roles) | **DEFER code** this tick if time-box; **SHIP copy** next free hands (allowlist) |
+
+**Orchestrator (this tick):** docs + U-01 + U-02; leave U-03 for next UI tick if not free. Soft ≠ MUST/bugfix override.
+
+**STANDING Resume-me:** UI bot — next tick (or every other ~10m): propose **1–3** small Control/Watch increments → log `CAMPAIGN_UI.md` → auto-approve only allowlist else mini-gate → `ui_selftest` → do **not** mandate, redesign, embed Watch, or touch overnight. Soft ≠ MUST / Bugfix P0.
 
 ---
 
@@ -151,11 +188,18 @@ No GPU/AMP · no continuous outer loop · no lowering select/eval floors · no m
 
 ---
 
-## W4 — Auto-train pipeline triage — ~04:09 Chicago
+## W4 — Auto-train pipeline triage — ~04:09 Chicago · **SHIP thin DONE ~04:12**
 - **id:** `20260917-W4-auto-train-pipeline`
 - **type:** tick / wave (user soft suggestion)
 - **proposal:** Soft ask for an **Auto-train** button/pipeline that trains → evals lap/adjusted times → continuously gens maps → auto-adjusts reward/knobs → farms many “best” models unattended. Re-triage vs W2 #5 SKIP (continuous outer) after Reliability P0 no-kill/hb-join SHIP + disposable Continue soak PASS.
 - **overnight plan:** Observe-only `overnight_soak_20260917_082739`. Auto-train must **never** Start/Continue/kill/morph the protected soak. No reward Discord mid-run. No map regen in the train hot loop.
+
+### SHIP thin result (implementer)
+- **CLI:** `rl/auto_train.py` — default dry-run; `--execute [--smoke]`; chains train_ok → train_ppo (frozen knobs) → `eval_cli --official` → next pack map/seed; `--max-runs` ≤3.
+- **Refuses:** live `train.lock`/overnight PID; `overnight_soak_*` run_ids; holdout/validation; `--allow-holdout` / `--mutate-reward` / curriculum flags; never `_kill_train_tree`.
+- **UI:** disabled **Auto-train (EXPERIMENTAL)** + opt-in preview warning; `op=auto_train` refuses spawn (CLI only). Build `w4-auto-train-thin-20260917`.
+- **Acceptance:** dry-run + holdout/protected/live-lock refuses exercised; Dummy `--execute --smoke` **deferred** while overnight lock alive (observe-only).
+- **Keepalive:** single 10m loop PID **2340** (40676 already gone); train_ppo **53852/19244** untouched.
 
 ### Critique (decisive)
 
@@ -215,7 +259,7 @@ No GPU/AMP · no continuous outer loop · no lowering select/eval floors · no m
 
 **Orchestrator:** implement **thin SHIP only** when free hands after MUST queue; otherwise leave as design+stub ticket. Soft suggestion ≠ override collision/Continue/FTGΔ.
 
-**Resume-me:** Researcher — next tick: (1) do **not** expand Auto-train into reward PBT/mapgen product; (2) re-vote **DEFER→SHIP enablement** only after chaos drills + overnight soft-stop→Continue evidence; (3) if thin CLI lands, verify acceptance #3–#6 on disposable ids only; (4) keep overnight observe-only.
+**Resume-me:** Researcher — next tick: (1) do **not** expand Auto-train into reward PBT/mapgen product; (2) re-vote **DEFER→SHIP enablement** only after chaos drills + overnight soft-stop→Continue evidence; (3) run Dummy `--execute --smoke` only when overnight idle; (4) keep overnight observe-only.
 
 ---
 

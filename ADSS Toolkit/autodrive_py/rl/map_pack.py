@@ -539,18 +539,41 @@ def assert_train_safe(
     allow_validation: bool = False,
     pack: dict | None = None,
 ) -> None:
-    """Gate for trainers: raise :class:`HoldoutViolation` on sealed / validation maps."""
+    """Gate for trainers: raise :class:`HoldoutViolation` if unsafe to train.
+
+    Refuses sealed holdouts, the validation pin, **missing / unresolvable map
+    yaml**, and ids not in :func:`train_safe_maps` (unless an allow flag covers
+    holdout/validation). Never silently substitutes another map.
+    """
     root = _root(maps_root)
     pack = pack or load_pack(root)
-    sealed, val_used = [], []
+    missing, sealed, val_used, not_safe = [], [], [], []
     val = validation_map(root, pack=pack)
     for mid in ids:
         mid = str(mid)
-        if not allow_holdout and is_holdout(mid, root, pack=pack):
-            sealed.append(mid)
-        elif not allow_validation and val and mid == val:
-            val_used.append(mid)
+        my = map_yaml_for(mid, root)
+        if my is None:
+            matches = sorted(root.glob(f"**/{mid}.yaml"))
+            my = matches[0] if matches else None
+        if my is None or (my.stem != mid and my.parent.name != mid):
+            missing.append(mid)
+            continue
+        if is_holdout(mid, root, pack=pack):
+            if not allow_holdout:
+                sealed.append(mid)
+            continue
+        if val and mid == val:
+            if not allow_validation:
+                val_used.append(mid)
+            continue
+        if not is_train_safe(mid, root, pack=pack):
+            not_safe.append(mid)
     problems = []
+    if missing:
+        problems.append(
+            f"map yaml missing/unresolved for {', '.join(missing)} "
+            "(refusing silent wrong-map train)"
+        )
     if sealed:
         problems.append(
             f"sealed holdout(s) {', '.join(sealed)}: pass allow_holdout/--allow-holdout to override"
@@ -558,6 +581,10 @@ def assert_train_safe(
     if val_used:
         problems.append(
             f"validation pin {', '.join(val_used)}: training on it breaks model selection"
+        )
+    if not_safe:
+        problems.append(
+            f"not train_safe (unregistered / non-train_ok): {', '.join(not_safe)}"
         )
     if problems:
         raise HoldoutViolation("; ".join(problems))

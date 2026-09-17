@@ -310,15 +310,21 @@ def _kpi_lines(
         if train:
             lines.append(train)
     elif status:
-        # One short train heartbeat only.
-        ts = status.get("timesteps")
-        sps = status.get("steps_per_sec")
+        # Honesty strip: phase + crash_rate + short ts|/s (no rew / session dump).
         try:
             bits = []
+            phase = status.get("phase")
+            if phase:
+                bits.append(str(phase))
+            ts = status.get("timesteps")
             if ts is not None:
                 bits.append(f"ts {int(ts)}")
+            sps = status.get("steps_per_sec")
             if sps is not None:
                 bits.append(f"{float(sps):.0f}/s")
+            rate = status.get("crash_rate_estimate")
+            if rate is not None:
+                bits.append(f"crash {100.0 * float(rate):.0f}%")
             if bits:
                 lines.append("train " + " | ".join(bits))
         except (TypeError, ValueError):
