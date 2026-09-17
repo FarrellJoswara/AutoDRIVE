@@ -9,6 +9,20 @@ Append one entry per resume tick. Newest first.
 
 ---
 
+## PAUSE+SHIP — 2026-09-17 ~04:01 — Tick0 smokes only (reliability P0 in flight)
+
+- **id:** `20260917-T0-must-smokes`
+- **type:** chunk
+- **proposal:** Ship Tick0 verify/smokes only: holdout refuse CLI, overnight constant audit, read-only official FTGΔ, disposable collision-first A/B. Continue soak deferred. No continuous loop. Do not kill overnight. Defer feature spam until heartbeat/kill-tree patches land.
+- **overnight plan:** observe-only `overnight_soak_20260917_082739`
+- **Researcher:** Go — Tick0 all five MUSTs for verify/smoke.
+- **Racer:** Approve — MUST order; FTGΔ read-only.
+- **Minimalist:** Approve — smokes only.
+- **Reliability:** Approve smokes; **Block** any Start/Continue that could `_kill_train_tree` overnight until P0 patches land.
+- **Integrator:** **SHIP** smokes (W1a/b holdout+constants, FTGΔ eval, collision A/B on disposable run_ids). **DEFER** Continue-on-soak + UI Start paths that kill-tree.
+
+---
+
 ## W2 — FAST wave triage — 2026-09-17 ~03:59 America/Chicago
 - **id:** `20260917-W2-fast-wave-triage`
 - **type:** tick / wave
