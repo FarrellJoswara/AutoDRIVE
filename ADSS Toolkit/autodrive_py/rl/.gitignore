@@ -1,9 +1,16 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 models/*/
 !models/.gitkeep
 maps/map*/
 runs/
 logs/
+*.log
+_ftg_pin*.log
 *.zip
+_trash_candidates/

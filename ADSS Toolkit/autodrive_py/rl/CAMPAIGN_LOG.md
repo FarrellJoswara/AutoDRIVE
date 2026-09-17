@@ -164,6 +164,12 @@ Earlier log said “keep continuous scaffold / drastic UI / GPU diagnose as Keep
 
 ## Shipped / Tests
 
+### ~04:25 — Repo cleanup batch 1 (standing cleanup agent)
+- **Safe deletes:** `rl/__pycache__`, parent `autodrive_py/__pycache__`, `_ftg_pin.log` / `_ftg_pin5.log`, empty `runs/` dirs, orphan `train.lock` for `tick0_ab2_base_20260917_040725` (PID 42732 dead; no matching process).
+- **gitignore:** add `*.log`, `_ftg_pin*.log`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_trash_candidates/`, `*.pyo`.
+- **Sacred untouched:** overnight `overnight_soak_20260917_082739` PIDs **19244/53852** ALIVE; live locks for active trains left alone; did **not** stage WIP `control_ui.py` / other agents' dirty files.
+- **Loop:** cleanup re-scan armed ~35m until ~4h or stop.
+
 ### ~04:25 — Tick 0 MUST ships (audit / refuse / A/B / Continue)
 - **Overnight lock audit:** code+preset+live config sacred floors PASS (select≥220, eval≥50k, warmup≥2, min_ts≥100k; allow flags false). Soak left running (~495k validating).
 - **Holdout refuse:** `assert_train_safe` + CLI `train_ppo` map2/map3 exit=2 + `start_guard` Refuse Start; seals OK.
