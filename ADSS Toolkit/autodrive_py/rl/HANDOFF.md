@@ -58,6 +58,19 @@ cd "ADSS Toolkit/autodrive_py"
 
 Buttons: **Start training**, **Continue**, **Stop**, **Open Watch**, TensorBoard. Knobs: map, timesteps, `n_envs`, overnight preset, early-stop patience.
 
+**W8 multi-run (`UI_BUILD=w8-multi-run-20260917`)** — hard-refresh (Ctrl+F5) if the page looks stale:
+
+| Control | Behavior |
+| ------- | -------- |
+| **Live runs** list | Every live `train.lock` + phase/timesteps; overnight badge on `overnight_soak_*` |
+| **Focus** | Writes `logs/CURRENT_RUN.txt` only — binds banner ranking; does **not** Start/Stop/kill |
+| **Banner** | Bound via `_resolve_selected_run`: UI-owned → Focus pin if live → **highest live timesteps** (fixes ~6k A/B latch) |
+| **Start** | Warns / confirms when N locks already live; dual-Start from this panel still **refused** |
+| **Stop** | Confirm echoes **selected** `run_id`+pid; protected overnight is never swept |
+| **ops target** hint | Shows which run status / Focus / Continue / Stop are talking about |
+
+If `ui build:` on the page is older than `w8-multi-run-20260917`, reload — you are looking at a cached HTML shell.
+
 ### Train (headless, no UI)
 
 ```powershell
@@ -201,7 +214,7 @@ If Start says refuse holdout/validation → pick a `train_ok` map (or explicit a
 | --------- | -- |
 | Lock + live PID (overnight) | **Leave it.** Observe `live_status`. |
 | Lock + dead PID | Clear stale lock (UI helper / `clear_stale_lock`), then Continue same `run_id`. |
-| Several live locks | Multi-run: pin `CURRENT_RUN.txt`, Focus in UI when available; do not dual-Start one panel onto two writers. |
+| Several live locks | Use Control **Live runs → Focus** (writes `CURRENT_RUN.txt`); do not dual-Start one panel onto two writers. |
 | Want a disposable A/B | New `run_id` via CLI is OK; never morph overnight argv mid-flight. |
 
 ---
@@ -209,18 +222,22 @@ If Start says refuse holdout/validation → pick a `train_ok` map (or explicit a
 ## Multi-run reality
 
 Operators often have **several** live `train.lock`s (overnight + disposable A/B smokes).
+**W8 shipped** in Control (`UI_BUILD=w8-multi-run-20260917`) so this is operable without killing multi-train support.
 
-Symptoms if the UI latches wrong:
+### What you see
 
-- Banner shows a **new** `run_id` at ~few thousand timesteps while overnight is still at hundreds of k.
-- Watch / Continue / Stop feel aimed at the wrong process.
+1. **Live runs** (`#live_runs`) — one row per live lock: `run_id`, pid, timesteps, phase, overnight badge.
+2. **Focus** — pins that row into `logs/CURRENT_RUN.txt` (status ranking only; no kill).
+3. **Banner / `bound_run_id`** — `_resolve_selected_run` order: UI-owned alive → Focus pin if still live → **max live timesteps** → trail. A ~6k smoke no longer eclipses a ~500k overnight.
+4. **Start warn** — preview + confirm when N locks live; Start still refuses while any lock is held from this panel.
+5. **Stop** — confirm names the **selected** run_id+pid; overnight protected id is never in the kill sweep.
 
-What to check:
+### If the banner still looks wrong
 
-1. `rl/logs/CURRENT_RUN.txt` — should be the run you care about (usually overnight).
-2. `find_live_run_locks` / Models list — multiple `[locked pid=…]`.
-3. Prefer Control **Focus** on the Live runs list (writes `CURRENT_RUN.txt`) or rewrite the pin by hand, then refresh status.
-4. Ranking preference (already in Control): **pin → highest live timesteps → `--resume`/`--unlimited` → leaf PID**.
+1. Hard-refresh UI; check `ui build: w8-multi-run-20260917`.
+2. Click **Focus** on the overnight row (or rewrite `rl/logs/CURRENT_RUN.txt`).
+3. Confirm Models list shows multiple `[locked pid=…]` — expected under multi-run.
+4. Watch without `--run_id` also prefers `CURRENT_RUN` / highest timesteps (`pick_status_for_operator`).
 
 Do **not** “simplify” by killing multi-train support or sweeping overnight with an unmocked Stop during selftest.
 
@@ -229,7 +246,7 @@ Do **not** “simplify” by killing multi-train support or sweeping overnight w
 ## Resume after crash
 
 1. Confirm soak / target still has `models/<run_id>/` with checkpoints.
-2. Pin: write `run_id` into `rl/logs/CURRENT_RUN.txt` (one line).
+2. Pin: Control **Live runs → Focus**, or write `run_id` into `rl/logs/CURRENT_RUN.txt` (one line).
 3. Clear **stale** lock only if PID is dead (`clear_stale_lock` / UI helper) — never clear a live overnight lock.
 4. Control UI → **Continue** (same maps / n_envs / sacred knobs as before when possible).
 5. Confirm `live_status` phase returns to `learning`/`validating` and timesteps advance from the checkpoint (not 0).
@@ -262,9 +279,8 @@ python -m rl.auto_train --dry-run
 
 | Symptom | Check |
 | ------- | ----- |
-| Banner stuck on tiny timesteps | Multi-run latch → `CURRENT_RUN.txt` + live locks |
-| Phase=`validating` forever-looking | Mid-train eval; wait; read `msg` / log for map + timeout |
-| Start refused | Live `train.lock` or holdout map — intentional |
+| Banner stuck on tiny timesteps | Multi-run latch — Focus overnight in Live runs (or pin `CURRENT_RUN.txt`); confirm `UI_BUILD` ≥ `w8-multi-run-20260917` |
+| Start refused with locks live | Intentional dual-writer guard — Stop selected non-protected run first, or use a separate CLI train |
 | Continue won’t start | Stale lock with dead PID, or missing checkpoint |
 | Watch map mismatch banner | Watched map ∉ run `config.json` maps / hash changed |
 | `ep_rew_mean` looks great, race score bad | Reward ≠ race score; trust official `adjusted_time` |

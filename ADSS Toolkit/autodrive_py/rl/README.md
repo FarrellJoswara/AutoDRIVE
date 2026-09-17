@@ -9,7 +9,7 @@ Multi-phase reinforcement-learning stack for solo F1TENTH / RoboRacer time-attac
 
 | Need | Open |
 | ---- | ---- |
-| **Human handoff (friend who wasn’t here overnight)** | **[`HANDOFF.md`](HANDOFF.md)** — runbook, sacred soak, multi-run, resume, tests |
+| **Human handoff (friend who wasn’t here overnight)** | **[`HANDOFF.md`](HANDOFF.md)** — runbook, sacred soak, **W8 multi-run** (Live runs / Focus / Start warn), resume, tests |
 | Contracts / obs layout | [`contracts.md`](contracts.md) |
 | Campaign ship gate + overnight narrative | [`CAMPAIGN_GOVERNANCE.md`](CAMPAIGN_GOVERNANCE.md), [`CAMPAIGN_LOG.md`](CAMPAIGN_LOG.md) |
 | Roadmap / progress | [`PLAN.md`](PLAN.md), [`PLAN_PROGRESS.md`](PLAN_PROGRESS.md) |
@@ -32,8 +32,11 @@ cd "ADSS Toolkit/autodrive_py"
 ```
 
 - Shows `live_status.json` (timesteps, `ep_rew_mean`, `run_id`, `n_envs`) when present
-- Buttons: **Start training**, **Stop training** (kills `train_ppo` tree), **Open watch --follow**, TensorBoard command/link
+- **W8 (`UI_BUILD=w8-multi-run-20260917`):** **Live runs** list + **Focus** → `CURRENT_RUN.txt`; banner prefers max live timesteps (no ~6k latch); Start warns when N locks live; Stop confirm echoes selected run (overnight never swept)
+- Buttons: **Start training**, **Stop training** (kills non-protected `train_ppo` tree), **Open watch --follow**, TensorBoard command/link
 - Knobs: map / timesteps / **Parallel sims / CPU workers** slider (`n_envs` 1–32). Start uses Subproc when >1 (Dummy fallback). Watch opens that many colored twins.
+
+Hard-refresh (Ctrl+F5) if `ui build:` on the page is older than `w8-multi-run-20260917`. Full operator notes: [`HANDOFF.md`](HANDOFF.md) § Multi-run reality.
 
 ## Start training
 

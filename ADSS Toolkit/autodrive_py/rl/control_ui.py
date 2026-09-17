@@ -6,6 +6,10 @@ Launch (from ADSS Toolkit/autodrive_py):
 
 Train stays headless. This process starts/stops train + optional TensorBoard,
 and reads live_status.json. Watch opens in a separate console.
+
+W8 multi-run (UI_BUILD=w8-multi-run-20260917): Live runs list, Focus →
+CURRENT_RUN.txt, banner prefers max live timesteps, Start lock warn, Stop
+confirm on selected run. See HANDOFF.md. Overnight soak is never kill-swept.
 """
 
 from __future__ import annotations
@@ -1748,6 +1752,8 @@ def _status_payload() -> dict:
         "episode_count_estimate": live.get("episode_count_estimate"),
         "collisions_estimate": live.get("collisions_estimate"),
         "crash_rate_estimate": live.get("crash_rate_estimate"),
+        "stall_rate_estimate": live.get("stall_rate_estimate"),
+        "stalls_estimate": live.get("stalls_estimate"),
         "mean_progress_frac_estimate": live.get("mean_progress_frac_estimate"),
         "progress_probe_kind": live.get("progress_probe_kind") or live.get("probe_kind"),
         "steps_per_sec": live.get("steps_per_sec"),
@@ -1842,7 +1848,7 @@ def _preview_payload(
 
 
 # Bump when the control panel HTML/JS changes so hard-refresh / ?v= can prove freshness.
-UI_BUILD = "w8-multi-run-20260917"
+UI_BUILD = "w10-stall-p18-20260917"
 
 HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>RL control</title>
@@ -1967,6 +1973,7 @@ details.glossary summary::before{content:"? ";color:#8cf}
   <div>ep_rew_mean: <b id="rew">-</b> <span class="small"> — shaping signal only; rank with adjusted_time</span></div>
   <div><span class="term" title="Parallel practice sims / CPU workers. Watch uses this many colored twins.">n_envs</span> (parallel sims): <b id="ne">-</b> &nbsp; vec: <b id="vec">-</b></div>
   <div>steps/sec: <b id="sps">-</b> &nbsp; crash rate: <b id="crash">-</b>
+    &nbsp; stall rate: <b id="stall">-</b>
     &nbsp; status age: <b id="age">-</b></div>
   <div>episodes (est.): <b id="eps">-</b> &nbsp; collisions (est.): <b id="cols">-</b></div>
   <div>progress probe (smoke): <b id="prog">-</b>
@@ -2446,6 +2453,11 @@ async function refresh(){
     document.getElementById('sps').textContent = j.steps_per_sec != null ? Number(j.steps_per_sec).toFixed(1) : '-';
     document.getElementById('crash').textContent =
       j.crash_rate_estimate != null ? (100 * Number(j.crash_rate_estimate)).toFixed(0) + '%' : '-';
+    const stallEl = document.getElementById('stall');
+    if (stallEl) {
+      stallEl.textContent =
+        j.stall_rate_estimate != null ? (100 * Number(j.stall_rate_estimate)).toFixed(0) + '%' : '-';
+    }
     document.getElementById('age').textContent = j.status_age_s != null ? j.status_age_s + 's' : '-';
     const ban = j.banner || {state: '?', reason: ''};
     const banEl = document.getElementById('banner');
