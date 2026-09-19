@@ -1,0 +1,15 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Environment & IDE
+.vscode/
+.idea/
+*.log
+
+# Build & Simulator binaries
+*.x86_64
+*.so
+simulator/Data/
