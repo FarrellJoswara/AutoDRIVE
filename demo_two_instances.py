@@ -30,22 +30,21 @@ def main():
     print("Render Mode          : Headed Visual GUI (DirectX 12 / NVIDIA RTX 3060)")
     print("=" * 75 + "\n")
 
-    # 1. Initialize fleet of 2 Racers
+    # 1. Initialize fleet of 1 Racer
     track = RaceTrack(
-        num_racers=2,
+        num_racers=1,
         base_port=4567,
         simulator_path=sim_path,
         auto_launch=True,
         headless=False,
     )
 
-    print("--> [1/3] Both Racer servers started (ports 4567 and 4568).")
-    print("--> [2/3] Both 3D Simulator windows launched on your desktop!\n")
+    print("--> [1/3] Racer server started (port 4567).")
+    print("--> [2/3] 3D Simulator window launched on your desktop!\n")
     print("=" * 75)
     print("  ACTION REQUIRED IN SIMULATOR WINDOWS:")
     print("  In each simulator window on your screen:")
     print("  - Instance 1: Verify Port is 4567 and click 'Connect'")
-    print("  - Instance 2: Change Port to 4568 and click 'Connect'")
     print("=" * 75 + "\n")
 
     # Wait for both racers to establish connection
@@ -56,11 +55,11 @@ def main():
     last_print = 0
 
     while time.time() - start_wait < timeout:
-        for r_id in [0, 1]:
+        for r_id in [0]:
             if r_id not in connected_racers and track.racers[r_id].is_connected:
                 connected_racers.add(r_id)
-                print(f"\n--> [CONNECTED] Racer {r_id} connected successfully! ({len(connected_racers)}/2 connected)")
-        if len(connected_racers) == 2:
+                print(f"\n--> [CONNECTED] Racer {r_id} connected successfully! ({len(connected_racers)}/1 connected)")
+        if len(connected_racers) == 1:
             break
         elapsed = int(time.time() - start_wait)
         if elapsed % 10 == 0 and elapsed != last_print:
@@ -75,7 +74,7 @@ def main():
 
     active_racers = sorted(list(connected_racers))
     print(f"\n--> [3/3] ACTIVE FLEET ({len(active_racers)} car{'s' if len(active_racers) > 1 else ''}): DRIVING FORWARD!")
-    print("    Throttle = 0.6 | Steering = 0.0 (Straight)\n")
+    print("    Throttle = 1 | Steering = 0 (Straight)\n")
 
     # 2. Drive forward for 15 seconds (turn-based lockstep)
     run_start = time.time()
@@ -84,8 +83,8 @@ def main():
     try:
         while time.time() - run_start < 15.0:
             tick += 1
-            # Step all active racers
-            actions = {r_id: (0.6, 0.0) for r_id in active_racers}
+            # Step all active racers with integers to avoid decimal separator locale issues
+            actions = {r_id: (1, 0) for r_id in active_racers}
             telemetry = track.step_all(actions)
 
             # Print telemetry report every 5 ticks (~8 Hz)

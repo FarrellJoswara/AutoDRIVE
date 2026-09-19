@@ -121,18 +121,15 @@ To monitor training without running heavy 3D rendering:
 
 ## 7. Implementation Milestones
 
-1. **Host Setup**:
-   * Install Docker Desktop on Windows with WSL2 integration enabled.
-   * Verify NVIDIA Container Toolkit access from Docker.
-2. **Simulator Containerization**:
-   * Create `autodrive_simulator` Docker image configured for headless batchmode.
-   * Verify Socket.IO handshake on port `4567`.
-3. **Gymnasium Environment Development**:
-   * Implement `AutoDriveEnv(gym.Env)` with Socket.IO request/reply loop.
-   * Verify observation extraction (1080 LiDAR, IMU, Velocities) and `V1 Reset`.
-4. **2D Localhost Preview**:
+1. **Layer 1: Fleet Management & API (Completed)**
+   * Implemented custom object-oriented `Racer` and `RaceTrack` Socket.IO servers (`src/racer`).
+   * Supported multi-port asynchronous simulator communication and telemetry logging.
+   * *Status:* The Python logic perfectly wraps AutoDRIVE's API. However, current execution is **BLOCKED** due to a fatal bug in the specific `AutoDRIVE Simulator.exe` (2022.3.52f1) release being used, where the simulator drops the WebSocket and halts its physics loop after sending a single frame. Until an un-bugged/ML-Agents-free build of the simulator is swapped in, visual or headless execution will time out.
+2. **Gymnasium Environment Development (Pending Simulator Fix)**:
+   * Wrap Layer 1 into an `AutoDriveEnv(gym.Env)` with Gymnasium interface.
+   * Parse 1080-ray LiDAR and IMU observations.
+3. **2D Localhost Preview (Pending Simulator Fix)**:
    * Build the lightweight HTML5 canvas monitor on port `8080`.
-5. **PPO Training Pipeline**:
+4. **PPO Training Pipeline (Pending Simulator Fix)**:
    * Implement 1D-CNN feature extractor in PyTorch.
-   * Setup single-instance test run, then scale to 4-way vectorized `SubprocVecEnv`.
-   * Monitor policy convergence and lap time progression.
+   * Scale to 4-way vectorized `SubprocVecEnv` and train on RTX 3060.
