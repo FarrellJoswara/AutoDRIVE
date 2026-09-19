@@ -12,4 +12,8 @@ __pycache__/
 # Build & Simulator binaries
 *.x86_64
 *.so
+*.exe
+*.dll
 simulator/Data/
+simulator/windows/
+simulator_win/
