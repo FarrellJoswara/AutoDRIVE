@@ -1,23 +1,23 @@
 """Racer: Individual AutoDRIVE Vehicle Controller and Simulator Bridge.
 
-Manages Socket.IO server communications via ASGI/uvicorn, turn-based lockstep
-synchronization, real-time execution profiling, and child simulator process lifecycle.
+Manages Socket.IO server communications via gevent/WSGI (matching the official
+AutoDRIVE Devkit bridge), turn-based lockstep synchronization, real-time
+execution profiling, and child simulator process lifecycle.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import platform
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 import socketio
-import uvicorn
+from gevent import pywsgi
+from geventwebsocket.handler import WebSocketHandler
 
 from .telemetry import TelemetrySnapshot, TrajectoryLogger
 
@@ -84,11 +84,12 @@ class Racer:
 
         # Process & Server Handles
         self._sim_process: Optional[subprocess.Popen] = None
-        self._server: Optional[uvicorn.Server] = None
+        self._wsgi_server: Optional[pywsgi.WSGIServer] = None
         self._server_thread: Optional[threading.Thread] = None
+        self._server_ready = threading.Event()
 
-        # Socket.IO ASGI Server Setup
-        self.sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+        # Socket.IO gevent server (matches official AutoDRIVE Devkit bridge)
+        self.sio = socketio.Server(async_mode="gevent", cors_allowed_origins="*")
         self._register_handlers()
         self._start_server()
 
@@ -99,37 +100,44 @@ class Racer:
     def _register_handlers(self) -> None:
         """Register Socket.IO event handlers for the AutoDRIVE simulator."""
 
-        # Auto-connect client if event arrives before explicit connect packet (Unity websocket-sharp client)
+        # Unity's Socket.IO client often emits 'Bridge' before completing the
+        # formal namespace connect handshake. Without this, events are dropped and
+        # is_connected stays False even though TCP/WebSocket is up.
         orig_handle_event = self.sio._handle_event
 
-        async def _auto_connect_handle_event(eio_sid, namespace, id, data):
+        def _auto_connect_handle_event(eio_sid, namespace, id, data):
             ns = namespace or "/"
             sid = self.sio.manager.sid_from_eio_sid(eio_sid, ns)
-            if not self.sio.manager.is_connected(sid, ns):
-                await self.sio._handle_connect(eio_sid, ns, None)
+            if sid is None or not self.sio.manager.is_connected(sid, ns):
+                self.sio._handle_connect(eio_sid, ns, None)
                 sid = self.sio.manager.sid_from_eio_sid(eio_sid, ns)
                 self.client_sid = sid
                 self._connected = True
-                logger.info(f"[Racer {self.racer_id}] Connected to simulator client sid={sid} on port {self.port}")
-            return await orig_handle_event(eio_sid, namespace, id, data)
+                logger.info(
+                    f"[Racer {self.racer_id}] Auto-connected Unity client sid={sid} on port {self.port}"
+                )
+            return orig_handle_event(eio_sid, namespace, id, data)
 
         self.sio._handle_event = _auto_connect_handle_event
 
-        @self.sio.event
-        async def connect(sid, environ):
+        @self.sio.on("connect")
+        def connect(sid, environ):
             self.client_sid = sid
             self._connected = True
             logger.info(f"[Racer {self.racer_id}] Connected to simulator client sid={sid} on port {self.port}")
 
-        @self.sio.event
-        async def disconnect(sid):
+        @self.sio.on("disconnect")
+        def disconnect(sid):
             self._connected = False
             self.client_sid = None
             logger.warning(f"[Racer {self.racer_id}] Disconnected from simulator on port {self.port}")
 
         @self.sio.on("Bridge")
-        async def on_bridge(sid, data: Dict[str, Any]):
-            """Turn-based lockstep callback invoked on each Unity physics tick (40 Hz)."""
+        def on_bridge(sid, data: Dict[str, Any]):
+            """Callback on each Unity physics tick; reply via emit (official protocol)."""
+            if not data:
+                return
+
             self._connected = True
             self.client_sid = sid
             self.step_counter += 1
@@ -154,43 +162,58 @@ class Racer:
             # Wake up caller waiting in step()
             self._step_event.set()
 
-            # Return driving commands to simulator via explicit Bridge emission
-            await self.sio.emit(
-                "Bridge",
-                data={
-                    "V1 Throttle": str(cmd_th),
-                    "V1 Steering": str(cmd_st),
-                    "V1 Reset": "1" if reset_flag else "0",
-                },
-                to=sid,
-            )
+            # Official AutoDRIVE reply: emit string-valued Bridge payload only (no ACK return)
+            try:
+                self.sio.emit(
+                    "Bridge",
+                    data={
+                        "V1 Throttle": str(cmd_th),
+                        "V1 Steering": str(cmd_st),
+                        "V1 Reset": str(bool(reset_flag)),
+                    },
+                    to=sid,
+                )
+            except Exception as exc:
+                logger.warning(f"[Racer {self.racer_id}] Failed to emit Bridge commands: {exc}")
 
-            return {
-                "V1 Throttle": cmd_th,
-                "V1 Steering": cmd_st,
-                "V1 Reset": bool(reset_flag),
-            }
+    def _serve_forever(self) -> None:
+        """Create and run the gevent WSGI server inside this thread's hub.
+
+        The server object must be constructed on the same OS thread that runs
+        the accept loop; otherwise gevent raises LoopExit and the port never binds
+        (common on Windows when the server is built on the main thread).
+        """
+        app = socketio.WSGIApp(self.sio)
+        self._wsgi_server = pywsgi.WSGIServer(
+            ("0.0.0.0", self.port),
+            app,
+            handler_class=WebSocketHandler,
+            log=None,
+            error_log=None,
+        )
+        try:
+            self._wsgi_server.start()
+            self._server_ready.set()
+            self._wsgi_server._stop_event.wait()
+        except Exception as exc:
+            logger.debug(f"[Racer {self.racer_id}] Gevent server exited: {exc}")
+        finally:
+            self._server_ready.set()  # unblock waiter if start() failed early
 
     def _start_server(self) -> None:
-        """Start the background uvicorn ASGI server hosting the Socket.IO listener."""
-        app = socketio.ASGIApp(self.sio)
-        config = uvicorn.Config(
-            app,
-            host="0.0.0.0",
-            port=self.port,
-            log_level="warning",
-            access_log=False,
-        )
-        self._server = uvicorn.Server(config)
+        """Start the background gevent WSGI server hosting the Socket.IO listener."""
+        self._server_ready.clear()
         self._server_thread = threading.Thread(
-            target=self._server.run,
-            name=f"Racer-{self.racer_id}-Uvicorn-{self.port}",
+            target=self._serve_forever,
+            name=f"Racer-{self.racer_id}-Gevent-{self.port}",
             daemon=True,
         )
         self._server_thread.start()
-        # Brief pause to ensure port is listening
-        time.sleep(0.3)
-        logger.info(f"[Racer {self.racer_id}] Listening on 0.0.0.0:{self.port} (ASGI/uvicorn)")
+        if not self._server_ready.wait(timeout=5.0):
+            raise RuntimeError(f"[Racer {self.racer_id}] Gevent server failed to start on port {self.port}")
+        # Brief pause to ensure accept loop is active
+        time.sleep(0.2)
+        logger.info(f"[Racer {self.racer_id}] Listening on 0.0.0.0:{self.port} (gevent/WSGI)")
 
     def launch_simulator(self) -> None:
         """Launch the standalone Unity simulator subprocess (native or via WSL on Windows)."""
@@ -265,7 +288,8 @@ class Racer:
 
         if self.step_counter <= start_step:
             logger.warning(
-                f"[Racer {self.racer_id}] Watchdog timeout ({self.step_timeout}s) waiting for simulator frame."
+                f"[Racer {self.racer_id}] Watchdog timeout ({self.step_timeout}s) waiting for simulator frame "
+                f"(last step_counter={self.step_counter}, connected={self._connected})."
             )
 
         # Update Profiler Metrics
@@ -299,7 +323,7 @@ class Racer:
         return self.telemetry
 
     def kill(self) -> None:
-        """Terminate the Unity child simulator OS process and shut down ASGI server."""
+        """Terminate the Unity child simulator OS process and shut down gevent server."""
         self._is_alive = False
 
         # 1. Kill Unity child OS process
@@ -317,14 +341,22 @@ class Racer:
             finally:
                 self._sim_process = None
 
-        # 2. Stop uvicorn server
-        if self._server is not None:
+        # 2. Stop gevent WSGI server (may raise if called cross-thread; safe to ignore)
+        server = self._wsgi_server
+        self._wsgi_server = None
+        if server is not None:
             try:
-                self._server.should_exit = True
+                # Wake the serve thread's _stop_event without requiring hub affinity
+                server._stop_event.set()
+            except Exception:
+                pass
+            try:
+                server.stop()
             except Exception as e:
                 logger.debug(f"[Racer {self.racer_id}] Server close error: {e}")
-            finally:
-                self._server = None
+        if self._server_thread is not None and self._server_thread.is_alive():
+            self._server_thread.join(timeout=1.0)
+        self._server_thread = None
 
         # Release any threads waiting on events
         self._step_event.set()

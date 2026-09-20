@@ -2,6 +2,8 @@
 
 This document synthesizes the system architecture, file layout, driver specifications, containerization strategy, and the **Mission Control UI** for the AutoDRIVE RoboRacer platform.
 
+**Status snapshot:** Layer 1 (`src/racer`) is implemented and live-verified. Layer 2 (`src/env`) is **implemented** per §6. `src/ui` and `src/models` are planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
+
 ---
 
 ## 1. System Philosophy: The IDE & UI Separation
@@ -18,54 +20,48 @@ To combine algorithmic flexibility with operational control, the system divides 
 
 ```text
 AiCar/
-├── .gitignore                                 # Git ignore (virtual environments, binaries, cache)
+├── .gitignore                                 # Git ignore (venvs, binaries, cache, trajectory CSVs)
 ├── .dockerignore                              # Excludes .venv, .git, and cache from Docker build context
 ├── docker-compose.yml                         # Docker Compose orchestration (GPU passthrough, ports, volume mounts)
 ├── docker/
 │   ├── Dockerfile                             # Container recipe (Ubuntu 22.04, CUDA, OpenGL/Vulkan, Python)
 │   └── entrypoint.sh                          # Startup entrypoint (virtual display setup & app launcher)
 ├── PLAN.md                                    # High-level architecture & roadmap
-├── README.md                                  # Repository overview
+├── README.md                                  # Repository overview + Layer 1 quick start
 ├── requirements.txt                           # Core dependencies (numpy, gymnasium, socketio, gevent, torch, sb3, fastapi)
+├── scripts/
+│   └── demo.py                                # Live Layer 1 demo (headed / headless CLI)
 │
-├── simulator/                                 # AutoDRIVE Unity Standalone Executable (Linux)
-│   ├── AutoDRIVE Simulator.x86_64             # Unity Linux engine binary
-│   ├── UnityPlayer.so                         # Unity player library
-│   ├── GameAssembly.so                        # Compiled game logic
-│   └── Data/                                  # Unity asset bundles (tracks, car prefabs, physics)
+├── simulator/                                 # AutoDRIVE Unity Standalone (binaries mostly gitignored)
+│   ├── README.md                              # Upstream simulator usage notes
+│   ├── AutoDRIVE Simulator.x86_64             # Linux binary (optional)
+│   └── windows/                               # Windows build used for Layer 1 verification
+│       └── AutoDRIVE Simulator.exe
 │
 ├── src/
 │   ├── __init__.py
 │   │
-│   ├── ui/                                    # MISSION CONTROL UI (Web Dashboard)
-│   │   ├── __init__.py
-│   │   ├── app.py                             # Lightweight FastAPI backend & WebSocket streamer (port 8080)
-│   │   └── static/
-│   │       ├── index.html                     # Mission control dashboard (controls, 2D canvas, leaderboard)
-│   │       ├── app.js                         # 2D canvas renderer, REST client & WebSocket listener
-│   │       └── style.css                      # Modern dark-mode dashboard styling
-│   │
-│   ├── racer/                                 # LAYER 1: Low-Level Simulator Driver & Track Manager
+│   ├── racer/                                 # LAYER 1 (DONE): Simulator driver & track manager
 │   │   ├── __init__.py                        # Exports RaceTrack, Racer, TelemetrySnapshot, TrajectoryLogger
-│   │   ├── track.py                           # RaceTrack Manager (geometry, checkpoints, fleet stepping & kill controls)
-│   │   ├── racer.py                           # Racer class (Socket.IO server, lockstep step/reset, kill process, profiler)
-│   │   └── telemetry.py                       # Complete raw telemetry data model, derived physics metrics, and CSV logger
+│   │   ├── track.py                           # RaceTrack manager (geometry, checkpoints, fleet, kill)
+│   │   ├── racer.py                           # gevent Socket.IO server, lockstep step/reset/kill, sim launch
+│   │   └── telemetry.py                       # Raw telemetry model, derived dynamics, CSV logger
 │   │
-│   ├── env/                                   # LAYER 2: Gymnasium RL Environment
-│   │   ├── __init__.py                        # Exports AutoDriveEnv
-│   │   ├── autodrive_env.py                   # gym.Env implementation wrapping RaceTrack / Racer
-│   │   ├── rewards.py                         # Configurable reward shaping & penalty formulas
-│   │   └── spaces.py                          # Observation and action space definitions
+│   ├── env/                                   # LAYER 2 (PLANNED): Gymnasium wrapper — 1 env = 1 car
+│   │   ├── __init__.py                        # Export AutoDriveEnv
+│   │   ├── spaces.py                          # Obs/action spaces + snapshot→obs
+│   │   ├── rewards.py                         # RewardConfig + compute_reward
+│   │   └── autodrive_env.py                   # gym.Env reset/step/close
 │   │
-│   └── models/                                # LAYER 3: RL Policies & Feature Extractors
-│       ├── __init__.py
-│       └── feature_extractor.py               # 1D-CNN LiDAR + MLP Kinematics feature extractor for SB3
+│   ├── ui/                                    # PLANNED: Mission Control web dashboard
+│   └── models/                                # PLANNED: Layer 3 RL policies
 │
-├── logs/                                      # Exported CSV trajectories & training checkpoints
-└── tests/                                     # Verification & Diagnostics
-    ├── test_driver.py                         # Standalone test for Layer 1 (connectivity, lockstep, speed)
-    ├── test_telemetry.py                      # Math unit tests (quaternions, slip angles, Frenet projection)
-    └── check_gym_env.py                       # Gymnasium compliance checker (SB3 check_env)
+├── logs/trajectories/                         # Demo CSV exports (contents gitignored)
+└── tests/                                     # Verification & diagnostics
+    ├── test_driver.py                         # Mock Socket.IO lockstep + kill/export
+    ├── test_two_instances.py                  # Mock dual-racer orchestration
+    ├── test_telemetry.py                      # Math unit tests (quat, slip, Frenet)
+    └── check_gym_env.py                       # PLANNED: Gymnasium/SB3 check_env for Layer 2
 ```
 
 ---
@@ -221,12 +217,14 @@ Layer 1 provides a clean, Pythonic interface to control and inspect the simulato
 2. **`src/racer/racer.py` (`Racer` Class)**:
    * **Parameters**: `racer_id`, `port`, `simulator_path`, `auto_launch`, `headless`, `step_timeout`.
    * **Attributes**: `telemetry` (`TelemetrySnapshot`), `logger` (`TrajectoryLogger`), profiler metrics (`step_latency_ms`, `steps_per_second`, `real_time_factor`).
+   * **Transport**: `socketio.Server(async_mode="gevent")` + `gevent.pywsgi` + `WebSocketHandler`. This RoboRacer Windows build speaks **Engine.IO v4** (`python-socketio` 5.x / `python-engineio` 4.x). Commands are returned only via `sio.emit('Bridge', {string values})` (no ACK return payload). A small auto-connect shim handles Unity clients that emit `Bridge` before a formal namespace connect.
    * **Methods**:
-     * `_start_server()`: Starts background gevent Socket.IO server on `0.0.0.0:port`.
-     * `step(throttle, steering)`: Sends clamped commands, waits for next `'Bridge'` frame (turn-based lockstep), updates profiler, and returns `TelemetrySnapshot`.
-     * `reset()`: Emits `V1 Reset: True`, confirms teleportation and collision counter clearing, settles, and returns initial state.
-     * `kill()`: Terminates the child OS process (`subprocess.Popen.terminate()` / `.kill()`), closes the Socket.IO server socket, and releases port and memory.
+     * `_start_server()`: Starts background gevent Socket.IO server on `0.0.0.0:port` (server object created on the server thread — required on Windows).
+     * `step(throttle, steering)`: Buffers clamped commands, waits for next `'Bridge'` frame (turn-based lockstep), updates profiler, and returns `TelemetrySnapshot`.
+     * `reset()`: Sets `V1 Reset` for the next Bridge reply (`"True"` / `"False"`), waits for acknowledgment, returns state.
+     * `kill()`: Terminates the child OS process, stops the gevent server, and releases the port.
      * `save_trajectory(file_path)`: Exports this vehicle's trajectory history to CSV.
+
 
 3. **`src/racer/telemetry.py`**:
    * **`TelemetrySnapshot`**:
@@ -239,29 +237,111 @@ Layer 1 provides a clean, Pythonic interface to control and inspect the simulato
 
 ---
 
-## 6. Layer 2: Gymnasium Environment (`src/env/autodrive_env.py`)
+## 6. Layer 2: Gymnasium Environment (`src/env/`)
 
-Layer 2 wraps `RaceTrack`, conforming to the standard Farama Gymnasium API (`gym.Env`).
+Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) can train without knowing Socket.IO exists. Gymnasium is only the shared `reset` / `step` interface; the env turns telemetry into **observation**, **reward**, and **episode-over** signals.
 
-* **Observation Space**: `Dict` space consisting of:
-  * `"lidar"`: Normalized LiDAR array $[0.0, 1.0]$ with configurable downsampling (1080, 540, 270, 108).
-  * `"state"`: Scaled kinematic vector $[v_{\text{long}}, v_{\text{lat}}, \omega_z, a_{\text{long}}, a_{\text{lat}}, \beta, \text{prev\_throttle}, \text{prev\_steering}]$.
-* **Action Space**: Continuous `Box(low=-1.0, high=1.0, shape=(2,))` for `[throttle, steering]`.
-* **Frame Skipping**: Configurable `frame_skip` (default: 2 ticks = $20\text{ Hz}$ control frequency from $40\text{ Hz}$ physics).
-* **Reward Shaping**: Progress along track heading, lap bonus (verified by checkpoints), collision penalty, excessive slip angle penalty, and steering smoothness penalty.
-* **Termination & Truncation**: Terminated on collision; truncated on step timeout.
+**Data flow:** Unity → Layer 1 (`TelemetrySnapshot`) → `autodrive_env.py` gathers facts → `rewards.compute_reward(...)` → score for the learner. To reward something Layer 1 does not expose yet: extend Layer 1, or derive it in the env from existing fields / external files, then pass it into `rewards.py`.
+
+### Locked design decisions
+
+| Topic | Decision |
+| :--- | :--- |
+| Env ↔ car | **Strict 1 Gym env = 1 racer.** We are **not** putting multiple cars inside one env. Parallelism later = many env *processes*, each with its own headless sim (e.g. SB3 `SubprocVecEnv`) |
+| Default launch | **Headless** (watching is Mission Control UI later, not the Unity window) |
+| LiDAR | **Full 1080 beams**, normalized; **no downsampling** for now |
+| Waypoints / Frenet progress reward | **Deferred** — reward Phase 2; v1 does not require a centerline map |
+| Crash policy | **Do not end the episode on collision.** Keep `collision_penalty` in config but **default `0.0`**. Pressure comes from lost forward progress + stagnation truncation. Wall tax is optional later |
+| Episode end | **Stagnation truncation** (no meaningful forward progress for a configured idle window). Optional hard **max-steps** cap (`max_episode_steps`; **default `0` = disabled**). Not a fixed “one lap timer” |
+| Control rate | Unity physics ~**40 Hz**. Default **`frame_skip=1`** (~40 Hz actions). `frame_skip` must be `>= 1` (`0` is invalid). Option e.g. `2` → ~20 Hz |
+
+### Explicitly out of scope for Layer 2
+
+* Multi-car / multi-agent **inside** a single `AutoDriveEnv`  
+* PPO, neural nets, training loops (Layer 3)  
+* Mission Control UI  
+* Waypoints, Frenet \(s,d\), gates, lap bonuses (reward Phase 2)
+
+### Modules (ship with Layer 2)
+
+| File | Role |
+| :--- | :--- |
+| `src/env/__init__.py` | Export `AutoDriveEnv` (and maybe `RewardConfig`) |
+| `src/env/spaces.py` | Action/obs space definitions + `TelemetrySnapshot` → obs helpers |
+| `src/env/rewards.py` | `RewardConfig` + `compute_reward` (main file for tuning scores) |
+| `src/env/autodrive_env.py` | `gym.Env`: `reset` / `step` / `close`; gathers facts; calls Layer 1 |
+| `tests/check_gym_env.py` | SB3 / Gymnasium `check_env` smoke once the env runs |
+| `src/env/README.md` | Full Layer 2 docs: spaces, rewards, init knobs, Docker, how-to-use |
+
+### Observation / action (v1)
+
+* **Observation** (`Dict`):
+  * `"lidar"`: shape `(1080,)`, values in \([0, 1]\)
+  * `"state"`: e.g. \([v_{\text{long}}, v_{\text{lat}}, \omega_z, a_{\text{long}}, a_{\text{lat}}, \beta, \text{prev\_throttle}, \text{prev\_steering}]\)
+* **Action**: `Box(-1, 1, shape=(2,))` → `[throttle, steering]`
+
+### Reward sketch (v1, no waypoints)
+
+* **Primary signal:** forward progress proxy (e.g. \(v_{\text{long}}\) or forward displacement). Stagnation truncates the episode — main “you’re stuck” pressure (including after crashes).
+* **`collision_penalty`:** present in `RewardConfig`, **default `0.0`**. Crash ≠ automatic lose.
+* Optional weights (may also default to `0`): slip, steering jerk.
+* Episode continues after hits unless stagnating or max steps hit.
+
+**How to add a new reward/penalty later (edit `rewards.py`):**
+
+1. Add a weight on `RewardConfig` (default `0.0` if unused).
+2. In `compute_reward(...)`, add a term when the condition is true.
+3. If you need a new **fact**, either expose it on `TelemetrySnapshot` (Layer 1), derive it in `autodrive_env.py` from existing snap fields, or load external data (e.g. waypoint file) in the env — then pass that fact into `compute_reward`.
+4. Tune by changing config numbers, not rewriting the env loop.
+
+### Termination vs truncation
+
+* **Terminated:** unused for crashes in v1 (reserve for rare hard failures only if we add any later)
+* **Truncated:** stagnation window, or optional absolute max-steps safety cap (`max_episode_steps > 0`)  
+* **`reset()`:** called when a *new episode* starts (after truncate). That calls Layer 1 reset (teleport to grid). Mid-episode crashes do **not** by themselves call Unity reset.
+
+### Still fuzzy (implementation defaults chosen)
+
+These were open in design; v1 code uses:
+
+1. **Stagnation:** `|v_long| < 0.15` m/s for **200** consecutive env steps (~5 s at 40 Hz with `frame_skip=1`).
+2. **Forward reward:** `forward_scale * v_long` with `forward_scale=1.0`.
+3. **Connect wait:** **60** s timeout on env init when launching / expecting a client.
+4. **`info` dict** (diagnostics only — **not** fed to the policy): `step`, `idle_steps`, `reward`, `v_long`, `true_speed`, `collision`, `collision_event`, `collision_count`, `position`, plus `truncate_reason` when truncated.
+5. **State scaling:** none beyond LiDAR → \([0,1]\); kinematic state left as raw floats (deferred).
+6. **`max_episode_steps`:** default **`0`** (disabled); set positive for a hard cap.
+7. **Simulator path:** auto-detect Windows `.exe` vs Docker Linux `.x86_64`, or `AICAR_SIMULATOR_PATH`.
+
+Full teaching docs: [`src/env/README.md`](src/env/README.md).
+
+### Deferred (later phases)
+
+* Track waypoints, Frenet \(s,d\), checkpoint gates, lap-completion bonus  
+* LiDAR downsampling options  
+* Layer 3: PPO + 1D-CNN / MultiInputPolicy for Dict obs  
+* Parallel vectorized training (many 1-car envs, not multi-car-in-one-env)
 
 ---
 
 ## 7. Verification Plan
 
-1. **Unit Tests (`tests/test_telemetry.py`)**:
-   * Verify quaternion-to-yaw conversions, body-frame velocity rotations, slip angles, and Frenet $(s, d)$ coordinates.
-2. **Driver Test Script (`tests/test_driver.py`)**:
-   * Test Socket.IO connection, lockstep execution, single-car and fleet stepping, speed profiler metrics, `kill_racer()`, and `track.save_all_trajectories()`.
-3. **Gymnasium Compliance Checker (`tests/check_gym_env.py`)**:
-   * Run Stable-Baselines3 `check_env(env)` to validate observation/action spaces and reset contracts.
-4. **Mission Control UI Smoke Test**:
-   * Launch `src/ui/app.py`, open `http://localhost:8080`, verify that slider controls work, canvas renders track, and Start/Stop/Kill buttons orchestrate background simulator processes.
-5. **Docker Build & Run Verification**:
-   * Run `docker compose up --build` and verify GPU detection (`nvidia-smi` inside container) and web dashboard accessibility on port 8080.
+### Layer 1 — Verified
+
+1. **Unit / mock tests** (`tests/test_telemetry.py`, `tests/test_driver.py`, `tests/test_two_instances.py`):
+   * Quaternion / slip / Frenet math; mock Socket.IO lockstep; dual mock clients.
+2. **Live headless smoke** (`python scripts/demo.py --headless`):
+   * Auto-connect via `-ip` / `-port`; continuous Bridge frames; speed > 0; CSV export.
+3. **Live headed multi-instance** (`python scripts/demo.py --racers 2`):
+   * Two GUI windows on ports `4567` / `4568`; both connect and drive in lockstep.
+4. **Live control smoke** (headless, 2 cars):
+   * `reset_all` / `reset_single`; `kill_racer(i)` while sibling keeps stepping; `kill_all`.
+
+### Later layers — Pending
+
+5. **Layer 2 Gymnasium — Implemented**:
+   * `src/env/` + `tests/check_gym_env.py` + README construct snippet
+   * Live `check_env` still requires a headless sim binary when you run the checker
+6. **Mission Control UI Smoke Test**:
+   * Launch `src/ui/app.py`, open `http://localhost:8080`, verify launch/stop/kill/canvas.
+7. **Docker Build & Run Verification**:
+   * `docker compose up --build`, GPU via `nvidia-smi`, dashboard on port 8080.

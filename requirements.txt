@@ -1,0 +1,29 @@
+# AutoDRIVE RoboRacer Sim-Racing Dependencies
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+matplotlib>=3.8.0
+
+# Simulator Driver & Networking
+# This RoboRacer Unity build speaks Engine.IO v4 (EIO=4). Do NOT pin the older
+# Devkit EIO=3 stack (socketio 4 / engineio 3) — it causes connect/disconnect flicker.
+python-socketio[client]>=5.10.0
+python-engineio>=4.9.0
+gevent>=21.12.0
+gevent-websocket>=0.10.1
+requests>=2.31.0
+
+# Reinforcement Learning & Gymnasium
+gymnasium>=0.29.0
+torch>=2.2.0
+stable-baselines3>=2.3.0
+
+# Mission Control UI (Web Dashboard)
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+websockets>=12.0
+pydantic>=2.6.0
+jinja2>=3.1.0
+
+# Development & Testing
+pytest>=8.0.0

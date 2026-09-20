@@ -3,11 +3,16 @@
 venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Environment & IDE
 .vscode/
 .idea/
 *.log
+
+# Runtime artifacts
+logs/trajectories/*.csv
+!logs/trajectories/.gitkeep
 
 # Build & Simulator binaries
 *.x86_64

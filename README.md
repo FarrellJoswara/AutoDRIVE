@@ -1,135 +1,168 @@
-# AutoDRIVE RoboRacer Autonomous Sim-Racing: Architecture & Implementation Plan
+# AutoDRIVE RoboRacer — AiCar
 
-This document synthesizes the architecture, hardware considerations, and step-by-step roadmap for training a competitive Reinforcement Learning (RL) model for the AutoDRIVE RoboRacer / F1TENTH sim-racing time trials.
+Training stack for AutoDRIVE RoboRacer / F1TENTH sim-racing time trials on Windows (RTX 3060), with a clean Layer-1 simulator driver and a roadmap toward Gymnasium + PPO.
+
+## Current status
+
+| Layer | Status |
+| :--- | :--- |
+| **Layer 1** — `RaceTrack` / `Racer` / telemetry | **Verified** (headed + headless, multi-instance, reset, kill) |
+| **Layer 2** — Gymnasium `AutoDriveEnv` | **Implemented** (`src/env/`) — see below |
+
+| **Layer 3** — PPO / 1D-CNN | Not started |
+| **Mission Control UI** (`src/ui`) | Planned only |
+| **Docker training stack** | Scaffold exists; UI entrypoint not built yet |
+
+Layer 1 talks to the Windows AutoDRIVE Simulator over Socket.IO (**Engine.IO v4**), using a **gevent** WSGI server and string-valued `Bridge` command emits (matching the AutoDRIVE Devkit reply shape).
+
+### Layer 2 design snapshot
+
+* **1 env = 1 car** (no multi-car inside one env; parallel training = many 1-car envs later).
+* Headless; full **1080** LiDAR; `frame_skip=1` (~40 Hz) but configurable (`>= 1`; **not** 0).
+* Crash: **no episode end**; `collision_penalty` defaults to **0** — stagnation ends the attempt.
+* `max_episode_steps=0` → no hard step cap (stagnation only); set `>0` for a safety limit.
+* Waypoints / lap bonuses: **deferred**.
+* Code: `src/env/` + `tests/check_gym_env.py`.
+
+**Full Layer 2 docs (every knob, rewards, Docker, how-to-use):** [`src/env/README.md`](src/env/README.md)
+
+#### Construct `AutoDriveEnv`
+
+```python
+from src.env import AutoDriveEnv, RewardConfig
+
+env = AutoDriveEnv(
+    # path auto-detected (Windows .exe or Docker Linux .x86_64)
+    port=4567,
+    headless=True,
+    frame_skip=1,          # every physics tick; cannot be 0
+    max_episode_steps=0,   # 0 = unlimited (stagnation only)
+    reward_config=RewardConfig(forward_scale=1.0, collision_penalty=0.0),
+)
+obs, info = env.reset()
+obs, reward, terminated, truncated, info = env.step([0.5, 0.0])
+env.close()
+```
+
+Compliance check (live headless sim required):
+
+```bash
+python -m tests.check_gym_env
+```
+
+Also: [PLAN.md §6](PLAN.md).
+
+## Quick start (Layer 1)
+
+1. Place the Windows simulator under `simulator/windows/AutoDRIVE Simulator.exe` (gitignored binary).
+2. Install Python deps (use Python 3.13 or a venv):
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run a live demo:
+
+   ```bash
+   python scripts/demo.py
+   python scripts/demo.py --headless --racers 1 --duration 10
+   python scripts/demo.py --racers 2 --duration 15
+   ```
+
+   - **Headed:** set each window’s port (`4567`, `4568`, …) and click **Connect**.
+   - **Headless:** uses `-batchmode -nographics -ip 127.0.0.1 -port <n>` and auto-connects.
+
+4. Mock / unit tests (no Unity required):
+   ```bash
+   python -m pytest tests/test_telemetry.py tests/test_driver.py tests/test_two_instances.py -v
+   ```
+
+## Repository layout (what exists now)
+
+```text
+AiCar/
+├── PLAN.md                    # Full architecture & roadmap
+├── README.md                  # Overview + Layer 1 quick start
+├── requirements.txt
+├── scripts/
+│   └── demo.py                # Live Layer 1 demo (headed / headless)
+├── src/racer/                 # Layer 1 driver
+│   ├── racer.py               # Socket.IO server, step/reset/kill, sim launch
+│   ├── track.py               # Fleet manager, Frenet / checkpoints
+│   └── telemetry.py           # Snapshot + CSV logger
+├── src/env/                   # Layer 2 Gymnasium env — see src/env/README.md
+│   ├── autodrive_env.py
+│   ├── spaces.py
+│   ├── rewards.py
+│   └── README.md
+├── tests/                     # Telemetry math + mock Socket.IO + check_gym_env
+├── simulator/                 # AutoDRIVE binaries (mostly gitignored)
+└── logs/trajectories/         # CSV exports from demos (gitignored contents)
+```
+
+See [PLAN.md](PLAN.md) for the target layout (UI, Gym env, models, Docker).
 
 ---
 
-## 1. System Overview & Hardware Context
+## Architecture overview (target)
 
-* **Host Platform**: Windows 11 with WSL2 (Ubuntu distro installed).
-* **Compute Hardware**: NVIDIA GeForce RTX 3060 (12 GB VRAM), CUDA Driver 12.7.
-* **Prerequisite to Install**: Docker Desktop for Windows with the WSL2 backend enabled.
-* **Core Philosophy**: Pure Reinforcement Learning directly in the simulator (no sim-to-sim transfer, no warm start), utilizing real-time vehicle telemetry and 1080-beam LiDAR.
+### Hardware context
 
----
+* **Host**: Windows 11 with WSL2.
+* **GPU**: NVIDIA GeForce RTX 3060 (12 GB), CUDA 12.x.
+* **Philosophy**: Pure RL in the simulator (no sim-to-sim transfer), using telemetry + 1080-beam LiDAR.
 
-## 2. Two-Container Architecture
-
-The system is partitioned into two distinct containers to isolate dependencies, mirror real-world autonomous vehicle architecture, and produce a submission-ready agent:
+### Two-container target design
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │               CONTAINER 1: SIMULATOR                   │
-│  - Ubuntu 22.04 base                                   │
-│  - AutoDRIVE Simulator Linux binary (.x86_64)          │
-│  - Headless execution (-batchmode -nographics / xvfb)  │
-│  - Socket.IO Client (communicates over port 4567+)     │
+│  - AutoDRIVE Simulator (Linux .x86_64 or Windows exe) │
+│  - Headless (-batchmode -nographics / xvfb)            │
+│  - Socket.IO Client (ports 4567+)                      │
 └──────────────────────────▲─────────────────────────────┘
-                           │ Socket.IO (Local Network Bridge)
-                           │ Telemetry: LiDAR, IMU, Odometry, Race Stats
-                           │ Commands: Throttle, Steering, Reset
+                           │ Socket.IO Bridge
+                           │ Telemetry ↔ Throttle / Steering / Reset
 ┌──────────────────────────▼─────────────────────────────┐
 │               CONTAINER 2: BRAIN (API / RL)            │
-│  - PyTorch with NVIDIA CUDA GPU acceleration           │
-│  - Custom Gymnasium Environment (Socket.IO Server)     │
-│  - 1D-CNN + PPO Policy Network (Stable-Baselines3)     │
-│  - Multi-instance Vectorized Environment Worker        │
-│  - Lightweight 2D Top-Down Web Monitor (Port 8080)     │
+│  - Layer 1 driver (done) + Gymnasium env (planned)     │
+│  - PyTorch + Stable-Baselines3 PPO                     │
+│  - Mission Control UI on :8080 (planned)               │
 └────────────────────────────────────────────────────────┘
 ```
 
----
+### Bridge protocol
 
-## 3. Gymnasium Environment Design
+* Unity connects as a Socket.IO client to the Python server on port `4567` (+ instance offset).
+* Each physics tick, Unity emits `'Bridge'` with vehicle telemetry.
+* Python replies with an emitted `'Bridge'` payload (strings):
 
-### A. Communication Protocol
-* The AutoDRIVE Simulator connects as a Socket.IO client to the Python bridge at port `4567`.
-* On every physics step, Unity emits `'Bridge'` with vehicle telemetry.
-* The Gym environment replies synchronously with:
   ```python
   {'V1 Throttle': str(throttle), 'V1 Steering': str(steering), 'V1 Reset': str(reset)}
   ```
 
-### B. Observation Space
-A unified vector/tensor combining:
-1. **Planar LiDAR**: 1,080 continuous range readings ($0.06\text{ m}$ to $10.0\text{ m}$ normalized to $[0, 1]$).
-2. **Kinematics / Speed**: Longitudinal velocity ($v_x$), lateral slide velocity ($v_y$).
-3. **IMU**: Yaw rotational rate ($\omega_z$), longitudinal & lateral acceleration ($a_x, a_y$).
-4. **Action Feedback**: Previous steering angle and throttle command (prevents steering chatter/instability).
+### Planned Gymnasium design (Layer 2+)
 
-> [!NOTE]
-> **Why 1D Convolution over 2D?**
-> The 2D LiDAR emits a 1D sequence across angular indices ($[-135^\circ, +135^\circ]$). A 1D Convolutional layer (`Conv1d`) treats this as an angular panorama, identifying walls, gaps, and corner gradients with zero discretization loss and sub-millisecond GPU inference time.
+* **Observation**: LiDAR (1080 beams) + kinematics / IMU + previous action.
+* **Action**: `Box(-1, 1, shape=(2,))` → steering, throttle/brake.
+* **Termination**: collision; truncation on step limit.
+* **Parallelism**: multiple headless sims on `4567..4570` via `SubprocVecEnv`.
 
-### C. Action Space
-Continuous action space: `Box(low=-1.0, high=1.0, shape=(2,), dtype=float32)`:
-* `action[0]`: Steering angle $[-1.0, 1.0]$ mapped to max physical wheel angle.
-* `action[1]`: Throttle / Brake $[-1.0, 1.0]$ (positive = acceleration, negative = braking).
+### Roadmap phases
 
-### D. Step & Reset Mechanics
-* **`reset()`**: Sends `'V1 Reset': 'True'` $\to$ Unity teleports the car to the starting grid and resets collision flags.
-* **`step(action)`**: Executes commands for $k$ ticks (frame-skipping of 2 to 4 ticks recommended for stable action duration).
-* **Termination Criteria**:
-  * Collision: `data['V1 Collisions'] > 0` $\to$ Terminate episode with penalty.
-  * Timeout / Truncation: Maximum allowed time steps exceeded.
-* **Reward Shaping**:
-  * Positive: Progress along the track centerline (or forward velocity along the track tangent).
-  * Lap Completion: Large bonus on `lap_count` increment.
-  * Penalties: Large negative reward (e.g., $-100$) on collision; minor penalty on rapid steering jerk.
+1. **Phase 1 (next)**: End-to-end PPO with 1D-CNN on LiDAR + IMU.
+2. **Phase 2**: Follow-the-Gap baseline lap time.
+3. **Phase 3**: ForzaETH / TC-Driver style raceline conditioning.
 
 ---
 
-## 4. Multi-Instance Parallel Acceleration (Vectorized Envs)
+## Implementation milestones
 
-Because Unity's physics can become unstable if artificially forced to run at 10x single-thread clock speed, acceleration will be achieved via **parallel headless instances**:
-
-* AutoDRIVE accepts `-port <PORT>`.
-* Launch $N$ simulator instances simultaneously:
-  * Instance 1: Port `4567`
-  * Instance 2: Port `4568`
-  * Instance 3: Port `4569`
-  * Instance 4: Port `4570`
-* Stable-Baselines3 `SubprocVecEnv` connects to all $N$ instances simultaneously.
-* **Result**: $4\times$ to $8\times$ data collection speedup with zero physics degradation, fully utilizing the 12 GB VRAM on your RTX 3060.
-
----
-
-## 5. Lightweight 2D Top-Down Web Monitor
-
-To monitor training without running heavy 3D rendering:
-* A tiny background thread inside Container 2 receives $(x, y, \text{yaw})$ and LiDAR scan endpoints.
-* Broadcasts at 15–20 FPS over a WebSocket to an HTML5 canvas (`http://localhost:8080`).
-* **Visuals**:
-  * 2D top-down track contour.
-  * Vehicle bounding box with heading indicator.
-  * Dynamic LiDAR laser fan hitting track walls.
-  * Real-time HUD: Speed, steering, lap time, episode count, reward.
-* **Resource impact**: $< 1\%$ CPU, closing the browser tab results in 0% UI overhead.
-
----
-
-## 6. ForzaETH & Future Roadmap Considerations
-
-* **Phase 1 (Current Focus)**: Pure End-to-End PPO with 1D-CNN on raw LiDAR + IMU.
-* **Phase 2 (Benchmark Comparison)**: Implement a classical **Follow the Gap (FTG)** controller to set an initial baseline lap time.
-* **Phase 3 (ForzaETH / TC-Driver Architecture)**:
-  * Map the track via SLAM / waypoints.
-  * Compute minimum-time trajectory (apex optimization).
-  * Condition the RL policy on following the optimal raceline under extreme tire slip angles.
-
----
-
-## 7. Implementation Milestones
-
-1. **Layer 1: Fleet Management & API (Completed)**
-   * Implemented custom object-oriented `Racer` and `RaceTrack` Socket.IO servers (`src/racer`).
-   * Supported multi-port asynchronous simulator communication and telemetry logging.
-   * *Status:* The Python logic perfectly wraps AutoDRIVE's API. However, current execution is **BLOCKED** due to a fatal bug in the specific `AutoDRIVE Simulator.exe` (2022.3.52f1) release being used, where the simulator drops the WebSocket and halts its physics loop after sending a single frame. Until an un-bugged/ML-Agents-free build of the simulator is swapped in, visual or headless execution will time out.
-2. **Gymnasium Environment Development (Pending Simulator Fix)**:
-   * Wrap Layer 1 into an `AutoDriveEnv(gym.Env)` with Gymnasium interface.
-   * Parse 1080-ray LiDAR and IMU observations.
-3. **2D Localhost Preview (Pending Simulator Fix)**:
-   * Build the lightweight HTML5 canvas monitor on port `8080`.
-4. **PPO Training Pipeline (Pending Simulator Fix)**:
-   * Implement 1D-CNN feature extractor in PyTorch.
-   * Scale to 4-way vectorized `SubprocVecEnv` and train on RTX 3060.
+1. **Layer 1: Fleet Management & API — Completed & verified**
+   * `Racer` / `RaceTrack` / `TelemetrySnapshot` in `src/racer`.
+   * Live verification: headless 1-car drive; headed 2-car drive; `reset_all` / `reset_single`; `kill_racer` / `kill_all`; CSV trajectory export.
+2. **Gymnasium Environment — Implemented (`src/env/`)**
+   * `AutoDriveEnv` + `spaces` / `rewards`; 1 env = 1 car; headless; crash penalty default 0; stagnation truncation; `frame_skip=1`.
+   * Includes `__init__.py`, `tests/check_gym_env.py`, README construct snippet.
+3. **2D Localhost Preview — Pending**
+   * Mission Control canvas on port `8080`.
+4. **PPO Training Pipeline — Pending**
+   * 1D-CNN feature extractor + vectorized **many 1-car envs** on the RTX 3060 (not multi-car-in-one-env).
