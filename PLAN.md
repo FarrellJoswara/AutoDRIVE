@@ -2,7 +2,7 @@
 
 This document synthesizes the system architecture, file layout, driver specifications, containerization strategy, and the **Mission Control UI** for the AutoDRIVE RoboRacer platform.
 
-**Status snapshot:** Layer 1 (`src/layer1`) is implemented and live-verified. Layer 2 (`src/layer2`) is **implemented** per §6. `src/ui` and `src/models` are planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
+**Status snapshot:** Layer 1 (`src/layer1`) is implemented and live-verified. Layer 2 (`src/layer2`) is **implemented** per §6. Layer 3 plan: [`LAYER3.md`](LAYER3.md). `src/ui` planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
 
 ---
 
@@ -12,7 +12,7 @@ To combine algorithmic flexibility with operational control, the system divides 
 
 | In Your IDE (Code Development) | In the Mission Control UI (`http://localhost:8080`) |
 | :--- | :--- |
-| • Designing neural network architectures (`src/models/`)<br>• Writing and tuning reward formulas (`src/layer2/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`scripts/`) | • Choosing number of racers ($N = 1, 2, 4, 16, 32\dots$ unbounded)<br>• Track selection (`IROS 2024`, `Berlin`, `Porto`)<br>• **Single-click LAUNCH / RUN** (starts Unity simulators + Python driver)<br>• **Single-click STOP ALL / KILL ALL** (terminates all background processes)<br>• **Per-car KILL RACER** (terminates a specific car process from the leaderboard)<br>• **Single-click RESET GRID**<br>• **Single-click EXPORT ALL CSVs**<br>• Live 2D top-down bird's-eye canvas (moving cars + LiDAR laser fan)<br>• Real-time leaderboard (speeds, lap times, SPS, RTF, collisions) |
+| • Designing neural network architectures (`src/layer3/`)<br>• Writing and tuning reward formulas (`src/layer2/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`scripts/`) | • Choosing number of racers ($N = 1, 2, 4, 16, 32\dots$ unbounded)<br>• Track selection (`IROS 2024`, `Berlin`, `Porto`)<br>• **Single-click LAUNCH / RUN** (starts Unity simulators + Python driver)<br>• **Single-click STOP ALL / KILL ALL** (terminates all background processes)<br>• **Per-car KILL RACER** (terminates a specific car process from the leaderboard)<br>• **Single-click RESET GRID**<br>• **Single-click EXPORT ALL CSVs**<br>• Live 2D top-down bird's-eye canvas (moving cars + LiDAR laser fan)<br>• Real-time leaderboard (speeds, lap times, SPS, RTF, collisions) |
 
 ---
 
@@ -57,9 +57,10 @@ AiCar/
 │   │   └── README.md
 │   │
 │   ├── ui/                                    # PLANNED: Mission Control web dashboard
-│   └── models/                                # PLANNED: Layer 3 RL policies
+│   └── layer3/                                # PLANNED: PPO — see LAYER3.md
 │
-└── logs/trajectories/                         # Demo CSV exports (contents gitignored)
+├── logs/trajectories/                         # Demo CSV exports (contents gitignored)
+└── LAYER3.md                                  # Layer 3 implementation plan (PPO / extractor / train)
 ```
 
 ---
@@ -317,7 +318,7 @@ Full teaching docs: [`src/layer2/README.md`](src/layer2/README.md).
 
 * Track waypoints, Frenet \(s,d\), checkpoint gates, lap-completion bonus  
 * LiDAR downsampling options  
-* Layer 3: PPO + 1D-CNN / MultiInputPolicy for Dict obs  
+* Layer 3: see [`LAYER3.md`](LAYER3.md) (PPO + 1D-CNN / MultiInputPolicy)  
 * Parallel vectorized training (many 1-car envs, not multi-car-in-one-env)
 
 ---

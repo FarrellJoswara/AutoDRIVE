@@ -13,6 +13,8 @@ __pycache__/
 # Runtime artifacts
 logs/trajectories/*.csv
 !logs/trajectories/.gitkeep
+logs/rl/**
+!logs/rl/.gitkeep
 
 # Build & Simulator binaries
 *.x86_64

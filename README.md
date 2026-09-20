@@ -8,11 +8,11 @@ Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing: Layer 1 drive
 | :--- | :--- |
 | **Layer 1** — `src/layer1/` | **Verified** (headed + headless, multi-instance, reset, kill) |
 | **Layer 2** — `src/layer2/` | **Implemented** |
-| **Layer 3** — PPO / 1D-CNN | Not started |
+| **Layer 3** — PPO / 1D-CNN | **Implemented** (`src/layer3/`) — see [`LAYER3.md`](LAYER3.md) |
 | **Mission Control UI** — `src/ui/` | Not started |
 | **Docker (A sim × N + B brain)** | Scaffold only (single compose service today) |
 
-Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · design detail in [`PLAN.md`](PLAN.md).
+Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · [`src/layer3/README.md`](src/layer3/README.md) (plain English) · [`LAYER3.md`](LAYER3.md) (build plan) · [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -20,11 +20,11 @@ Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/READM
 
 Order of work from here:
 
-1. **Layer 3 — PPO training**
-   - [ ] `src/models/` feature extractor (1D-CNN on LiDAR + MLP on state)
-   - [ ] `scripts/demo.py` train / play commands (or dedicated train script)
-   - [ ] Checkpoints + TensorBoard under `logs/rl/`
-   - [ ] Host smoke: 1 env, save/load `.zip`
+1. **Layer 3 — PPO training** — see **[`LAYER3.md`](LAYER3.md)**
+   - [x] `src/layer3/` — extractors, `envs.py`, `train.py`, `play.py`
+   - [x] Smoke: `train --n-envs 1` (10k) and `train --n-envs 2`
+   - [x] Checkpoints + TensorBoard under `logs/rl/`
+   - [x] `play` loads `.zip` (1 env)
 
 2. **Docker — split A (sim) / B (brain)**
    - [ ] `Dockerfile.sim` (Unity + Xvfb) and `Dockerfile.brain` (Python + CUDA/torch)
@@ -43,9 +43,9 @@ Order of work from here:
    - [ ] Logs / checkpoints volume-mounted to host `./logs`
 
 5. **Everything else**
-   - [ ] Vectorized training (`SubprocVecEnv`, many 1-car envs)
    - [ ] Reward Phase 2 (waypoints / lap progress) when ready
    - [ ] Competition packaging (submit B image; external A)
+   - [ ] Docker: point `train --n-envs N` at pre-started A×N sims (`auto_launch=False`)
 
 ---
 
@@ -65,11 +65,14 @@ python scripts/demo.py layer1 --headless --racers 1 --duration 10
 # Layer 2 live smoke
 python scripts/demo.py layer2 --steps 40
 
-# SB3 Gym check (needs torch + stable-baselines3)
+# SB3 Gym check / Layer 3
 python scripts/demo.py check-env
+python scripts/demo.py train --n-envs 1 --timesteps 10000 --out logs/rl/smoke_10k
+python scripts/demo.py train --n-envs 2 --base-port 4570 --timesteps 4096
+python scripts/demo.py play --model logs/rl/smoke_10k/final_model.zip --steps 200
 
 # Mock / unit tests (no Unity)
-python -m pytest scripts/test_layer1.py -v
+python -m pytest scripts/test_layer1.py scripts/test_layer3_extractor.py -v
 ```
 
 **Headed Layer 1:** set each window’s port (`4567`, `4568`, …) and click **Connect**.  
@@ -100,10 +103,12 @@ AiCar/
 │   └── test_layer1.py      # pytest: telemetry + mock Socket.IO
 ├── src/layer1/             # Layer 1 — see src/layer1/README.md
 ├── src/layer2/             # Layer 2 — see src/layer2/README.md
+├── src/layer3/             # Layer 3 — PPO (extractors, envs, train, play)
 ├── docker/                 # Current single-image scaffold
 ├── docker-compose.yml
 ├── simulator/              # Binaries (gitignored) + README
-└── logs/trajectories/      # CSV exports (contents gitignored)
+├── logs/trajectories/      # CSV exports (contents gitignored)
+└── logs/rl/                # PPO runs (contents gitignored)
 ```
 
 ---

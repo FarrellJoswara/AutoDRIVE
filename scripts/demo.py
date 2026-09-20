@@ -1,10 +1,12 @@
-"""Live demos and checks for Layer 1 / Layer 2.
+"""Live demos and checks for Layer 1 / Layer 2 / Layer 3.
 
 Examples:
   python scripts/demo.py layer1
   python scripts/demo.py layer1 --headless --racers 1 --duration 10
   python scripts/demo.py layer2 --steps 40
   python scripts/demo.py check-env
+  python scripts/demo.py train --n-envs 1 --timesteps 10000
+  python scripts/demo.py play --model logs/rl/.../final_model.zip
 """
 
 from __future__ import annotations
@@ -220,6 +222,67 @@ def _cmd_check_env(args: argparse.Namespace) -> int:
         env.close()
 
 
+def _cmd_train(args: argparse.Namespace) -> int:
+    from src.layer3.train import main as train_main
+
+    # Rebuild argv for train.main from remaining namespace fields.
+    argv = [
+        "--n-envs",
+        str(args.n_envs),
+        "--base-port",
+        str(args.base_port),
+        "--timesteps",
+        str(args.timesteps),
+        "--seed",
+        str(args.seed),
+        "--device",
+        args.device,
+        "--connect-timeout",
+        str(args.connect_timeout),
+        "--forward-scale",
+        str(args.forward_scale),
+        "--collision-penalty",
+        str(args.collision_penalty),
+    ]
+    if args.out is not None:
+        argv.extend(["--out", str(args.out)])
+    if args.resume is not None:
+        argv.extend(["--resume", str(args.resume)])
+    if args.headless:
+        argv.append("--headless")
+    else:
+        argv.append("--no-headless")
+    if args.auto_launch:
+        argv.append("--auto-launch")
+    else:
+        argv.append("--no-auto-launch")
+    return int(train_main(argv))
+
+
+def _cmd_play(args: argparse.Namespace) -> int:
+    from src.layer3.play import main as play_main
+
+    argv = [
+        "--model",
+        str(args.model),
+        "--port",
+        str(args.port),
+        "--steps",
+        str(args.steps),
+        "--seed",
+        str(args.seed),
+        "--device",
+        args.device,
+        "--connect-timeout",
+        str(args.connect_timeout),
+    ]
+    if args.headless:
+        argv.append("--headless")
+    else:
+        argv.append("--no-headless")
+    return int(play_main(argv))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AiCar live demos / checks")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -247,6 +310,31 @@ def main() -> int:
     pc.add_argument("--port", type=int, default=4567)
     pc.add_argument("--connect-timeout", type=float, default=60.0)
     pc.set_defaults(func=_cmd_check_env)
+
+    pt = sub.add_parser("train", help="Layer 3 PPO train")
+    pt.add_argument("--n-envs", type=int, default=1)
+    pt.add_argument("--base-port", type=int, default=4567)
+    pt.add_argument("--timesteps", type=int, default=10_000)
+    pt.add_argument("--out", type=Path, default=None)
+    pt.add_argument("--seed", type=int, default=0)
+    pt.add_argument("--device", type=str, default="auto")
+    pt.add_argument("--resume", type=Path, default=None)
+    pt.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
+    pt.add_argument("--auto-launch", action=argparse.BooleanOptionalAction, default=True)
+    pt.add_argument("--connect-timeout", type=float, default=90.0)
+    pt.add_argument("--forward-scale", type=float, default=1.0)
+    pt.add_argument("--collision-penalty", type=float, default=0.0)
+    pt.set_defaults(func=_cmd_train)
+
+    pp = sub.add_parser("play", help="Layer 3 PPO play (no learning)")
+    pp.add_argument("--model", type=Path, required=True)
+    pp.add_argument("--port", type=int, default=4567)
+    pp.add_argument("--steps", type=int, default=500)
+    pp.add_argument("--seed", type=int, default=0)
+    pp.add_argument("--device", type=str, default="auto")
+    pp.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
+    pp.add_argument("--connect-timeout", type=float, default=90.0)
+    pp.set_defaults(func=_cmd_play)
 
     args = parser.parse_args()
     return int(args.func(args))

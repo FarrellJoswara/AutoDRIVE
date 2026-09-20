@@ -15,8 +15,12 @@ requests>=2.31.0
 
 # Reinforcement Learning & Gymnasium
 gymnasium>=0.29.0
+# Install a CUDA wheel for the host GPU (preferred), e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+# Plain `pip install torch` often pulls the CPU-only build and will hammer the CPU.
 torch>=2.2.0
 stable-baselines3>=2.3.0
+tensorboard>=2.14.0
 
 # Mission Control UI (Web Dashboard)
 fastapi>=0.110.0
