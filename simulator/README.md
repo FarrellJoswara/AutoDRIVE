@@ -1,39 +1,32 @@
 # AutoDRIVE Simulator
 
-This directory hosts the AutoDRIVE Simulator executable used by Layer 1 (`src/racer`).
+Binaries used by Layer 1 (`src/racer`) and Layer 2 (`src/env`). Executables are **gitignored**; only docs live in git.
 
 ## Layout
 
 | Path | Purpose |
-| :--- | :--- |
-| `windows/AutoDRIVE Simulator.exe` | Windows build used for local Layer 1 demos (gitignored) |
-| `AutoDRIVE Simulator.x86_64` | Optional Linux binary for WSL / Docker |
-| `Data/` | Unity asset bundles (gitignored with the binaries) |
+|------|---------|
+| `windows/AutoDRIVE Simulator.exe` | Local Windows demos / training |
+| `AutoDRIVE Simulator.x86_64` | Linux / Docker (`/app/simulator/...` in compose) |
+| `Data/` | Unity asset bundles (gitignored with binaries) |
 
-Place the Windows build under `simulator/windows/` so `scripts/demo.py` can find it.
+## Usage
 
-## Usage (Windows Layer 1)
-
-Launch through the Python driver (it binds Socket.IO first, then spawns the process):
+Prefer the Python driver (binds Socket.IO first, then spawns the process):
 
 ```bash
-python scripts/demo.py
-python scripts/demo.py --headless --racers 1
+python scripts/demo.py layer1
+python scripts/demo.py layer1 --headless --racers 1
+python scripts/demo.py layer2
 ```
 
 Flags the driver passes:
 
-- Headed: `-ip 127.0.0.1 -port <PORT>` (then click **Connect** in the UI)
-- Headless: `-batchmode -nographics -ip 127.0.0.1 -port <PORT>` (auto-connect)
+- **Headed:** `-ip 127.0.0.1 -port <PORT>` (then click **Connect**)
+- **Headless:** `-batchmode -nographics -ip 127.0.0.1 -port <PORT>` (auto-connect)
 
-## Upstream notes
+Docker: set `AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64` (already in `docker-compose.yml`).
 
-Official AutoDRIVE bring-up examples (Linux) also document:
+## Protocol
 
-```bash
-./AutoDRIVE\ Simulator.x86_64
-xvfb-run ./AutoDRIVE\ Simulator.x86_64 -ip 127.0.0.1 -port 4567
-./AutoDRIVE\ Simulator.x86_64 -batchmode -nographics -ip 127.0.0.1 -port 4567
-```
-
-This project’s RoboRacer Windows client speaks **Socket.IO over Engine.IO v4**. The Layer 1 server uses `python-socketio` 5.x + gevent accordingly.
+This RoboRacer Windows / Linux client speaks **Socket.IO over Engine.IO v4**. Layer 1 uses `python-socketio` 5.x + gevent accordingly.

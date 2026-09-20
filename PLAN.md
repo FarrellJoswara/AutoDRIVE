@@ -58,10 +58,7 @@ AiCar/
 │
 ├── logs/trajectories/                         # Demo CSV exports (contents gitignored)
 └── tests/                                     # Verification & diagnostics
-    ├── test_driver.py                         # Mock Socket.IO lockstep + kill/export
-    ├── test_two_instances.py                  # Mock dual-racer orchestration
-    ├── test_telemetry.py                      # Math unit tests (quat, slip, Frenet)
-    └── check_gym_env.py                       # PLANNED: Gymnasium/SB3 check_env for Layer 2
+    └── test_layer1.py                         # Telemetry math + mock Socket.IO (1- and 2-car)
 ```
 
 ---
@@ -270,8 +267,9 @@ Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) c
 | `src/env/spaces.py` | Action/obs space definitions + `TelemetrySnapshot` → obs helpers |
 | `src/env/rewards.py` | `RewardConfig` + `compute_reward` (main file for tuning scores) |
 | `src/env/autodrive_env.py` | `gym.Env`: `reset` / `step` / `close`; gathers facts; calls Layer 1 |
-| `tests/check_gym_env.py` | SB3 / Gymnasium `check_env` smoke once the env runs |
-| `src/env/README.md` | Full Layer 2 docs: spaces, rewards, init knobs, Docker, how-to-use |
+| `scripts/demo.py check-env` | SB3 / Gymnasium `check_env` live smoke |
+| `src/env/README.md` | Layer 2 summary, layout, file/API docs, how-to-use |
+| `src/racer/README.md` | Layer 1 summary, layout, file/API docs |
 
 ### Observation / action (v1)
 
@@ -327,7 +325,7 @@ Full teaching docs: [`src/env/README.md`](src/env/README.md).
 
 ### Layer 1 — Verified
 
-1. **Unit / mock tests** (`tests/test_telemetry.py`, `tests/test_driver.py`, `tests/test_two_instances.py`):
+1. **Unit / mock tests** (`tests/test_layer1.py`):
    * Quaternion / slip / Frenet math; mock Socket.IO lockstep; dual mock clients.
 2. **Live headless smoke** (`python scripts/demo.py --headless`):
    * Auto-connect via `-ip` / `-port`; continuous Bridge frames; speed > 0; CSV export.
@@ -339,7 +337,7 @@ Full teaching docs: [`src/env/README.md`](src/env/README.md).
 ### Later layers — Pending
 
 5. **Layer 2 Gymnasium — Implemented**:
-   * `src/env/` + `tests/check_gym_env.py` + README construct snippet
+   * `src/env/` + `scripts/demo.py layer2|check-env` + layer READMEs
    * Live `check_env` still requires a headless sim binary when you run the checker
 6. **Mission Control UI Smoke Test**:
    * Launch `src/ui/app.py`, open `http://localhost:8080`, verify launch/stop/kill/canvas.
