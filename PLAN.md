@@ -2,7 +2,7 @@
 
 This document synthesizes the system architecture, file layout, driver specifications, containerization strategy, and the **Mission Control UI** for the AutoDRIVE RoboRacer platform.
 
-**Status snapshot:** Layer 1 (`src/racer`) is implemented and live-verified. Layer 2 (`src/env`) is **implemented** per §6. `src/ui` and `src/models` are planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
+**Status snapshot:** Layer 1 (`src/layer1`) is implemented and live-verified. Layer 2 (`src/layer2`) is **implemented** per §6. `src/ui` and `src/models` are planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
 
 ---
 
@@ -12,7 +12,7 @@ To combine algorithmic flexibility with operational control, the system divides 
 
 | In Your IDE (Code Development) | In the Mission Control UI (`http://localhost:8080`) |
 | :--- | :--- |
-| • Designing neural network architectures (`src/models/`)<br>• Writing and tuning reward formulas (`src/env/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`tests/`) | • Choosing number of racers ($N = 1, 2, 4, 16, 32\dots$ unbounded)<br>• Track selection (`IROS 2024`, `Berlin`, `Porto`)<br>• **Single-click LAUNCH / RUN** (starts Unity simulators + Python driver)<br>• **Single-click STOP ALL / KILL ALL** (terminates all background processes)<br>• **Per-car KILL RACER** (terminates a specific car process from the leaderboard)<br>• **Single-click RESET GRID**<br>• **Single-click EXPORT ALL CSVs**<br>• Live 2D top-down bird's-eye canvas (moving cars + LiDAR laser fan)<br>• Real-time leaderboard (speeds, lap times, SPS, RTF, collisions) |
+| • Designing neural network architectures (`src/models/`)<br>• Writing and tuning reward formulas (`src/layer2/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`scripts/`) | • Choosing number of racers ($N = 1, 2, 4, 16, 32\dots$ unbounded)<br>• Track selection (`IROS 2024`, `Berlin`, `Porto`)<br>• **Single-click LAUNCH / RUN** (starts Unity simulators + Python driver)<br>• **Single-click STOP ALL / KILL ALL** (terminates all background processes)<br>• **Per-car KILL RACER** (terminates a specific car process from the leaderboard)<br>• **Single-click RESET GRID**<br>• **Single-click EXPORT ALL CSVs**<br>• Live 2D top-down bird's-eye canvas (moving cars + LiDAR laser fan)<br>• Real-time leaderboard (speeds, lap times, SPS, RTF, collisions) |
 
 ---
 
@@ -30,7 +30,8 @@ AiCar/
 ├── README.md                                  # Repository overview + Layer 1 quick start
 ├── requirements.txt                           # Core dependencies (numpy, gymnasium, socketio, gevent, torch, sb3, fastapi)
 ├── scripts/
-│   └── demo.py                                # Live Layer 1 demo (headed / headless CLI)
+│   ├── demo.py                                # Live demos: layer1 | layer2 | check-env
+│   └── test_layer1.py                         # Telemetry math + mock Socket.IO (1- and 2-car)
 │
 ├── simulator/                                 # AutoDRIVE Unity Standalone (binaries mostly gitignored)
 │   ├── README.md                              # Upstream simulator usage notes
@@ -41,24 +42,24 @@ AiCar/
 ├── src/
 │   ├── __init__.py
 │   │
-│   ├── racer/                                 # LAYER 1 (DONE): Simulator driver & track manager
+│   ├── layer1/                                # LAYER 1 (DONE): Simulator driver & track manager
 │   │   ├── __init__.py                        # Exports RaceTrack, Racer, TelemetrySnapshot, TrajectoryLogger
 │   │   ├── track.py                           # RaceTrack manager (geometry, checkpoints, fleet, kill)
 │   │   ├── racer.py                           # gevent Socket.IO server, lockstep step/reset/kill, sim launch
-│   │   └── telemetry.py                       # Raw telemetry model, derived dynamics, CSV logger
+│   │   ├── telemetry.py                       # Raw telemetry model, derived dynamics, CSV logger
+│   │   └── README.md
 │   │
-│   ├── env/                                   # LAYER 2 (PLANNED): Gymnasium wrapper — 1 env = 1 car
+│   ├── layer2/                                # LAYER 2 (DONE): Gymnasium wrapper — 1 env = 1 car
 │   │   ├── __init__.py                        # Export AutoDriveEnv
 │   │   ├── spaces.py                          # Obs/action spaces + snapshot→obs
 │   │   ├── rewards.py                         # RewardConfig + compute_reward
-│   │   └── autodrive_env.py                   # gym.Env reset/step/close
+│   │   ├── autodrive_env.py                   # gym.Env reset/step/close
+│   │   └── README.md
 │   │
 │   ├── ui/                                    # PLANNED: Mission Control web dashboard
 │   └── models/                                # PLANNED: Layer 3 RL policies
 │
-├── logs/trajectories/                         # Demo CSV exports (contents gitignored)
-└── tests/                                     # Verification & diagnostics
-    └── test_layer1.py                         # Telemetry math + mock Socket.IO (1- and 2-car)
+└── logs/trajectories/                         # Demo CSV exports (contents gitignored)
 ```
 
 ---
@@ -159,7 +160,7 @@ The UI acts as the orchestration dashboard: clicking a button in the browser dri
 
 ---
 
-## 5. Layer 1: The `racer/` Driver & Track Manager
+## 5. Layer 1: The `layer1/` Driver & Track Manager
 
 Layer 1 provides a clean, Pythonic interface to control and inspect the simulator with zero dependencies on Gymnasium or PyTorch.
 
@@ -192,7 +193,7 @@ Layer 1 provides a clean, Pythonic interface to control and inspect the simulato
 
 ### Module Breakdown:
 
-1. **`src/racer/track.py` (`RaceTrack` Manager)**:
+1. **`src/layer1/track.py` (`RaceTrack` Manager)**:
    * **Parameters**:
      * `num_racers: int = 1`: Number of parallel vehicle instances.
      * `base_port: int = 4567`: Starting port (instances bind to `base_port + i`).
@@ -211,7 +212,7 @@ Layer 1 provides a clean, Pythonic interface to control and inspect the simulato
      * `kill_all()`: Shuts down all simulator processes and stops all background servers.
      * `save_all_trajectories(output_dir)`: Exports CSV logs for **all racers** into a folder in one single call (`output_dir/racer_0.csv`, `output_dir/racer_1.csv`).
 
-2. **`src/racer/racer.py` (`Racer` Class)**:
+2. **`src/layer1/racer.py` (`Racer` Class)**:
    * **Parameters**: `racer_id`, `port`, `simulator_path`, `auto_launch`, `headless`, `step_timeout`.
    * **Attributes**: `telemetry` (`TelemetrySnapshot`), `logger` (`TrajectoryLogger`), profiler metrics (`step_latency_ms`, `steps_per_second`, `real_time_factor`).
    * **Transport**: `socketio.Server(async_mode="gevent")` + `gevent.pywsgi` + `WebSocketHandler`. This RoboRacer Windows build speaks **Engine.IO v4** (`python-socketio` 5.x / `python-engineio` 4.x). Commands are returned only via `sio.emit('Bridge', {string values})` (no ACK return payload). A small auto-connect shim handles Unity clients that emit `Bridge` before a formal namespace connect.
@@ -223,18 +224,18 @@ Layer 1 provides a clean, Pythonic interface to control and inspect the simulato
      * `save_trajectory(file_path)`: Exports this vehicle's trajectory history to CSV.
 
 
-3. **`src/racer/telemetry.py`**:
+3. **`src/layer1/telemetry.py`**:
    * **`TelemetrySnapshot`**:
      * 100% raw data: position $(x, y, z)$, orientation quaternion $(x, y, z, w)$, linear/angular velocities, linear acceleration, wheel encoders (left/right), 1,080 LiDAR beams, scan rate, actuator states, lap stats, collisions.
      * Derived metrics: `true_speed`, `heading_yaw`, `v_long`, `v_lat`, `slip_angle`, `lateral_g`.
    * **`TrajectoryLogger`**: In-memory buffer logging step, timestamp, $(x, y, z)$, speed, slip angle, throttle, steering, encoders, and lap stats; exports to CSV.
 
-4. **`src/racer/__init__.py`**:
+4. **`src/layer1/__init__.py`**:
    * Exports `RaceTrack`, `Racer`, `TelemetrySnapshot`, and `TrajectoryLogger`.
 
 ---
 
-## 6. Layer 2: Gymnasium Environment (`src/env/`)
+## 6. Layer 2: Gymnasium Environment (`src/layer2/`)
 
 Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) can train without knowing Socket.IO exists. Gymnasium is only the shared `reset` / `step` interface; the env turns telemetry into **observation**, **reward**, and **episode-over** signals.
 
@@ -263,13 +264,13 @@ Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) c
 
 | File | Role |
 | :--- | :--- |
-| `src/env/__init__.py` | Export `AutoDriveEnv` (and maybe `RewardConfig`) |
-| `src/env/spaces.py` | Action/obs space definitions + `TelemetrySnapshot` → obs helpers |
-| `src/env/rewards.py` | `RewardConfig` + `compute_reward` (main file for tuning scores) |
-| `src/env/autodrive_env.py` | `gym.Env`: `reset` / `step` / `close`; gathers facts; calls Layer 1 |
+| `src/layer2/__init__.py` | Export `AutoDriveEnv` (and maybe `RewardConfig`) |
+| `src/layer2/spaces.py` | Action/obs space definitions + `TelemetrySnapshot` → obs helpers |
+| `src/layer2/rewards.py` | `RewardConfig` + `compute_reward` (main file for tuning scores) |
+| `src/layer2/autodrive_env.py` | `gym.Env`: `reset` / `step` / `close`; gathers facts; calls Layer 1 |
 | `scripts/demo.py check-env` | SB3 / Gymnasium `check_env` live smoke |
-| `src/env/README.md` | Layer 2 summary, layout, file/API docs, how-to-use |
-| `src/racer/README.md` | Layer 1 summary, layout, file/API docs |
+| `src/layer2/README.md` | Layer 2 summary, layout, file/API docs, how-to-use |
+| `src/layer1/README.md` | Layer 1 summary, layout, file/API docs |
 
 ### Observation / action (v1)
 
@@ -310,7 +311,7 @@ These were open in design; v1 code uses:
 6. **`max_episode_steps`:** default **`0`** (disabled); set positive for a hard cap.
 7. **Simulator path:** auto-detect Windows `.exe` vs Docker Linux `.x86_64`, or `AICAR_SIMULATOR_PATH`.
 
-Full teaching docs: [`src/env/README.md`](src/env/README.md).
+Full teaching docs: [`src/layer2/README.md`](src/layer2/README.md).
 
 ### Deferred (later phases)
 
@@ -325,11 +326,11 @@ Full teaching docs: [`src/env/README.md`](src/env/README.md).
 
 ### Layer 1 — Verified
 
-1. **Unit / mock tests** (`tests/test_layer1.py`):
+1. **Unit / mock tests** (`scripts/test_layer1.py`):
    * Quaternion / slip / Frenet math; mock Socket.IO lockstep; dual mock clients.
-2. **Live headless smoke** (`python scripts/demo.py --headless`):
+2. **Live headless smoke** (`python scripts/demo.py layer1 --headless`):
    * Auto-connect via `-ip` / `-port`; continuous Bridge frames; speed > 0; CSV export.
-3. **Live headed multi-instance** (`python scripts/demo.py --racers 2`):
+3. **Live headed multi-instance** (`python scripts/demo.py layer1 --racers 2`):
    * Two GUI windows on ports `4567` / `4568`; both connect and drive in lockstep.
 4. **Live control smoke** (headless, 2 cars):
    * `reset_all` / `reset_single`; `kill_racer(i)` while sibling keeps stepping; `kill_all`.
@@ -337,7 +338,7 @@ Full teaching docs: [`src/env/README.md`](src/env/README.md).
 ### Later layers — Pending
 
 5. **Layer 2 Gymnasium — Implemented**:
-   * `src/env/` + `scripts/demo.py layer2|check-env` + layer READMEs
+   * `src/layer2/` + `scripts/demo.py layer2|check-env` + layer READMEs
    * Live `check_env` still requires a headless sim binary when you run the checker
 6. **Mission Control UI Smoke Test**:
    * Launch `src/ui/app.py`, open `http://localhost:8080`, verify launch/stop/kill/canvas.

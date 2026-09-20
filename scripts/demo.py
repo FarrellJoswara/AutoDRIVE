@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def _cmd_layer1(args: argparse.Namespace) -> int:
-    from src.racer.track import RaceTrack
+    from src.layer1.track import RaceTrack
 
     num_racers = args.racers if args.racers is not None else (1 if args.headless else 2)
     if num_racers < 1:
@@ -143,7 +143,7 @@ def _cmd_layer1(args: argparse.Namespace) -> int:
 
 
 def _cmd_layer2(args: argparse.Namespace) -> int:
-    from src.env import AutoDriveEnv, RewardConfig
+    from src.layer2 import AutoDriveEnv, RewardConfig
 
     print("launching AutoDriveEnv (headless)...")
     env = AutoDriveEnv(
@@ -203,7 +203,7 @@ def _cmd_layer2(args: argparse.Namespace) -> int:
 def _cmd_check_env(args: argparse.Namespace) -> int:
     from stable_baselines3.common.env_checker import check_env
 
-    from src.env import AutoDriveEnv
+    from src.layer2 import AutoDriveEnv
 
     env = AutoDriveEnv(
         simulator_path=args.simulator,

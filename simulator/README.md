@@ -1,6 +1,6 @@
 # AutoDRIVE Simulator
 
-Binaries used by Layer 1 (`src/racer`) and Layer 2 (`src/env`). Executables are **gitignored**; only docs live in git.
+Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). Executables are **gitignored**; only docs live in git.
 
 ## Layout
 

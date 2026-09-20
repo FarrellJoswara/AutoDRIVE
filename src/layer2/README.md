@@ -1,4 +1,4 @@
-# Layer 2 — Gymnasium environment (`src/env/`)
+# Layer 2 — Gymnasium environment (`src/layer2/`)
 
 ## Summary
 
@@ -18,7 +18,7 @@ No Unity / Socket.IO code lives here — only Gym spaces, rewards, and orchestra
 ## Layout
 
 ```text
-src/env/
+src/layer2/
 ├── __init__.py         # AutoDriveEnv, RewardConfig, compute_reward, default_simulator_path
 ├── autodrive_env.py    # gym.Env: reset / step / close, truncation, info
 ├── spaces.py           # action/obs spaces + snapshot → obs dict
@@ -128,7 +128,7 @@ AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
 ## How to use
 
 ```python
-from src.env import AutoDriveEnv, RewardConfig
+from src.layer2 import AutoDriveEnv, RewardConfig
 
 env = AutoDriveEnv(
     port=4567,

@@ -6,13 +6,13 @@ Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing: Layer 1 drive
 
 | Layer / piece | Status |
 | :--- | :--- |
-| **Layer 1** — `src/racer/` | **Verified** (headed + headless, multi-instance, reset, kill) |
-| **Layer 2** — `src/env/` | **Implemented** |
+| **Layer 1** — `src/layer1/` | **Verified** (headed + headless, multi-instance, reset, kill) |
+| **Layer 2** — `src/layer2/` | **Implemented** |
 | **Layer 3** — PPO / 1D-CNN | Not started |
 | **Mission Control UI** — `src/ui/` | Not started |
 | **Docker (A sim × N + B brain)** | Scaffold only (single compose service today) |
 
-Layer docs: [`src/racer/README.md`](src/racer/README.md) · [`src/env/README.md`](src/env/README.md) · design detail in [`PLAN.md`](PLAN.md).
+Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · design detail in [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -69,7 +69,7 @@ python scripts/demo.py layer2 --steps 40
 python scripts/demo.py check-env
 
 # Mock / unit tests (no Unity)
-python -m pytest tests/test_layer1.py -v
+python -m pytest scripts/test_layer1.py -v
 ```
 
 **Headed Layer 1:** set each window’s port (`4567`, `4568`, …) and click **Connect**.  
@@ -78,7 +78,7 @@ python -m pytest tests/test_layer1.py -v
 ### Construct Layer 2
 
 ```python
-from src.env import AutoDriveEnv, RewardConfig
+from src.layer2 import AutoDriveEnv, RewardConfig
 
 env = AutoDriveEnv(port=4567, headless=True, frame_skip=1, max_episode_steps=0)
 obs, info = env.reset()
@@ -96,11 +96,10 @@ AiCar/
 ├── README.md               # This file
 ├── requirements.txt
 ├── scripts/
-│   └── demo.py             # layer1 | layer2 | check-env
-├── src/racer/              # Layer 1 — see src/racer/README.md
-├── src/env/                # Layer 2 — see src/env/README.md
-├── tests/
-│   └── test_layer1.py      # Telemetry + mock Socket.IO fleet tests
+│   ├── demo.py             # layer1 | layer2 | check-env
+│   └── test_layer1.py      # pytest: telemetry + mock Socket.IO
+├── src/layer1/             # Layer 1 — see src/layer1/README.md
+├── src/layer2/             # Layer 2 — see src/layer2/README.md
 ├── docker/                 # Current single-image scaffold
 ├── docker-compose.yml
 ├── simulator/              # Binaries (gitignored) + README

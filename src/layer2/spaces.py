@@ -20,7 +20,7 @@ from typing import Dict, Tuple
 import numpy as np
 from gymnasium import spaces
 
-from src.racer.telemetry import TelemetrySnapshot
+from src.layer1.telemetry import TelemetrySnapshot
 
 # Fixed LiDAR beam count for Layer 2 v1 (PLAN: no downsampling).
 LIDAR_BEAMS: int = 1080

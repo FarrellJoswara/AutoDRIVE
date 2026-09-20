@@ -1,4 +1,4 @@
-# Layer 1 — Simulator driver (`src/racer/`)
+# Layer 1 — Simulator driver (`src/layer1/`)
 
 ## Summary
 
@@ -20,7 +20,7 @@ Higher layers call this API: Layer 2 wraps one `Racer` as a Gym env; the UI (lat
 ## Layout
 
 ```text
-src/racer/
+src/layer1/
 ├── __init__.py      # Public exports: Racer, RaceTrack, TelemetrySnapshot, TrajectoryLogger
 ├── racer.py         # One car: Socket.IO server + sim process + step/reset/kill
 ├── track.py         # Fleet manager + Frenet / checkpoint helpers
@@ -95,7 +95,7 @@ Derived kinematics (body frame) live here so Layer 2 does not re-implement yaw m
 ## How to use
 
 ```python
-from src.racer import RaceTrack
+from src.layer1 import RaceTrack
 
 track = RaceTrack(num_racers=1, base_port=4567, auto_launch=True, headless=True)
 # wait until track.racers[0].is_connected
@@ -104,4 +104,4 @@ track.kill_all()
 ```
 
 Live CLI: `python scripts/demo.py layer1` (see root README).  
-Mock tests (no Unity): `python -m pytest tests/test_layer1.py -v`.
+Mock tests (no Unity): `python -m pytest scripts/test_layer1.py -v`.

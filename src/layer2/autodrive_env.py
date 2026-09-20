@@ -42,8 +42,8 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from src.racer.racer import Racer
-from src.racer.telemetry import TelemetrySnapshot
+from src.layer1.racer import Racer
+from src.layer1.telemetry import TelemetrySnapshot
 
 from .rewards import RewardConfig, compute_reward
 from .spaces import LIDAR_BEAMS, make_action_space, make_observation_space, snapshot_to_obs
@@ -187,7 +187,7 @@ class AutoDriveEnv(gym.Env):
                 raise FileNotFoundError(
                     f"Simulator executable not found at: {sim_path.resolve()}\n"
                     f"Tip: set AICAR_SIMULATOR_PATH, or mount ./simulator into "
-                    f"/app/simulator in Docker (see src/env/README.md)."
+                    f"/app/simulator in Docker (see src/layer2/README.md)."
                 )
 
         # Episode bookkeeping — reset() clears these each episode.

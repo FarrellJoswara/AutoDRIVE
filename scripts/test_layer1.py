@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import pytest
 import socketio
 
-from src.racer.telemetry import TelemetrySnapshot, TrajectoryLogger
-from src.racer.track import RaceTrack
+from src.layer1.telemetry import TelemetrySnapshot, TrajectoryLogger
+from src.layer1.track import RaceTrack
 
 
 # ---------------------------------------------------------------------------
