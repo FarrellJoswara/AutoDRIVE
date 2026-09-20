@@ -36,7 +36,7 @@ COPY . /app/
 
 RUN chmod +x /app/docker/entrypoint-brain.sh || true
 
-ENV AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+ENV AICAR_SIMULATOR_PATH="/app/simulator/AutoDRIVE Simulator.x86_64"
 ENV READY_PORT=8090
 
 ENTRYPOINT ["/app/docker/entrypoint-brain.sh"]

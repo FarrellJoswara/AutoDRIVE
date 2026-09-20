@@ -1,4 +1,13 @@
-# B — Brain container (Python Layers 1–3 + CUDA-capable runtime)
+# B — Brain container (Python Layers 1–4 + CUDA + Mission Control static UI)
+# Multi-stage: Node builds Vite → Python image serves FastAPI on :8090
+
+FROM node:20-bookworm-slim AS web-build
+WORKDIR /web
+COPY src/layer4/web/package.json src/layer4/web/package-lock.json* src/layer4/web/.npmrc* ./
+RUN npm install --no-audit --no-fund --legacy-peer-deps
+COPY src/layer4/web/ ./
+RUN npm run build
+
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,17 +30,30 @@ RUN pip3 install --no-cache-dir --upgrade pip
 
 # Prefer a CUDA torch wheel so training uses the GPU by default.
 # Host-side alternative: pip install torch --index-url https://download.pytorch.org/whl/cu126
-RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+# Install torch BEFORE requirements, strip the direct torch line, AND pin via a
+# constraint file. Without the constraint, stable-baselines3's torch dependency
+# pulls the latest PyPI wheel (e.g. 2.14+cu130), which needs a newer host driver.
+RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
+    && python3 -c "import torch; open('/tmp/torch.constraint','w').write('torch=='+torch.__version__.split('+')[0]+'\n')"
 
 COPY requirements.txt /app/
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN grep -vE '^[[:space:]]*torch([=<>!~]|[[:space:]]*$)' requirements.txt > /tmp/requirements.notorch.txt \
+    && pip3 install --no-cache-dir -c /tmp/torch.constraint -r /tmp/requirements.notorch.txt \
+    && pip3 install --no-cache-dir --force-reinstall --no-deps torch --index-url https://download.pytorch.org/whl/cu124
 
 COPY . /app/
+# Serve UI from outside the ./src bind-mount so compose does not hide the build.
+COPY --from=web-build /web/dist /app/static/mission-control
+# Also keep a copy under src for non-compose / local runs.
+COPY --from=web-build /web/dist /app/src/layer4/web/dist
 
 RUN chmod +x /app/docker/entrypoint-brain.sh || true
 
-ENV AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+ENV AICAR_SIMULATOR_PATH="/app/simulator/AutoDRIVE Simulator.x86_64"
 ENV READY_PORT=8090
+ENV HUB_PORT=8090
+ENV HUB_URL=http://127.0.0.1:8090
+ENV MISSION_CONTROL_DIST=/app/static/mission-control
 
 ENTRYPOINT ["/app/docker/entrypoint-brain.sh"]
-CMD ["python", "/app/docker/ready_stub.py"]
+CMD ["python", "-m", "uvicorn", "src.layer4.hub.app:app", "--host", "0.0.0.0", "--port", "8090"]

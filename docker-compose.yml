@@ -1,10 +1,12 @@
 # AutoDRIVE A/B compose
 # A = sim (Unity Linux .x86_64, one process per container)
-# B = brain (Python Layers 1–3; default ready stub on :8090)
+# B = brain (Python Layers 1–4; Mission Control hub + static UI on :8090)
 #
-# First milestone:
 #   docker compose up --build --scale sim=2
-# Then train from brain with --no-auto-launch against ports 4567+.
+# Browser → http://localhost:8090  (Settings / Train / Live)
+# Or train via CLI with --no-auto-launch against ports 4567+.
+
+name: aicar
 
 services:
   brain:
@@ -17,19 +19,27 @@ services:
       # Wide Socket.IO range for many parallel envs (widen both sides together).
       # Example for 32 envs: "4567-4598:4567-4598"
       - "4567-4582:4567-4582"
-      # Ready stub (default brain command)
+      # Mission Control (hub API + Vite static)
       - "8090:8090"
-      # Future Mission Control UI (uncomment when src/ui ships):
+      # Optional in-B Vite HMR during Layer 4 dev:
       # - "8080:8080"
     volumes:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./logs:/app/logs
       - ./simulator:/app/simulator
+      - ./assets:/app/assets
+      # Lets Mission Control stop compose sims after training. Anyone with
+      # access to the hub container effectively has Docker host control.
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PYTHONUNBUFFERED=1
+      - AICAR_IN_DOCKER=1
+      - AICAR_COMPOSE_PROJECT=aicar
       - READY_PORT=8090
-      - AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+      - HUB_PORT=8090
+      - HUB_URL=http://127.0.0.1:8090
+      - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
     networks:
       - aicar
     # GPU on B by default (NVIDIA Container Toolkit / Docker Desktop GPU)
@@ -41,8 +51,18 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # Default: ready stub only (does not auto-train)
-    command: ["python", "/app/docker/ready_stub.py"]
+    # Mission Control hub (replaces ready_stub.py)
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "src.layer4.hub.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8090",
+      ]
 
   sim:
     build:
@@ -54,7 +74,7 @@ services:
     environment:
       - BRAIN_HOST=brain
       - BASE_PORT=4567
-      - AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+      - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
       # Optional: force a single port (disables hostname-based indexing):
       # - PORT=4567
       - DISPLAY=:99

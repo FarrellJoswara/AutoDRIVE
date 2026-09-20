@@ -10,7 +10,14 @@ __pycache__
 .vscode
 .idea
 *.log
+logs_*.txt
+*_build*.txt
+.DS_Store
+Thumbs.db
+*~
 logs/
 scratch/
 temp/
 *.fbx
+src/layer4/web/node_modules
+src/layer4/web/dist

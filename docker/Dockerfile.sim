@@ -24,8 +24,8 @@ COPY docker/entrypoint-sim.sh /app/docker/entrypoint-sim.sh
 RUN chmod +x /app/docker/entrypoint-sim.sh
 
 # Binary is expected via volume mount at runtime:
-#   AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
-ENV AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+#   AICAR_SIMULATOR_PATH="/app/simulator/AutoDRIVE Simulator.x86_64"
+ENV AICAR_SIMULATOR_PATH="/app/simulator/AutoDRIVE Simulator.x86_64"
 ENV BRAIN_HOST=brain
 ENV BASE_PORT=4567
 

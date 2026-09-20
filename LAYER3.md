@@ -290,4 +290,4 @@ If learning stalls, tune Layer 2 rewards / truncation before rewriting VecEnv.
 
 - [`src/layer3/README.md`](src/layer3/README.md) — plain English  
 - [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md)  
-- [`PLAN.md`](PLAN.md) · [`README.md`](README.md)
+- [`PLAN.md`](PLAN.md) · [`UI.md`](UI.md) · [`README.md`](README.md)

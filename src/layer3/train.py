@@ -139,7 +139,19 @@ def train(
             save_vecnormalize=False,
         )
 
-        model.learn(total_timesteps=int(timesteps), callback=checkpoint_cb, progress_bar=False)
+        callbacks = [checkpoint_cb]
+        from src.layer3.hub_callback import maybe_hub_callback
+
+        hub_cb = maybe_hub_callback(run_id=out_dir.name)
+        if hub_cb is not None:
+            callbacks.append(hub_cb)
+            print(f"hub telemetry: HUB_URL set → publishing to hub (run_id={out_dir.name})")
+
+        model.learn(
+            total_timesteps=int(timesteps),
+            callback=callbacks,
+            progress_bar=False,
+        )
         final_path = out_dir / "final_model"
         model.save(str(final_path))
         print(f"saved {final_path}.zip")

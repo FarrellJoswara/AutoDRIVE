@@ -18,11 +18,22 @@ fi
 chmod +x "$SIM_PATH" || true
 
 # Unique PORT per scaled replica unless PORT is set explicitly.
-# Compose hostnames look like: <project>-sim-1, <project>-sim-2, …
+# Docker Desktop uses the container ID as $HOSTNAME (hex), so trailing-digit
+# parsing is unsafe (e.g. …9656 → port 14222). Prefer stable rank among the
+# Compose service DNS answers for SIM_SERVICE_DNS (default: sim).
 if [ -n "${PORT:-}" ]; then
   SIM_PORT="$PORT"
 else
-  IDX="$(echo "${HOSTNAME}" | sed -n 's/.*[^0-9]\([0-9][0-9]*\)$/\1/p' || true)"
+  SERVICE_DNS="${SIM_SERVICE_DNS:-sim}"
+  MY_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
+  IDX=""
+  if [ -n "${MY_IP:-}" ]; then
+    IDX="$(getent hosts "$SERVICE_DNS" 2>/dev/null | awk '{print $1}' | sort -u | awk -v ip="$MY_IP" '$0 == ip { print NR; exit }')"
+  fi
+  # Fallback only for explicit compose-style names: …-sim-N
+  if [ -z "${IDX:-}" ]; then
+    IDX="$(echo "${HOSTNAME}" | sed -n 's/.*-sim-\([0-9][0-9]*\)$/\1/p' || true)"
+  fi
   IDX="${IDX:-1}"
   SIM_PORT=$((BASE_PORT + IDX - 1))
 fi

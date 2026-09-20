@@ -2,7 +2,7 @@
 
 This document synthesizes the system architecture, file layout, driver specifications, containerization strategy, and the **Mission Control UI** for the AutoDRIVE RoboRacer platform.
 
-**Status snapshot:** Layer 1 (`src/layer1`) is implemented and live-verified. Layer 2 (`src/layer2`) is **implemented** per §6. Layer 3 plan: [`LAYER3.md`](LAYER3.md). `src/ui` planned. Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
+**Status snapshot:** Layer 1 (`src/layer1`) is implemented and live-verified. Layer 2 (`src/layer2`) is **implemented** per §6. Layer 3 plan: [`LAYER3.md`](LAYER3.md). Mission Control UI plan: [`UI.md`](UI.md). Prefer [README.md](README.md) for quick start; keep this file as the detailed design reference.
 
 ---
 
@@ -10,9 +10,9 @@ This document synthesizes the system architecture, file layout, driver specifica
 
 To combine algorithmic flexibility with operational control, the system divides responsibilities between your **IDE** and the **Mission Control Web UI**:
 
-| In Your IDE (Code Development) | In the Mission Control UI (`http://localhost:8080`) |
+| In Your IDE (Code Development) | In the Mission Control UI (see [`UI.md`](UI.md); hub `:8090`) |
 | :--- | :--- |
-| • Designing neural network architectures (`src/layer3/`)<br>• Writing and tuning reward formulas (`src/layer2/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`scripts/`) | • Choosing number of racers ($N = 1, 2, 4, 16, 32\dots$ unbounded)<br>• Track selection (`IROS 2024`, `Berlin`, `Porto`)<br>• **Single-click LAUNCH / RUN** (starts Unity simulators + Python driver)<br>• **Single-click STOP ALL / KILL ALL** (terminates all background processes)<br>• **Per-car KILL RACER** (terminates a specific car process from the leaderboard)<br>• **Single-click RESET GRID**<br>• **Single-click EXPORT ALL CSVs**<br>• Live 2D top-down bird's-eye canvas (moving cars + LiDAR laser fan)<br>• Real-time leaderboard (speeds, lap times, SPS, RTF, collisions) |
+| • Designing neural network architectures (`src/layer3/`)<br>• Writing and tuning reward formulas (`src/layer2/rewards.py`)<br>• Adjusting hyperparameters (learning rate, entropy, discount factor)<br>• Version control and unit testing (`scripts/`) | • **Settings** mapped to `layer3.train` CLI flags<br>• **Start / stop** train via hub `Popen` (same as CLI)<br>• **Live telemetry** over WebSocket (non-interfering watch)<br>• Phase 6: fleet canvas (map / cars / LiDAR / collision **X**; hub telemetry only — see [`UI.md`](UI.md)) |
 
 ---
 
@@ -31,6 +31,7 @@ AiCar/
 │   ├── ready_stub.py                          # Default brain HTTP OK on :8090
 │   └── README.md                              # Full Docker how-to
 ├── PLAN.md                                    # High-level architecture & roadmap
+├── UI.md                                      # Mission Control UI implementation plan
 ├── README.md                                  # Repository overview + Layer 1 quick start
 ├── requirements.txt                           # Core dependencies (numpy, gymnasium, socketio, gevent, torch, sb3, fastapi)
 ├── scripts/
@@ -60,9 +61,10 @@ AiCar/
 │   │   ├── autodrive_env.py                   # gym.Env reset/step/close
 │   │   └── README.md
 │   │
-│   ├── ui/                                    # PLANNED: Mission Control web dashboard
-│   └── layer3/                                # PLANNED: PPO — see LAYER3.md
+│   ├── layer3/                                # PPO — see LAYER3.md
+│   └── layer4/                                # PLANNED: Mission Control — see UI.md
 │
+├── assets/maps/                               # Vendored Porto/Berlin map assets (fleet Phase 6)
 ├── logs/trajectories/                         # Demo CSV exports (contents gitignored)
 └── LAYER3.md                                  # Layer 3 implementation plan (PPO / extractor / train)
 ```
@@ -87,7 +89,7 @@ docker compose up
 ```
 
 ### Key Docker Components:
-1. **`docker-compose.yml`**: `brain` + scalable `sim`; bridge network; ports `4567-4582` + `8090` (`8080` reserved/commented for UI); volumes `./src`, `./scripts`, `./logs`, `./simulator`; GPU reservation on brain.
+1. **`docker-compose.yml`**: `brain` + scalable `sim`; bridge network; ports `4567-4582` + `8090` (`8080` optional for in-B Vite HMR); volumes `./src`, `./scripts`, `./logs`, `./simulator`; GPU reservation on brain.
 2. **`docker/Dockerfile.sim` / `entrypoint-sim.sh`**: Ubuntu + Xvfb/GL; launches one Unity binary per container; PORT from env or hostname index.
 3. **`docker/Dockerfile.brain` / `ready_stub.py`**: CUDA runtime + pip; default HTTP OK on `:8090` (not auto-train).
 4. **`docker-compose.sim-gpu.yml`**: optional NVIDIA GPU for sim containers.
@@ -95,56 +97,11 @@ docker compose up
 
 ---
 
-## 4. Mission Control UI Specifications (`src/ui/`)
+## 4. Mission Control UI (`src/layer4/`)
 
-The UI acts as the orchestration dashboard: clicking a button in the browser drives the underlying Python code.
+**Authoritative plan:** [`UI.md`](UI.md).
 
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                        YOUR BROWSER (http://localhost:8080)            │
-│  [Sliders: 4 Racers]  [Dropdown: IROS 2024 Track]  [ ▶ LAUNCH RUN ]    │
-│  [ 🛑 STOP ALL ]       [ 🔄 RESET GRID ]            [ 💾 EXPORT CSV ]   │
-│  ────────────────────────────────────────────────────────────────────  │
-│  [2D Track Canvas: Real-time top-down car coordinates & LiDAR fan]     │
-│  ────────────────────────────────────────────────────────────────────  │
-│  [Live Leaderboard & Fleet Controls]                                   │
-│   Racer 0 | 18.2 m/s | Lap 3 (14.2s) | Collisions: 0 | [ ❌ Kill ]     │
-│   Racer 1 | 16.5 m/s | Lap 2 (15.1s) | Collisions: 1 | [ ❌ Kill ]     │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ REST API + WebSocket
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                       UI BACKEND (src/ui/app.py)                       │
-│  - Receives button events from browser                                 │
-│  - Instantiates: track = RaceTrack(num_racers=4, auto_launch=True)     │
-│  - Runs background stepping/training loop                              │
-│  - Streams car coordinates and laser rays to browser                   │
-│  - On STOP ALL: calls track.kill_all()                                 │
-│  - On KILL RACER i: calls track.kill_racer(i)                          │
-│  - On RESET: calls track.reset_all()                                   │
-│  - On EXPORT: calls track.save_all_trajectories("logs/run_X")          │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Calls Layer 1 & Layer 2
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                     RaceTrack / Racer / AutoDriveEnv                   │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### Module Breakdown:
-* **`src/ui/app.py`**:
-  * Lightweight ASGI web server (FastAPI) listening on port `8080`.
-  * **REST Endpoints**:
-    * `POST /api/launch`: Accepts `{num_racers: int, track: str, mode: str}`; instantiates `RaceTrack` and boots the simulators.
-    * `POST /api/stop`: Calls `track.kill_all()` to terminate all background simulator processes and servers.
-    * `POST /api/kill/{racer_id}`: Calls `track.kill_racer(racer_id)` to terminate a specific vehicle process.
-    * `POST /api/reset`: Calls `track.reset_all()` to teleport all active cars back to the starting line.
-    * `POST /api/export`: Calls `track.save_all_trajectories()` to export all racer CSV logs.
-  * **WebSocket Endpoint (`/ws/telemetry`)**:
-    * Broadcasts $(x, y, \text{yaw}, \text{speed}, \text{lidar})$ for all active racers at 20 FPS.
-    * Automatically pauses when no browser clients are connected (0% CPU overhead).
-* **`src/ui/static/index.html` & `app.js`**:
-  * **HTML5 2D Canvas**: Renders track contour, color-coded vehicle boxes, and dynamic LiDAR laser fan hitting walls.
-  * **Control Toolbar**: Sliders for racer counts, track dropdown, and global action buttons.
-  * **Live Leaderboard with Kill Buttons**: Real-time table displaying for each car: Best Lap Time, Current Lap Time, Lap Count, Top Speed, G-Force, Wall Collisions, and a dedicated **[ ❌ Kill ]** button per racer.
+v1 locks: **all Mission Control under `src/layer4/`** (not a top-level `ui/`), **FastAPI hub** on brain **B** (`:8090`, replaces ready stub), **Vite + React runs in Docker B** (prod: static in brain image on `:8090`; dev: HMR inside B / `layer4` service — not host-only), **TrainJob via `Popen`** of `python -m src.layer3.train` (UI does **not** call `step`), **full Settings UI from day 1** (all `train.py` CLI flags), train → `POST /telemetry` → hub → **WebSocket** watch. No Redis / `live.json` for v1. Fleet canvas = Phase 6 in [`UI.md`](UI.md) (map / cars / LiDAR / collision **X**; hub telemetry only; LiDAR angles measured in Phase 6). Hyperparam surgery = Phase N+ (**not day 1**).
 
 ---
 
@@ -329,6 +286,6 @@ Full teaching docs: [`src/layer2/README.md`](src/layer2/README.md).
    * `src/layer2/` + `scripts/demo.py layer2|check-env` + layer READMEs
    * Live `check_env` still requires a headless sim binary when you run the checker
 6. **Mission Control UI Smoke Test**:
-   * Launch `src/ui/app.py`, open `http://localhost:8080`, verify launch/stop/kill/canvas.
+   * Launch Layer 4 hub in brain B, open `http://localhost:8090`, verify Settings / start/stop / live telemetry (fleet canvas = Phase 6 per [`UI.md`](UI.md)).
 7. **Docker Build & Run Verification**:
-   * `docker compose up --build`, GPU via `nvidia-smi`, dashboard on port 8080.
+   * `docker compose up --build`, GPU via `nvidia-smi`, Mission Control on port **8090**.

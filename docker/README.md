@@ -41,15 +41,16 @@ If `docker` is missing in PowerShell:
 ## Quick start (1 brain + 2 sims)
 
 ```bash
-# Build and start brain (ready stub :8090) + two sim containers
+# Build and start brain (Mission Control :8090) + two sim containers
 docker compose up --build --scale sim=2
 ```
 
-Check ready stub:
+Check Mission Control hub:
 
 ```bash
-curl http://localhost:8090/
-# -> OK
+curl http://localhost:8090/health
+# -> {"status":"ok"}
+# Browser → http://localhost:8090
 ```
 
 Train from inside the brain (sims already connected; do not auto-launch Unity):
@@ -66,6 +67,14 @@ docker compose exec brain \
 
 Play / layer2 smoke the same way (`--no-auto-launch` when sims are compose-managed).
 
+Mission Control stops the `sim` containers automatically when a training child
+exits, freeing their RAM/CPU while the `brain` container and final UI status stay
+available. Disable `stop_sims_on_train_exit` in Settings to keep sims warm, or
+enable `stop_stack_on_train_exit` to stop the whole project (including the UI).
+This uses the Docker Engine socket mounted into `brain`; access to that socket is
+equivalent to Docker host control, so do not expose Mission Control to untrusted
+users.
+
 Stop:
 
 ```bash
@@ -79,8 +88,8 @@ docker compose down
 | Host / container | Purpose |
 | :--- | :--- |
 | `4567-4582` | Socket.IO (brain ← sims). Default range fits **16** envs |
-| `8090` | Brain ready stub (`docker/ready_stub.py`) |
-| `8080` | Reserved for future Mission Control UI (commented in compose) |
+| `8090` | **Mission Control** — FastAPI hub + Vite static (`src/layer4/`) — see [`UI.md`](../UI.md) |
+| `8080` | Optional in-B Vite HMR during Layer 4 dev (commented in compose); prod Mission Control is **`:8090`** — see [`UI.md`](../UI.md) |
 
 ### Widening the range
 
@@ -149,13 +158,13 @@ Headed local (Windows) demos still use `-ip 127.0.0.1 -port <N>` and click **Con
 | Path | Role |
 | :--- | :--- |
 | `Dockerfile.sim` | Ubuntu + Xvfb / GL deps for Unity |
-| `Dockerfile.brain` | CUDA runtime + pip requirements + ready stub default |
+| `Dockerfile.brain` | CUDA runtime + pip + Vite build for Mission Control |
 | `entrypoint-sim.sh` | Xvfb + launch sim with PORT/BRAIN_HOST |
 | `entrypoint-brain.sh` | Thin wrapper `exec "$@"` |
-| `ready_stub.py` | HTTP `OK` on `:8090` |
-| `../docker-compose.yml` | `brain` + scalable `sim` |
-| `../docker-compose.sim-gpu.yml` | Optional GPU for sims |
-
+| `ready_stub.py` | Optional HTTP `OK` fallback on `:8090` (compose default is hub) |
+| `Dockerfile` | Deprecated single-image alias — prefer `.sim` / `.brain` |
+| `../docker-compose.yml` | `brain` + scalable `sim` (**repo root**, not under `docker/`) |
+| `../docker-compose.sim-gpu.yml` | Optional GPU for sims (**repo root**) |
 ---
 
 ## Troubleshooting

@@ -357,6 +357,8 @@ class AutoDriveEnv(gym.Env):
             "collision_event": bool(collision_event),
             "collision_count": int(snap.collision_count),
             "position": tuple(float(x) for x in snap.position),
+            # Radians — TelemetrySnapshot.heading_yaw (for fleet canvas later)
+            "yaw": float(snap.heading_yaw),
         }
 
     def close(self) -> None:

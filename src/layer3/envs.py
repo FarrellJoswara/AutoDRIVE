@@ -77,7 +77,9 @@ def make_vec_env(
     ]
     if n_envs == 1:
         return DummyVecEnv(env_fns)
-    return SubprocVecEnv(env_fns)
+    # spawn (not forkserver): gevent WSGI in each worker must bind its own hub;
+    # forkserver inherits a broken hub and Racer ports never listen.
+    return SubprocVecEnv(env_fns, start_method="spawn")
 
 
 def env_kwargs_from_args(args: Any) -> Dict[str, Any]:

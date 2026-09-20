@@ -3,18 +3,35 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
 
 # Environment & IDE
 .vscode/
 .idea/
 *.log
+.DS_Store
+Thumbs.db
+*~
+
+# Accidental dumps / scratch
+logs_*.txt
+*_build*.txt
+scratch/
+temp/
 
 # Runtime artifacts
 logs/trajectories/*.csv
 !logs/trajectories/.gitkeep
 logs/rl/**
 !logs/rl/.gitkeep
+logs/layer4/**
+!logs/layer4/.gitkeep
+
+# Layer 4 frontend
+src/layer4/web/node_modules/
+src/layer4/web/dist/
 
 # Build & Simulator binaries
 *.x86_64
