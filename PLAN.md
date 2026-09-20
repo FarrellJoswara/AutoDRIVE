@@ -22,10 +22,14 @@ To combine algorithmic flexibility with operational control, the system divides 
 AiCar/
 ├── .gitignore                                 # Git ignore (venvs, binaries, cache, trajectory CSVs)
 ├── .dockerignore                              # Excludes .venv, .git, and cache from Docker build context
-├── docker-compose.yml                         # Docker Compose orchestration (GPU passthrough, ports, volume mounts)
+├── docker-compose.yml                         # A/B compose: brain + scalable sim (bridge, wide ports)
+├── docker-compose.sim-gpu.yml                 # Optional NVIDIA GPU override for sim containers
 ├── docker/
-│   ├── Dockerfile                             # Container recipe (Ubuntu 22.04, CUDA, OpenGL/Vulkan, Python)
-│   └── entrypoint.sh                          # Startup entrypoint (virtual display setup & app launcher)
+│   ├── Dockerfile.sim                         # A — Ubuntu + Xvfb / Unity deps
+│   ├── Dockerfile.brain                       # B — CUDA runtime + Python Layers 1–3
+│   ├── entrypoint-sim.sh / entrypoint-brain.sh
+│   ├── ready_stub.py                          # Default brain HTTP OK on :8090
+│   └── README.md                              # Full Docker how-to
 ├── PLAN.md                                    # High-level architecture & roadmap
 ├── README.md                                  # Repository overview + Layer 1 quick start
 ├── requirements.txt                           # Core dependencies (numpy, gymnasium, socketio, gevent, torch, sb3, fastapi)
@@ -67,44 +71,27 @@ AiCar/
 
 ## 3. Docker Containerization Architecture
 
-The Docker setup encapsulates all complex system libraries, headless graphics drivers, and CUDA dependencies in a single reproducible environment.
+**A/B split** (implemented — details in [`docker/README.md`](docker/README.md)):
 
 ```text
-Host Machine (Windows / Linux)                    Inside Docker Container
-─────────────────────────────                    ───────────────────────────
-1. `docker compose up` ────────────────────────► Ubuntu 22.04 + CUDA 12 Runtime
-                                                 Headless Graphics (OpenGL / Vulkan / Xvfb)
-                                                 Mounts host `./src` to `/app/src` (Live Edit)
-                                                 Mounts host `./logs` to `/app/logs`
-                                                 Starts `python -m src.ui.app`
-                                                            │
-2. Browser: http://localhost:8080 ◄────────────── Port 8080 mapped
-   (Mission Control UI)                                     │
-                                                            │
-3. Click [ ▶ LAUNCH ] in browser ──────────────► Backend launches Unity simulator
-                                                 `./simulator/AutoDRIVE Simulator.x86_64`
-                                                 Racer connects via Socket.IO (:4567+)
-                                                            │
-4. Real-time Telemetry & Canvas ◄─────────────── WebSocket `/ws/telemetry` (20 FPS)
+Host                         Compose bridge `aicar`
+────                         ─────────────────────
+docker compose up
+  --scale sim=2    ───────►  A × N  sim containers (Dockerfile.sim + Xvfb)
+                             each: .x86_64 -batchmode -nographics -ip brain -port 4567+
+                                      │
+                                      ▼
+                             B  brain container (Dockerfile.brain + CUDA)
+                             ready stub :8090 · Socket.IO :4567–4582
+                             train: --n-envs N --no-auto-launch
 ```
 
 ### Key Docker Components:
-1. **`docker-compose.yml`**:
-   - **GPU Passthrough**: Configured with NVIDIA container runtime (`capabilities: [gpu]`) so PyTorch utilizes the host RTX 3060.
-   - **Port Forwarding**:
-     - `8080:8080` (Mission Control Web UI access in browser).
-     - `4567-4574:4567-4574` (Socket.IO communication ports for up to 8 racers).
-   - **Volume Mounts (Live Code Sync)**:
-     - Mounts host `./src` into `/app/src`. Any code changes in your IDE take effect immediately inside the running container without rebuilding.
-     - Mounts host `./logs` into `/app/logs` so CSV logs and training models are saved straight to the host filesystem.
-2. **`docker/Dockerfile`**:
-   - Base: `nvidia/cuda:12.4.1-runtime-ubuntu22.04`.
-   - Packages: Installs Python 3.10+, `libgl1-mesa-glx`, `libglib2.0-0`, `xvfb`, and `libvulkan1` for headless Unity execution.
-   - Installs all Python dependencies from `requirements.txt`.
-3. **`docker/entrypoint.sh`**:
-   - Starts a lightweight virtual display (`Xvfb :99 -screen 0 640x480x24 &`) if required by the Unity binary, then executes the passed command (`python -m src.ui.app`).
-4. **`.dockerignore`**:
-   - Excludes `.git`, `.venv`, `__pycache__`, and temporary debug files from the build context.
+1. **`docker-compose.yml`**: `brain` + scalable `sim`; bridge network; ports `4567-4582` + `8090` (`8080` reserved/commented for UI); volumes `./src`, `./scripts`, `./logs`, `./simulator`; GPU reservation on brain.
+2. **`docker/Dockerfile.sim` / `entrypoint-sim.sh`**: Ubuntu + Xvfb/GL; launches one Unity binary per container; PORT from env or hostname index.
+3. **`docker/Dockerfile.brain` / `ready_stub.py`**: CUDA runtime + pip; default HTTP OK on `:8090` (not auto-train).
+4. **`docker-compose.sim-gpu.yml`**: optional NVIDIA GPU for sim containers.
+5. **`.dockerignore`**: Excludes `.git`, `.venv`, `__pycache__`, and temp files from the build context.
 
 ---
 

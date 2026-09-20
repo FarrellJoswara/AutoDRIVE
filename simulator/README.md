@@ -25,7 +25,10 @@ Flags the driver passes:
 - **Headed:** `-ip 127.0.0.1 -port <PORT>` (then click **Connect**)
 - **Headless:** `-batchmode -nographics -ip 127.0.0.1 -port <PORT>` (auto-connect)
 
-Docker: set `AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64` (already in `docker-compose.yml`).
+Docker A/B: mount this folder into sim + brain containers; compose sets
+`AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64`.
+Sims are launched by `docker/entrypoint-sim.sh` (not by Python auto-launch).
+See [`docker/README.md`](../docker/README.md).
 
 ## Protocol
 

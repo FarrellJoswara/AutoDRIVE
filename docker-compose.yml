@@ -1,20 +1,39 @@
+# AutoDRIVE A/B compose
+# A = sim (Unity Linux .x86_64, one process per container)
+# B = brain (Python Layers 1–3; default ready stub on :8090)
+#
+# First milestone:
+#   docker compose up --build --scale sim=2
+# Then train from brain with --no-auto-launch against ports 4567+.
+
 services:
-  aicar:
+  brain:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    container_name: aicar_sim
+      dockerfile: docker/Dockerfile.brain
+    container_name: aicar_brain
     ipc: host
     ports:
-      - "8080:8080"
+      # Wide Socket.IO range for many parallel envs (widen both sides together).
+      # Example for 32 envs: "4567-4598:4567-4598"
+      - "4567-4582:4567-4582"
+      # Ready stub (default brain command)
+      - "8090:8090"
+      # Future Mission Control UI (uncomment when src/ui ships):
+      # - "8080:8080"
     volumes:
       - ./src:/app/src
+      - ./scripts:/app/scripts
       - ./logs:/app/logs
       - ./simulator:/app/simulator
     environment:
       - PYTHONUNBUFFERED=1
-      - DISPLAY=:99
+      - READY_PORT=8090
       - AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+    networks:
+      - aicar
+    # GPU on B by default (NVIDIA Container Toolkit / Docker Desktop GPU)
+    gpus: all
     deploy:
       resources:
         reservations:
@@ -22,4 +41,38 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: ["python", "-m", "src.ui.app"]
+    # Default: ready stub only (does not auto-train)
+    command: ["python", "/app/docker/ready_stub.py"]
+
+  sim:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sim
+    # No container_name — required for --scale sim=N
+    volumes:
+      - ./simulator:/app/simulator
+    environment:
+      - BRAIN_HOST=brain
+      - BASE_PORT=4567
+      - AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64
+      # Optional: force a single port (disables hostname-based indexing):
+      # - PORT=4567
+      - DISPLAY=:99
+    networks:
+      - aicar
+    depends_on:
+      - brain
+    # CPU / software GL by default. For GPU sims, either:
+    #   docker compose -f docker-compose.yml -f docker-compose.sim-gpu.yml up --scale sim=2
+    # or uncomment the deploy block below (requires NVIDIA toolkit).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  aicar:
+    driver: bridge

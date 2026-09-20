@@ -1,0 +1,18 @@
+# Optional override: GPU for simulator containers (profile/document companion).
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.sim-gpu.yml up --build --scale sim=2
+#
+# Requires NVIDIA Container Toolkit on the host.
+
+services:
+  sim:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics

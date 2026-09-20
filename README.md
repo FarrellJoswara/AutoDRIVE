@@ -1,6 +1,6 @@
 # AutoDRIVE RoboRacer — AiCar
 
-Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing: Layer 1 driver → Layer 2 Gymnasium env → Layer 3 PPO (next), plus Mission Control UI and Docker (planned).
+Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing: Layer 1 driver → Layer 2 Gymnasium env → Layer 3 PPO, plus Mission Control UI (planned) and Docker A/B (brain + scalable sims).
 
 ## Current status
 
@@ -10,9 +10,9 @@ Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing: Layer 1 drive
 | **Layer 2** — `src/layer2/` | **Implemented** |
 | **Layer 3** — PPO / 1D-CNN | **Implemented** (`src/layer3/`) — see [`LAYER3.md`](LAYER3.md) |
 | **Mission Control UI** — `src/ui/` | Not started |
-| **Docker (A sim × N + B brain)** | Scaffold only (single compose service today) |
+| **Docker (A sim × N + B brain)** | **Compose ready** — see [`docker/README.md`](docker/README.md) |
 
-Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · [`src/layer3/README.md`](src/layer3/README.md) (plain English) · [`LAYER3.md`](LAYER3.md) (build plan) · [`PLAN.md`](PLAN.md).
+Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · [`src/layer3/README.md`](src/layer3/README.md) (plain English) · [`LAYER3.md`](LAYER3.md) (build plan) · [`PLAN.md`](PLAN.md) · [`docker/README.md`](docker/README.md).
 
 ---
 
@@ -27,10 +27,11 @@ Order of work from here:
    - [x] `play` loads `.zip` (1 env)
 
 2. **Docker — split A (sim) / B (brain)**
-   - [ ] `Dockerfile.sim` (Unity + Xvfb) and `Dockerfile.brain` (Python + CUDA/torch)
-   - [ ] Compose: one **brain** service + **N scaled sim** services (1 Unity / container)
-   - [ ] Wire ports `4567+`; `AICAR_SIMULATOR_PATH`; GPU passthrough
-   - [ ] Verify `python scripts/demo.py layer2` and PPO train inside B talking to A’s
+   - [x] `Dockerfile.sim` (Unity + Xvfb) and `Dockerfile.brain` (Python + CUDA/torch)
+   - [x] Compose: one **brain** service + **N scaled sim** services (1 Unity / container)
+   - [x] Wide ports `4567-4582`; `AICAR_SIMULATOR_PATH`; GPU on brain; optional sim GPU
+   - [x] Ready stub on `:8090`; train with `--no-auto-launch` against pre-started sims
+   - [ ] Verify end-to-end on a machine with Docker Desktop + Linux `.x86_64` binary
 
 3. **Mission Control UI (`src/ui`)**
    - [ ] FastAPI app on `:8080`
@@ -45,7 +46,6 @@ Order of work from here:
 5. **Everything else**
    - [ ] Reward Phase 2 (waypoints / lap progress) when ready
    - [ ] Competition packaging (submit B image; external A)
-   - [ ] Docker: point `train --n-envs N` at pre-started A×N sims (`auto_launch=False`)
 
 ---
 
@@ -75,8 +75,32 @@ python scripts/demo.py play --model logs/rl/smoke_10k/final_model.zip --steps 20
 python -m pytest scripts/test_layer1.py scripts/test_layer3_extractor.py -v
 ```
 
-**Headed Layer 1:** set each window’s port (`4567`, `4568`, …) and click **Connect**.  
-**Headless:** `-batchmode -nographics -ip … -port …` auto-connects.
+### Simulator CLI flags
+
+| Mode | Flags |
+| :--- | :--- |
+| **Headed** (local Windows) | `-ip 127.0.0.1 -port <PORT>` then click **Connect** in the UI |
+| **Headless** (Docker / CI) | `-batchmode -nographics -ip <brain> -port <PORT>` (auto-connect) |
+
+Layer 1’s `Racer.launch_simulator()` passes these for you when `auto_launch=True`. Compose sims use the headless form via `docker/entrypoint-sim.sh` (`BRAIN_HOST` + per-replica `PORT`).
+
+### Docker A/B (brief)
+
+Full how-to: **[`docker/README.md`](docker/README.md)**.
+
+```bash
+# 1 brain (ready stub :8090) + 2 sim containers on bridge network
+docker compose up --build --scale sim=2
+
+# Train inside brain against pre-started sims (ports 4567, 4568)
+docker compose exec brain \
+  python scripts/demo.py train --n-envs 2 --base-port 4567 --no-auto-launch \
+  --timesteps 10000 --out logs/rl/docker_smoke
+```
+
+- Published sim/Socket.IO range: **`4567-4582`** (widen both sides of the mapping for more envs; see docker README).
+- Brain GPU on by default; sim GPU via `docker-compose.sim-gpu.yml`.
+- Default brain command is a ready stub on **`:8090`** (not auto-train). UI later on **`:8080`**.
 
 ### Construct Layer 2
 
@@ -104,8 +128,9 @@ AiCar/
 ├── src/layer1/             # Layer 1 — see src/layer1/README.md
 ├── src/layer2/             # Layer 2 — see src/layer2/README.md
 ├── src/layer3/             # Layer 3 — PPO (extractors, envs, train, play)
-├── docker/                 # Current single-image scaffold
-├── docker-compose.yml
+├── docker/                 # Dockerfile.sim / Dockerfile.brain + entrypoints
+├── docker-compose.yml      # brain + scalable sim
+├── docker-compose.sim-gpu.yml  # optional GPU for sims
 ├── simulator/              # Binaries (gitignored) + README
 ├── logs/trajectories/      # CSV exports (contents gitignored)
 └── logs/rl/                # PPO runs (contents gitignored)
@@ -113,7 +138,7 @@ AiCar/
 
 ---
 
-## Architecture (target)
+## Architecture (Docker A/B)
 
 ```text
 ┌─────────────────────────────────────┐
@@ -121,13 +146,12 @@ AiCar/
 │  One Unity process per container    │
 │  Socket.IO client → B ports 4567+   │
 └──────────────────▲──────────────────┘
-                   │ Bridge
+                   │ Bridge network `aicar`
 ┌──────────────────▼──────────────────┐
 │  B — Brain (one container)          │
-│  Layer 1 + 2 + 3 (PPO) + UI :8080   │
+│  Layer 1 + 2 + 3 (PPO)              │
+│  Ready stub :8090 · UI :8080 later  │
 └─────────────────────────────────────┘
 ```
 
-Today’s compose file is still a **single** combined service; splitting A/B is on the TODO list above.
-
-**Bridge:** Unity emits `Bridge` telemetry each tick; Python emits string commands `V1 Throttle` / `V1 Steering` / `V1 Reset`.
+**Bridge protocol:** Unity emits `Bridge` telemetry each tick; Python emits string commands `V1 Throttle` / `V1 Steering` / `V1 Reset`.
