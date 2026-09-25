@@ -4,6 +4,37 @@ Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing:
 
 **Layer 1** (driver) → **Layer 2** (Gymnasium env) → **Layer 3** (PPO) → **Layer 4** (Mission Control UI) + **Docker A/B** (brain + scalable sims).
 
+---
+
+# START HERE — one command
+
+```bash
+python main.py
+```
+
+That is the easy start. It will:
+
+1. Check Docker Desktop is running  
+2. Download the AutoDRIVE simulator zip from GitHub Releases if `./simulator/` is missing  
+3. `docker compose up --build --scale sim=2` (brain + 2 sims)  
+4. Wait until Mission Control is healthy  
+5. Open **http://127.0.0.1:8090** in your browser  
+
+| Command | What it does |
+| :--- | :--- |
+| `python main.py` | Start everything + open UI |
+| `python main.py --sims 4` | Same, but 4 sim containers |
+| `python main.py --stop` | Tear the stack down |
+
+**Requirements:** Docker Desktop running. First run builds images (can take a while).  
+**UI:** http://127.0.0.1:8090 — Settings · Train · Live · Fleet  
+
+Simulator binaries stay gitignored; they live in the
+[`simulator-binaries`](https://github.com/FarrellJoswara/AutoDRIVE/releases/tag/simulator-binaries)
+release (`autodrive-simulator.zip`). `main.py` fetches that automatically.
+
+---
+
 ## Current status
 
 | Layer / piece | Status |

@@ -1,16 +1,24 @@
 # AutoDRIVE Simulator
 
-Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). Executables are **gitignored**; only docs live in git.
+Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). Executables are
+**gitignored**; only this doc lives in git.
 
-## Layout
+## Easiest: use `python main.py`
+
+From the repo root, `python main.py` downloads
+[`autodrive-simulator.zip`](https://github.com/FarrellJoswara/AutoDRIVE/releases/tag/simulator-binaries)
+into `./simulator/` if the Linux binary is missing, then starts Docker + Mission Control.
+
+Manual download: extract the release zip so you have:
 
 | Path | Purpose |
 |------|---------|
-| `windows/AutoDRIVE Simulator.exe` | Local Windows demos / training |
+| `windows/AutoDRIVE Simulator.exe` | Local Windows demos / headed play |
 | `AutoDRIVE Simulator.x86_64` | Linux / Docker (`/app/simulator/...` in compose) |
-| `Data/` | Unity asset bundles (gitignored with binaries) |
+| `Data/` | Unity asset bundles |
+| `GameAssembly.so` / `UnityPlayer.so` | Linux Unity runtime |
 
-## Usage
+## Usage (local, no Docker)
 
 Prefer the Python driver (binds Socket.IO first, then spawns the process):
 
@@ -18,6 +26,7 @@ Prefer the Python driver (binds Socket.IO first, then spawns the process):
 python scripts/demo.py layer1
 python scripts/demo.py layer1 --headless --racers 1
 python scripts/demo.py layer2
+python scripts/demo.py play --model logs/rl/.../final_model.zip --no-headless
 ```
 
 Flags the driver passes:
