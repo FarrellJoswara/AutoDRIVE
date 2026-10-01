@@ -21,3 +21,13 @@ temp/
 *.fbx
 src/layer4/web/node_modules
 src/layer4/web/dist
+
+# Simulator is volume-mounted at runtime — never send it as build context.
+# (simulator/unity alone is ~20GB of Unity project files.)
+simulator/
+assets/maps/
+
+# Local / editor junk
+.cursor/
+agent-transcripts/
+*.zip

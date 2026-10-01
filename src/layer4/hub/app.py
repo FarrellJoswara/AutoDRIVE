@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.layer4.hub.map_activate import activate_map
+from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
 from src.layer4.hub.train_job import TrainJob
 from src.layer4.settings import ROOT, Settings, load_settings, save_settings
@@ -31,21 +33,8 @@ def _resolve_web_dist() -> Path:
     return source_dist
 
 
-def _resolve_maps_dir() -> Optional[Path]:
-    env = os.environ.get("AICAR_MAPS_DIR", "").strip()
-    candidates = []
-    if env:
-        candidates.append(Path(env))
-    candidates.append(Path("/app/assets/maps"))
-    candidates.append(ROOT / "assets" / "maps")
-    for c in candidates:
-        if c.is_dir():
-            return c
-    return None
-
-
 WEB_DIST = _resolve_web_dist()
-MAPS_DIR = _resolve_maps_dir()
+MAPS_DIR = resolve_maps_root(ROOT)
 HUB_HOST = os.environ.get("HUB_HOST", "0.0.0.0")
 HUB_PORT = int(os.environ.get("HUB_PORT", os.environ.get("READY_PORT", "8090")))
 HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
@@ -76,6 +65,308 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/shutdown")
+async def api_shutdown(request: Request) -> Dict[str, Any]:
+    """Stop Mission Control (and optionally the Docker compose stack).
+
+    Query: stack=1 also stops compose containers (brain last).
+    """
+    import asyncio
+    import signal
+
+    qp = request.query_params
+    stop_stack = qp.get("stack", "").strip().lower() in {"1", "true", "yes"}
+    stopped: list[str] = []
+    train_status: Optional[Dict[str, Any]] = None
+
+    try:
+        train_status = await asyncio.to_thread(job.stop)
+    except Exception:
+        train_status = None
+
+    if stop_stack:
+        try:
+            from src.layer4.hub.docker_control import stop_compose_containers
+
+            stopped = await asyncio.to_thread(
+                stop_compose_containers, full_stack=True
+            )
+        except Exception as exc:
+            # Still shut down the hub; report docker failure to the client.
+            async def _die_after_error() -> None:
+                await asyncio.sleep(0.4)
+                os.kill(os.getpid(), signal.SIGTERM)
+
+            asyncio.get_running_loop().create_task(_die_after_error())
+            return {
+                "ok": True,
+                "shutting_down": True,
+                "stack": True,
+                "stopped_containers": stopped,
+                "train": train_status,
+                "stack_error": str(exc),
+            }
+
+    async def _die() -> None:
+        await asyncio.sleep(0.4)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.get_running_loop().create_task(_die())
+    return {
+        "ok": True,
+        "shutting_down": True,
+        "stack": stop_stack,
+        "stopped_containers": stopped,
+        "train": train_status,
+    }
+
+
+@app.get("/api/maps")
+async def api_maps() -> Any:
+    """Auto-detected occupancy maps under simulator/maps/ (+ synthetic 'none')."""
+    return list_maps_api(MAPS_DIR)
+
+
+@app.post("/api/maps/upload")
+async def api_upload_map(request: Request) -> Any:
+    """Install an occupancy map package from a zip body (Phase 4).
+
+    Body: application/zip (or application/octet-stream).
+    Query: map_id (required for flat zips), overwrite=1, label=...
+    """
+    import asyncio
+
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+
+    from src.layer4.hub.map_upload import install_map_zip
+
+    body = await request.body()
+    qp = request.query_params
+    map_id = qp.get("map_id") or None
+    label = qp.get("label") or None
+    overwrite = qp.get("overwrite", "").strip().lower() in {"1", "true", "yes"}
+
+    try:
+        result = await asyncio.to_thread(
+            install_map_zip,
+            MAPS_DIR,
+            body,
+            map_id=map_id,
+            overwrite=overwrite,
+            label=label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    result["maps"] = list_maps_api(MAPS_DIR)
+    return result
+
+
+@app.post("/api/maps/{map_id}/generate-mesh")
+async def api_generate_mesh(map_id: str) -> Any:
+    """Generate track.obj / track_col.obj from occupancy (Phase 2)."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="cannot generate mesh for 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    map_dir = MAPS_DIR / map_id
+    if not map_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.meshgen import generate_mesh
+
+    try:
+        result = await asyncio.to_thread(generate_mesh, map_id, MAPS_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, "result": result.to_api(), "maps": list_maps_api(MAPS_DIR)}
+
+
+@app.post("/api/maps/{map_id}/generate-centerline")
+async def api_generate_centerline(map_id: str) -> Any:
+    """Skeletonize free space → occupancy/centerline.csv (Phase 4)."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="cannot generate centerline for 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    if not (MAPS_DIR / map_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.centerline import generate_centerline
+
+    try:
+        result = await asyncio.to_thread(generate_centerline, map_id, MAPS_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, "result": result.to_api(), "maps": list_maps_api(MAPS_DIR)}
+
+
+@app.get("/api/maps/{map_id}/centerline.csv")
+async def api_centerline_csv(map_id: str) -> Any:
+    """Download centerline CSV if present (generate first if missing is caller's choice)."""
+    if map_id == "none":
+        raise HTTPException(status_code=404, detail="no centerline for 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    map_dir = MAPS_DIR / map_id
+    if not map_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.centerline import find_centerline
+
+    path = find_centerline(map_dir)
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no centerline.csv for '{map_id}' — POST .../generate-centerline first",
+        )
+    return FileResponse(
+        path,
+        media_type="text/csv",
+        filename=f"{map_id}_centerline.csv",
+    )
+
+
+@app.get("/api/maps/active")
+async def api_maps_active(request: Request) -> Any:
+    """Current physics map id + selection mismatch hints (Phase 4)."""
+    from src.layer4.hub.map_status import map_status_payload
+
+    selected = request.query_params.get("selected") or None
+    payload = map_status_payload(MAPS_DIR, selected_id=selected, repo_root=ROOT)
+    payload["maps"] = list_maps_api(MAPS_DIR)
+    return payload
+
+
+@app.post("/api/maps/{map_id}/generate-thumbnail")
+async def api_generate_thumbnail(map_id: str) -> Any:
+    """Ensure occupancy/preview.png exists for Fleet catalog thumbnails."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="cannot thumbnail 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    if not (MAPS_DIR / map_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.mesh_preview import ensure_occupancy_thumbnail
+
+    try:
+        path = await asyncio.to_thread(ensure_occupancy_thumbnail, map_id, MAPS_DIR)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if path is None:
+        raise HTTPException(status_code=404, detail="no occupancy image to thumbnail")
+    return {
+        "ok": True,
+        "path": str(path),
+        "url": f"/maps/{map_id}/occupancy/{path.name}",
+        "maps": list_maps_api(MAPS_DIR),
+    }
+
+
+@app.post("/api/maps/{map_id}/generate-mesh-preview")
+async def api_generate_mesh_preview(map_id: str) -> Any:
+    """Orthographic top-down PNG of track.obj (no Unity)."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="cannot preview 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    if not (MAPS_DIR / map_id).is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.mesh_preview import generate_mesh_preview
+
+    try:
+        result = await asyncio.to_thread(generate_mesh_preview, map_id, MAPS_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, "result": result.to_api(), "maps": list_maps_api(MAPS_DIR)}
+
+
+@app.get("/api/maps/{map_id}/mesh-preview.png")
+async def api_mesh_preview_png(map_id: str) -> Any:
+    """Serve mesh/preview.png; 404 if not generated yet."""
+    if map_id == "none":
+        raise HTTPException(status_code=404, detail="no preview for 'none'")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    map_dir = MAPS_DIR / map_id
+    if not map_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"unknown map id: {map_id}")
+
+    from src.layer4.hub.mesh_preview import find_mesh_preview
+
+    path = find_mesh_preview(map_dir)
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no mesh preview for '{map_id}' — POST .../generate-mesh-preview first",
+        )
+    return FileResponse(path, media_type="image/png", filename=f"{map_id}_mesh_preview.png")
+
+
+@app.post("/api/maps/{map_id}/activate")
+async def api_activate_map(map_id: str, request: Request) -> Any:
+    """Persist active map + restart compose sims (Phase 3). Logic is in map_activate."""
+    import asyncio
+
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+
+    force = False
+    restart = True
+    try:
+        raw = await request.json()
+        if isinstance(raw, dict):
+            force = bool(raw.get("force", False))
+            if "restart" in raw:
+                restart = bool(raw["restart"])
+    except Exception:
+        pass
+    # Also accept ?force=1 for thin clients
+    if request.query_params.get("force", "").strip().lower() in {"1", "true", "yes"}:
+        force = True
+
+    train_state = job.status().get("state")
+    train_running = train_state in {"starting", "running", "stopping"}
+
+    try:
+        result = await asyncio.to_thread(
+            activate_map,
+            MAPS_DIR,
+            map_id,
+            restart=restart,
+            train_running=train_running,
+            force=force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    result["maps"] = list_maps_api(MAPS_DIR)
+    return result
 
 
 @app.get("/train/status")

@@ -9,6 +9,8 @@ export function TrainPage() {
 
   const state = status?.state ?? "idle";
   const running = state === "running" || state === "starting" || state === "stopping";
+  const stoppedSims =
+    !!status?.stopped_containers && status.stopped_containers.length > 0;
 
   async function onStart() {
     setErr(null);
@@ -40,7 +42,8 @@ export function TrainPage() {
       <h2>Train</h2>
       <p className="lede">
         Starts <code>python -m src.layer3.train</code> with the saved Settings argv.
-        One job at a time.
+        One job at a time. In Docker mode the hub starts sim containers first if they
+        were stopped after the last run.
       </p>
 
       <p>
@@ -49,6 +52,20 @@ export function TrainPage() {
           {state}
         </span>
       </p>
+
+      {state === "exited" && stoppedSims && (
+        <p className="msg err">
+          Last run stopped compose sims ({status?.stopped_containers?.join(", ")}
+          ). Hit Start again — the hub will restart them before training.
+        </p>
+      )}
+      {state === "exited" && status?.exit_code != null && status.exit_code !== 0 && (
+        <p className="msg err">
+          Train exited with code {status.exit_code}
+          {status.log_path ? ` — see ${status.log_path}` : ""}. If you only saw
+          watchdog timeouts, sims were not connected.
+        </p>
+      )}
 
       <div className="meta">
         <div>

@@ -172,7 +172,7 @@ src/layer4/
     └── src/fleet/       # Canvas 2D map / cars / LiDAR
 
 src/layer3/hub_callback.py   # SB3 callback: enqueue telemetry (never block learn)
-assets/maps/                 # Porto / Berlin occupancy grids for Fleet
+assets/maps/                 # pointer — Fleet maps live under simulator/maps/
 ```
 
 Layers 1–3 = learning path. Layer 4 = infra UI. Docker files stay under `docker/` + root compose (not under `src/`).
@@ -218,6 +218,10 @@ LiDAR in the sim is **1080** beams; for the UI we **min-pool to ~120** so the br
 | `POST` | `/telemetry` | Internal — train callback publishes here |
 | `WS` | `/ws` | Browser subscribes; hub fans out status + telemetry |
 | `GET` | `/` + `/assets/*` | Built Vite SPA |
+| `GET` | `/api/maps` | Auto-detected map catalog (`simulator/maps/`) |
+| `POST` | `/api/maps/{id}/generate-mesh` | Occupancy → `mesh/track.obj` + `track_col.obj` |
+| `POST` | `/api/maps/{id}/activate` | Set physics map + restart compose sims (`maps/.active_map.json`) |
+| `GET` | `/api/maps/active` | Current active map id + TrackLoader marker |
 | `GET` | `/maps/*` | Static map assets for Fleet |
 
 ### Settings that become train CLI flags
@@ -252,7 +256,7 @@ Almost every field on Settings maps to `python -m src.layer3.train …`:
 
 Layers bottom → top:
 
-1. **Map** — Porto / Berlin occupancy (`assets/maps/`) or grid fallback. Metre scale from yaml `resolution` / `origin`.
+1. **Map** — occupancy under `simulator/maps/<id>/occupancy/` (auto-listed via `GET /api/maps`) or grid fallback. Metre scale from yaml `resolution` / `origin`. **Activate** writes `maps/.active_map.json` and restarts compose sims; TrackLoader (custom player) loads `mesh/*.obj` at boot — see `simulator/unity/README.md`.
 2. **Cars** — pose on Unity **X–Z** ground (Y is up).
 3. **LiDAR** — rays for selected car (angles are **calibrated defaults** in `lidarCalibration.ts` — may need a wall-tune later).
 4. **Collision** — crashed car drawn as **X**.
@@ -363,7 +367,9 @@ AiCar/
 ├── requirements.txt
 ├── scripts/demo.py
 ├── src/layer1/ … layer2/ … layer3/ … layer4/
-├── assets/maps/               # Fleet map assets (BSD-2-Clause AutoDRIVE tracks)
+├── simulator/maps/            # Fleet occupancy maps (auto-detected by hub)
+├── simulator/unity/           # TrackLoader C# patches (build into player)
+├── assets/maps/               # pointer README → simulator/maps/
 ├── docker/                    # Dockerfiles + entrypoints
 ├── docker-compose.yml
 ├── docker-compose.sim-gpu.yml

@@ -235,7 +235,10 @@ class HubTelemetryCallback(BaseCallback):
             pos = info.get("position")
             pose = None
             if pos is not None and len(pos) >= 3:
-                pose = [float(pos[0]), float(pos[2])]  # Unity X–Z
+                # AutoDRIVE GPS.cs publishes:
+                #   [0]=Unity.z  [1]=-Unity.x  [2]=Unity.y
+                # Fleet canvas / occupancy maps use Unity ground plane X–Z.
+                pose = [-float(pos[1]), float(pos[0])]
 
             car: Dict[str, Any] = {
                 "env_id": i,

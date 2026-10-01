@@ -67,6 +67,17 @@ textarea {
   font-weight: 600;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.shutdown-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+}
+
 .conn {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -408,6 +419,38 @@ label.check {
 .fleet-note code {
   font-size: 0.68rem;
   color: var(--accent);
+}
+
+.fleet-note.fleet-warn,
+.fleet-note[data-bad="1"] {
+  color: var(--warn);
+}
+
+.fleet-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: var(--bg0);
+}
+
+.fleet-upload {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.fleet-mesh-preview {
+  margin: 0 0 0.85rem;
+  max-width: 320px;
+  border: 1px solid var(--line);
+  background: var(--bg0);
+}
+
+.fleet-mesh-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 @media (max-width: 860px) {

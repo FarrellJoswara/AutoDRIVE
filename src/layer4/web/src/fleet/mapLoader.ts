@@ -18,28 +18,8 @@ export interface LoadedMap {
   height: number;
 }
 
-export type MapId = "porto" | "berlin" | "none";
-
-const MAP_MANIFEST: Record<
-  Exclude<MapId, "none">,
-  { yamlUrl: string; label: string }
-> = {
-  porto: { yamlUrl: "/maps/porto/Porto.yaml", label: "Porto" },
-  berlin: { yamlUrl: "/maps/berlin/Berlin.yaml", label: "Berlin" },
-};
-
-export function mapLabel(id: MapId): string {
-  if (id === "none") return "Grid only";
-  return MAP_MANIFEST[id].label;
-}
-
-export function listMaps(): { id: MapId; label: string }[] {
-  return [
-    { id: "porto", label: "Porto" },
-    { id: "berlin", label: "Berlin" },
-    { id: "none", label: "Grid only" },
-  ];
-}
+/** Catalog id from hub (`none` = grid only). */
+export type MapId = string;
 
 /** Minimal YAML subset parser for ROS map_server files (key: value). */
 export function parseMapYaml(text: string): MapYaml {
@@ -91,7 +71,6 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
     while (i < bytes.length) {
       const c = bytes[i];
       if (c === 0x23) {
-        // comment to EOL
         while (i < bytes.length && bytes[i] !== 0x0a) i++;
         continue;
       }
@@ -112,14 +91,12 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   const height = Number(readToken());
   const maxval = Number(readToken());
   if (!width || !height || !maxval) throw new Error("bad PGM header");
-  // single whitespace after maxval
   if (i < bytes.length && bytes[i] <= 0x20) i++;
   const pixels = bytes.subarray(i, i + width * height);
   const rgba = new Uint8ClampedArray(width * height * 4);
   for (let p = 0; p < width * height; p++) {
     let g = pixels[p] ?? 0;
     if (maxval !== 255) g = Math.round((g / maxval) * 255);
-    // Occupancy: free≈white, occupied≈black — invert lightly for dark UI
     const v = 255 - g;
     const o = p * 4;
     rgba[o] = Math.round(v * 0.55 + 20);
@@ -149,8 +126,8 @@ async function loadRaster(
   return { source: img, width: img.naturalWidth, height: img.naturalHeight };
 }
 
-export async function loadMap(id: Exclude<MapId, "none">): Promise<LoadedMap> {
-  const { yamlUrl } = MAP_MANIFEST[id];
+/** Load map by hub catalog yaml URL (e.g. /maps/porto/occupancy/Porto.yaml). */
+export async function loadMap(id: string, yamlUrl: string): Promise<LoadedMap> {
   const yamlText = await (await fetch(yamlUrl)).text();
   const yaml = parseMapYaml(yamlText);
   const base = yamlUrl.replace(/[^/]+$/, "");

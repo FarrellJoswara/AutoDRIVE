@@ -8,6 +8,7 @@ execution profiling, and child simulator process lifecycle.
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
 import threading
@@ -22,6 +23,33 @@ from geventwebsocket.handler import WebSocketHandler
 from .telemetry import TelemetrySnapshot, TrajectoryLogger
 
 logger = logging.getLogger(__name__)
+
+
+def _read_active_map_id() -> Optional[str]:
+    """Read simulator/maps/.active_map.json without importing Layer 4."""
+    env_dir = os.environ.get("AICAR_MAPS_DIR", "").strip()
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir) / ".active_map.json")
+    here = Path(__file__).resolve()
+    repo = here.parents[2]
+    candidates.append(repo / "simulator" / "maps" / ".active_map.json")
+    candidates.append(Path("/app/simulator/maps/.active_map.json"))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            import json
+
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        mid = raw.get("id")
+        if isinstance(mid, str) and mid.strip() and mid.strip().lower() != "none":
+            return mid.strip()
+    return None
 
 
 def _get_wsl_host_ip() -> str:
@@ -228,6 +256,13 @@ class Racer:
             flags.extend(["-batchmode", "-nographics"])
         elif not is_windows:
             flags.extend(["-force-vulkan"])
+
+        # Phase 3: pass active map id when set (TrackLoader-enabled player only)
+        map_id = os.environ.get("AICAR_MAP_ID", "").strip()
+        if not map_id or map_id.lower() == "none":
+            map_id = _read_active_map_id() or ""
+        if map_id and map_id.lower() != "none":
+            flags.extend(["-map-id", map_id])
 
         if is_windows and is_linux_elf:
             sim_dir = str(self.simulator_path.parent.resolve()).replace("\\", "/")
