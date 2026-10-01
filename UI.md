@@ -311,13 +311,13 @@ Each LiDAR reading is just **distances** (how far until a hit per beam index). T
 | **f1tenth_racetracks** (secondary) | https://github.com/f1tenth/f1tenth_racetracks | 20+ tracks: `*_map.png` + yaml + `*_centerline.csv` | **GPL-3.0** — great format, may **not** match AutoDRIVE RoboRacer scenes |
 | AutoDRIVE site / RCT | https://autodrive-ecosystem.github.io · [Race Control Tower](https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Race-Control-Tower) | Ecosystem docs; RCT is a Socket.IO proxy/monitor — **no** fleet map pack | BSD-2-Clause (RCT) |
 
-**Vendored samples (this repo):** `assets/maps/` — Porto occupancy + yaml, Berlin occupancy + yaml, Porto library preview. See `assets/maps/ATTRIBUTION.md`. Prefer documenting further tracks as URLs; vendor only small occupancy / preview images when needed.
+**Vendored samples (this repo):** `simulator/maps/<id>/occupancy/` — Porto, Berlin, ICRA 2026 Classic/Master. See `simulator/maps/ATTRIBUTION.md`. Hub auto-lists via `GET /api/maps`.
 
 #### Recommended v1 pick
 
 **Static occupancy (or library outline) as the canvas map layer**, not waypoints-first:
 
-1. **Default:** `assets/maps/porto/Porto.pgm` + `Porto.yaml` (or Berlin pair) — metre-accurate via `resolution` / `origin`; blit onto the **static** canvas with world→pixel from yaml (ROS map frame: origin = lower-left of image in world metres).
+1. **Default:** `simulator/maps/porto/occupancy/Porto.pgm` + `Porto.yaml` (or Berlin / ICRA pairs) — metre-accurate via `resolution` / `origin`; blit onto the **static** canvas with world→pixel from yaml (ROS map frame: origin = lower-left of image in world metres).
 2. **Visual alt:** `Library/*.png` (e.g. `Porto_preview.png`) when a nicer outline is wanted — calibrate against live poses (or pair with the matching Legacy yaml) before trusting scale.
 3. **Do not** pull FBX into Mission Control; if a future track has meshes only, orthographic screenshot **or** Phase 6.1 breadcrumb until a 2D asset exists.
 
@@ -649,7 +649,7 @@ Settings is **not** an optional late phase. Hub Settings API lands in Phase 1; t
 1. [ ] Publish per-env sim-state on TelemetryBus from `self.locals["new_obs"]["lidar"]` + `infos` (§6) — min-pool 1080→120, time-based `fleet_hz`, skip done-steps, **no UI `step()`**
 2. [ ] **Measure / document LiDAR angles** (where beam 0 points + angular step / FOV / CW vs CCW vs yaw); commit `angle_min` / `angle_increment` / sign — **not in repo today**; until then **map + cars + collision X** still ship; **no rays** until documented
 3. [ ] Fleet page (lazy-loaded): two canvases, `rAF` + refs, LiDAR as one filled path (§8)
-4. [ ] Background: prefer vendored occupancy / library PNG under `assets/maps/` (§6); else grid+auto-fit (6a) → breadcrumb (6b)
+4. [ ] Background: prefer vendored occupancy under `simulator/maps/` (§6); else grid+auto-fit (6a) → breadcrumb (6b)
 5. [ ] Side panel: episode / steps / return / collision / optional speed / **stale indicator**
 6. [ ] Toggles: map / fleet / LiDAR; selected-car LiDAR when multi-env; marker legend
 7. [ ] Optional: RaceTrack **display** helpers only (waypoints / gates / snapshot aggregate) — never on the L2/L3 train launch path; fix its x/y vs x/z axis disagreement first

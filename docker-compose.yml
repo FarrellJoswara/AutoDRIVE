@@ -40,6 +40,7 @@ services:
       - HUB_PORT=8090
       - HUB_URL=http://127.0.0.1:8090
       - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
+      - AICAR_MAPS_DIR=/app/simulator/maps
     networks:
       - aicar
     # GPU on B by default (NVIDIA Container Toolkit / Docker Desktop GPU)
@@ -75,6 +76,11 @@ services:
       - BRAIN_HOST=brain
       - BASE_PORT=4567
       - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
+      - AICAR_MAPS_DIR=/app/simulator/maps
+      # Used by entrypoint to wait for all scaled replicas before assigning ports
+      - AICAR_EXPECTED_SIMS=2
+      # Optional override; otherwise entrypoint reads maps/.active_map.json from Activate
+      # - AICAR_MAP_ID=porto
       # Optional: force a single port (disables hostname-based indexing):
       # - PORT=4567
       - DISPLAY=:99

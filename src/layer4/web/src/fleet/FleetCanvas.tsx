@@ -18,6 +18,8 @@ export interface FleetCanvasProps {
   showLidar: boolean;
   selectedEnvId: number;
   mapId: MapId;
+  /** Hub catalog yaml URL; null when mapId is none or unknown. */
+  mapYamlUrl: string | null;
   /** Side-panel sync — last React-visible fleet (throttled) */
   fleetPanel: FleetTelemetry | null;
 }
@@ -52,10 +54,10 @@ export function FleetCanvas(props: FleetCanvasProps) {
     let cancelled = false;
     mapRef.current = null;
     mapDirty.current = true;
-    if (props.mapId === "none") {
+    if (props.mapId === "none" || !props.mapYamlUrl) {
       return;
     }
-    void loadMap(props.mapId)
+    void loadMap(props.mapId, props.mapYamlUrl)
       .then((m) => {
         if (cancelled) return;
         mapRef.current = m;
@@ -71,7 +73,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
     return () => {
       cancelled = true;
     };
-  }, [props.mapId]);
+  }, [props.mapId, props.mapYamlUrl]);
 
   useEffect(() => {
     const wrap = wrapRef.current;

@@ -91,6 +91,23 @@ class TrainJob:
 
         self._broadcast()
 
+        # Docker mode: sims may already be up from a previous run, having tried
+        # to connect before any Racer was listening. Start train first so ports
+        # bind, then restart sims so Unity reconnects.
+        dockerish = bool(settings.docker_mode) or (
+            os.environ.get("AICAR_IN_DOCKER", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if dockerish:
+            try:
+                from src.layer4.hub.docker_control import ensure_compose_sims_running
+
+                ensure_compose_sims_running()
+            except Exception as exc:
+                with self._lock:
+                    self.cleanup_error = f"could not ensure sims: {exc}"
+                self._broadcast()
+
         log_file = None
         try:
             log_file = open(log_path, "w", encoding="utf-8", buffering=1)
@@ -139,6 +156,29 @@ class TrainJob:
             self._watcher.start()
 
         self._broadcast()
+
+        if dockerish:
+            # Bounce sims in the background so /train/start returns quickly and
+            # SubprocVecEnv has a moment to bind ports before Unity dials in.
+            def _bounce() -> None:
+                try:
+                    time.sleep(max(4.0, min(12.0, float(settings.connect_timeout) * 0.08)))
+                    from src.layer4.hub.docker_control import restart_compose_sims
+
+                    restarted = restart_compose_sims()
+                    if restarted:
+                        time.sleep(2.0)
+                except Exception as exc:
+                    with self._lock:
+                        prev = self.cleanup_error
+                        msg = f"sims restart after train start failed: {exc}"
+                        self.cleanup_error = f"{prev}; {msg}" if prev else msg
+                    self._broadcast()
+
+            threading.Thread(
+                target=_bounce, name="train-sim-bounce", daemon=True
+            ).start()
+
         return self.status()
 
     def _watch_exit(self) -> None:

@@ -78,7 +78,7 @@ export interface FleetTelemetry {
   run_id: string;
   ts: string;
   cars: FleetCar[];
-  /** Metres — denorm for normalised lidar [0,1]. Defaults match Layer 1. */
+  /** Metres â€” denorm for normalised lidar [0,1]. Defaults match Layer 1. */
   lidar_range_min?: number;
   lidar_range_max?: number;
 }
@@ -129,4 +129,143 @@ export function stopTrain(): Promise<TrainStatus> {
 export function wsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/ws`;
+}
+
+/** Hub-discovered occupancy maps under simulator/maps/. */
+export interface MapCatalogEntry {
+  id: string;
+  label: string;
+  yaml_url: string | null;
+  image_url: string | null;
+  mesh_status: string;
+  overlay_only: boolean;
+  active?: boolean;
+  source: string | null;
+  thumbnail_url?: string | null;
+  centerline_url?: string | null;
+  centerline_status?: string;
+  mesh_preview_url?: string | null;
+}
+
+export function fetchMaps(): Promise<MapCatalogEntry[]> {
+  return jsonFetch("/api/maps");
+}
+
+export function generateMapMesh(mapId: string): Promise<{
+  ok: boolean;
+  result: Record<string, unknown>;
+  maps: MapCatalogEntry[];
+}> {
+  return jsonFetch(`/api/maps/${encodeURIComponent(mapId)}/generate-mesh`, {
+    method: "POST",
+  });
+}
+
+export function activateMap(
+  mapId: string,
+  opts?: { force?: boolean; restart?: boolean }
+): Promise<{
+  ok: boolean;
+  active: { id: string | null; activated_at: string | null; path: string };
+  restarted: string[];
+  restart_error: string | null;
+  trackloader: boolean;
+  note: string | null;
+  maps: MapCatalogEntry[];
+}> {
+  const q = opts?.force ? "?force=1" : "";
+  return jsonFetch(`/api/maps/${encodeURIComponent(mapId)}/activate${q}`, {
+    method: "POST",
+    body: JSON.stringify({
+      force: Boolean(opts?.force),
+      restart: opts?.restart !== false,
+    }),
+  });
+}
+
+export function fetchActiveMap(selected?: string): Promise<{
+  active: { id: string | null; activated_at: string | null; path: string | null };
+  trackloader: boolean;
+  selected_id?: string | null;
+  selection_mismatch?: boolean;
+  warnings?: string[];
+  maps: MapCatalogEntry[];
+}> {
+  const q =
+    selected != null && selected !== ""
+      ? `?selected=${encodeURIComponent(selected)}`
+      : "";
+  return jsonFetch(`/api/maps/active${q}`);
+}
+
+export async function uploadMapZip(
+  file: Blob,
+  opts?: { mapId?: string; overwrite?: boolean; label?: string }
+): Promise<{
+  ok: boolean;
+  id: string;
+  path: string;
+  files: string[];
+  maps: MapCatalogEntry[];
+}> {
+  const q = new URLSearchParams();
+  if (opts?.mapId) q.set("map_id", opts.mapId);
+  if (opts?.overwrite) q.set("overwrite", "1");
+  if (opts?.label) q.set("label", opts.label);
+  const qs = q.toString();
+  const res = await fetch(`/api/maps/upload${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/zip" },
+    body: file,
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail ?? JSON.stringify(body);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+export function generateMapCenterline(mapId: string): Promise<{
+  ok: boolean;
+  result: Record<string, unknown>;
+  maps: MapCatalogEntry[];
+}> {
+  return jsonFetch(`/api/maps/${encodeURIComponent(mapId)}/generate-centerline`, {
+    method: "POST",
+  });
+}
+
+export function generateMapMeshPreview(mapId: string): Promise<{
+  ok: boolean;
+  result: { url: string; n_verts: number; n_faces: number; size_px: number };
+  maps: MapCatalogEntry[];
+}> {
+  return jsonFetch(
+    `/api/maps/${encodeURIComponent(mapId)}/generate-mesh-preview`,
+    { method: "POST" }
+  );
+}
+
+export function centerlineDownloadUrl(mapId: string): string {
+  return `/api/maps/${encodeURIComponent(mapId)}/centerline.csv`;
+}
+
+export async function shutdownHub(opts?: {
+  stack?: boolean;
+}): Promise<{
+  ok: boolean;
+  shutting_down: boolean;
+  stack: boolean;
+  stopped_containers: string[];
+  train: TrainStatus | null;
+  stack_error?: string;
+}> {
+  const q = opts?.stack ? "?stack=1" : "";
+  return jsonFetch(`/api/shutdown${q}`, { method: "POST" });
 }

@@ -75,6 +75,16 @@ This uses the Docker Engine socket mounted into `brain`; access to that socket i
 equivalent to Docker host control, so do not expose Mission Control to untrusted
 users.
 
+**Activate map (Phase 3):** Fleet **Activate** → hub writes
+`simulator/maps/.active_map.json` → restarts `sim` containers. Entrypoint reads
+that file (or `AICAR_MAP_ID`) via env only (not Unity argv). Requires a
+TrackLoader-enabled player — see `simulator/unity/README.md`.
+
+**Upload / catalog (Phase 4):** Fleet **Upload zip** or `POST /api/maps/upload`
+installs occupancy under `simulator/maps/<id>/occupancy/`. Then Generate mesh →
+Activate. Selecting a track in the UI only changes the Fleet overlay until
+Activate. See `simulator/maps/README.md`.
+
 Stop:
 
 ```bash

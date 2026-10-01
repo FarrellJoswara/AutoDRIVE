@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { shutdownHub } from "./api";
 import { SettingsPage } from "./pages/Settings";
 import { TrainPage } from "./pages/Train";
 import { LivePage } from "./pages/Live";
@@ -13,11 +14,26 @@ type Page = "settings" | "train" | "live" | "fleet";
 
 export function App() {
   const [page, setPage] = useState<Page>("settings");
+  const [shuttingDown, setShuttingDown] = useState(false);
   const { conn } = useHubStore();
 
   useEffect(() => {
     startStore();
   }, []);
+
+  async function onShutdown() {
+    if (shuttingDown) return;
+    const ok = window.confirm(
+      "Shut down Mission Control?\n\nThis stops the hub process. Training (if running) will be stopped first."
+    );
+    if (!ok) return;
+    setShuttingDown(true);
+    try {
+      await shutdownHub();
+    } catch {
+      // Hub may die before the response is fully read — treat as success.
+    }
+  }
 
   return (
     <div className="app">
@@ -25,8 +41,18 @@ export function App() {
         <h1 className="brand">
           AiCar <span>Mission Control</span>
         </h1>
-        <div className="conn" data-state={conn}>
-          {conn}
+        <div className="header-actions">
+          <div className="conn" data-state={conn}>
+            {conn}
+          </div>
+          <button
+            type="button"
+            className="btn danger shutdown-btn"
+            disabled={shuttingDown}
+            onClick={() => void onShutdown()}
+          >
+            {shuttingDown ? "Shutting down…" : "Shut down"}
+          </button>
         </div>
       </header>
 

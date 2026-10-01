@@ -43,3 +43,13 @@ src/layer4/web/dist/
 simulator_win/
 autodrive-simulator.zip
 simulator/autodrive-simulator.zip
+# Hub Activate runtime state (physics map id)
+simulator/maps/.active_map.json
+
+# Local Unity Editor project + huge installers (build machine only)
+simulator/unity/AutoDRIVE/
+logs/layer4/UnitySetup*.exe
+
+
+simulator/_build/
+
