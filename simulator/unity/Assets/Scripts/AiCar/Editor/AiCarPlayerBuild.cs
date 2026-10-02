@@ -230,8 +230,37 @@ namespace AiCar.Editor
         static void WriteTrackloaderMarker()
         {
             var marker = Path.Combine(SimulatorRoot, ".aicar_trackloader");
-            File.WriteAllText(marker, "TrackLoader-enabled player built " + DateTime.UtcNow.ToString("o") + "\n");
-            Debug.Log("[AiCar] wrote " + marker);
+            // Consumers use this as a capability flag (presence only), not as a
+            // build timestamp. Rewriting it can fail with Win32 error 1224 when
+            // a running simulator/container has the file mapped. Create it only
+            // when absent so a successful player publish is never undone by a
+            // metadata refresh.
+            if (File.Exists(marker))
+            {
+                Debug.Log("[AiCar] TrackLoader marker already exists: " + marker);
+                return;
+            }
+
+            try
+            {
+                using (var stream = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                using (var writer = new StreamWriter(stream))
+                {
+                    writer.WriteLine("TrackLoader-enabled player built " + DateTime.UtcNow.ToString("o"));
+                }
+                Debug.Log("[AiCar] created " + marker);
+            }
+            catch (IOException) when (File.Exists(marker))
+            {
+                // Another build created the shared capability marker concurrently.
+                Debug.Log("[AiCar] TrackLoader marker was created concurrently: " + marker);
+            }
+            catch (Exception exception)
+            {
+                // The player has already been published; marker metadata must
+                // not turn that successful build into a failed Unity command.
+                Debug.LogWarning("[AiCar] player published, but could not create TrackLoader marker: " + exception.Message);
+            }
         }
 
         static void WipeDir(string path)
