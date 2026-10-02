@@ -34,7 +34,9 @@ class Settings(BaseModel):
     max_episode_steps: int = Field(default=1000, ge=0)
     stagnation_speed_threshold: float = 0.15
     stagnation_steps: int = Field(default=50, ge=0)
+    frontier_stagnation_seconds: float = Field(default=5.0, ge=0)
     forward_scale: float = 1.0
+    route_progress_scale: float = Field(default=10.0, ge=0)
     collision_penalty: float = -5.0
     slip_penalty: float = 0.2
     steer_jerk_penalty: float = 0.05
@@ -102,8 +104,14 @@ class Settings(BaseModel):
             str(self.stagnation_speed_threshold),
             "--stagnation-steps",
             str(self.stagnation_steps),
+            "--map-id",
+            self.map_id,
+            "--frontier-stagnation-seconds",
+            str(self.frontier_stagnation_seconds),
             "--forward-scale",
             str(self.forward_scale),
+            "--route-progress-scale",
+            str(self.route_progress_scale),
             "--collision-penalty",
             str(self.collision_penalty),
             "--slip-penalty",

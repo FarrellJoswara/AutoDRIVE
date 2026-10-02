@@ -193,7 +193,7 @@ async def api_generate_mesh(map_id: str) -> Any:
 
 @app.post("/api/maps/{map_id}/generate-centerline")
 async def api_generate_centerline(map_id: str) -> Any:
-    """Skeletonize free space → occupancy/centerline.csv (Phase 4)."""
+    """Extract and validate a closed occupancy route → centerline.csv."""
     import asyncio
 
     if map_id == "none":
@@ -238,6 +238,57 @@ async def api_centerline_csv(map_id: str) -> Any:
         media_type="text/csv",
         filename=f"{map_id}_centerline.csv",
     )
+
+
+@app.get("/api/maps/{map_id}/lap-gate")
+async def api_map_lap_gate(map_id: str) -> Any:
+    """Return the effective full-width lap gate for a map."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="builtin track has no centerline lap gate")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    from src.layer4.hub.lap_gate import get_map_lap_gate
+
+    try:
+        return await asyncio.to_thread(get_map_lap_gate, map_id, MAPS_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/maps/{map_id}/lap-gate")
+async def api_save_map_lap_gate(map_id: str, request: Request) -> Any:
+    """Set route distance for a map's finish gate; null restores spawn default."""
+    import asyncio
+
+    if map_id == "none":
+        raise HTTPException(status_code=400, detail="builtin track has no centerline lap gate")
+    if MAPS_DIR is None:
+        raise HTTPException(status_code=404, detail="maps directory not found")
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="expected JSON body") from exc
+    if not isinstance(payload, dict) or "progress_m" not in payload:
+        raise HTTPException(status_code=400, detail="body must include progress_m (number or null)")
+
+    from src.layer4.hub.lap_gate import save_map_lap_gate
+
+    try:
+        return await asyncio.to_thread(
+            save_map_lap_gate, map_id, MAPS_DIR, payload["progress_m"]
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/maps/active")

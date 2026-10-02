@@ -523,13 +523,16 @@ namespace AiCar
 
         /// <summary>
         /// F1TENTH.unity wires multiple LapTimers; agents without HUD Text refs
-        /// NRE every Update. In batchmode disable ALL LapTimers (HUD is unused).
+        /// NRE every Update. In batchmode the lap HUD and its checkpoint triggers
+        /// are unused, so disable both. Unity still dispatches trigger callbacks
+        /// to disabled MonoBehaviours; disabling only the LapTimer is insufficient.
         /// Headed: only disable timers with null HUD refs.
         /// </summary>
         static void SilenceBrokenLapTimers()
         {
             int n = 0;
             bool batch = Application.isBatchMode;
+            int checkpointTriggersDisabled = batch ? DisableCheckpointTriggers() : 0;
             foreach (var lt in Resources.FindObjectsOfTypeAll<LapTimer>())
             {
                 if (lt == null || !InLoadedScene(lt.gameObject) || !lt.enabled)
@@ -540,30 +543,33 @@ namespace AiCar
                 {
                     lt.enabled = false;
                     n++;
-                    int triggersDisabled = 0;
-                    if (batch)
-                    {
-                        // Unity still dispatches OnTriggerEnter to disabled
-                        // MonoBehaviours. LapTimer parses scene-authored HUD text
-                        // and is not part of headless simulation, so remove its
-                        // trigger source as well as disabling the script.
-                        foreach (var trigger in lt.GetComponentsInChildren<Collider>(true))
-                        {
-                            if (trigger == null || !trigger.isTrigger || !trigger.enabled)
-                                continue;
-                            trigger.enabled = false;
-                            triggersDisabled++;
-                        }
-                    }
                     Debug.Log(
                         $"[AiCar.TrackLoader] disabled LapTimer on '{GetPath(lt.transform)}' " +
                         (batch
-                            ? $"(batchmode; trigger colliders disabled={triggersDisabled})"
+                            ? "(batchmode; lap HUD unused)"
                             : "(null HUD refs)"));
                 }
             }
+            if (batch)
+                Debug.Log($"[AiCar.TrackLoader] disabled unused checkpoint triggers={checkpointTriggersDisabled}");
             if (n == 0)
                 Debug.Log("[AiCar.TrackLoader] LapTimer HUD refs OK (none disabled)");
+        }
+
+        static int DisableCheckpointTriggers()
+        {
+            int disabled = 0;
+            foreach (var trigger in Resources.FindObjectsOfTypeAll<Collider>())
+            {
+                if (trigger == null || !InLoadedScene(trigger.gameObject) ||
+                    !trigger.enabled || !trigger.isTrigger ||
+                    !trigger.CompareTag("Checkpoint"))
+                    continue;
+
+                trigger.enabled = false;
+                disabled++;
+            }
+            return disabled;
         }
 
         struct NeutralizeStats

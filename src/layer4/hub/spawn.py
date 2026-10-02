@@ -20,7 +20,11 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from src.layer4.hub.centerline import find_centerline, generate_centerline
+from src.layer4.hub.centerline import (
+    CENTERLINE_ALGORITHM,
+    find_centerline,
+    generate_centerline,
+)
 from src.layer4.hub.meshgen.occupancy import load_occupancy, pixel_to_world
 from src.layer4.hub.meshgen.pipeline import _find_yaml, _occupancy_dir
 
@@ -43,12 +47,11 @@ def ensure_spawn(
     centerline_info = meta.get("centerline")
     centerline_is_current = (
         isinstance(centerline_info, dict)
-        and centerline_info.get("free_space_semantics") == "known_free_v1"
+        and centerline_info.get("algorithm") == CENTERLINE_ALGORITHM
     )
 
-    # Existing centerlines were generated with unknown cells treated as free.
-    # Recompute those once with known-free occupancy semantics, then replace
-    # any spawn that falls outside actual known free map cells.
+    # Rebuild stale generated routes so activation cannot keep using a CSV
+    # written by the disconnected greedy-pixel algorithm.
     if cl is not None and not centerline_is_current and generate_if_missing:
         generate_centerline(map_id, maps_root)
         meta = _read_meta(meta_path)

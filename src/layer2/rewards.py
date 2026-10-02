@@ -74,6 +74,10 @@ class RewardConfig:
     # Raise (e.g. 10) if forward progress should dominate other terms.
     forward_scale: float = 1.0
 
+    # Reward per metre of newly advanced route frontier. Used when a map
+    # centerline is available; raw forward-speed shaping remains the fallback.
+    route_progress_scale: float = 10.0
+
     # Added once per step when collision_event is True.
     # Use a negative number for a wall tax (e.g. -5.0). Default 0.0 = no tax;
     # getting stuck after a crash is handled by stagnation truncation in the env.
@@ -90,6 +94,7 @@ class RewardConfig:
 def compute_reward(
     *,
     v_long: float,
+    route_progress_delta_m: float | None = None,
     collision_event: bool,
     slip_angle: float,
     prev_steering: float,
@@ -129,8 +134,12 @@ def compute_reward(
     # Start at zero; accumulate every term into r.
     r = 0.0
 
-    # Primary v1 signal: going forward is good (scale * m/s).
-    r += cfg.forward_scale * float(v_long)
+    # Prefer actual along-route frontier movement when the environment supplies
+    # it; raw velocity remains useful for the builtin track without a centerline.
+    if route_progress_delta_m is None:
+        r += cfg.forward_scale * float(v_long)
+    else:
+        r += cfg.route_progress_scale * max(0.0, float(route_progress_delta_m))
 
     # Optional wall tax (default weight 0 → this adds nothing).
     if collision_event:

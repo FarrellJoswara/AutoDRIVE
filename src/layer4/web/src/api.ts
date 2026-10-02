@@ -37,7 +37,9 @@ export interface Settings {
   max_episode_steps: number;
   stagnation_speed_threshold: number;
   stagnation_steps: number;
+  frontier_stagnation_seconds: number;
   forward_scale: number;
+  route_progress_scale: number;
   collision_penalty: number;
   slip_penalty: number;
   steer_jerk_penalty: number;
@@ -72,6 +74,16 @@ export interface FleetCar {
   collision_count?: number;
   speed: number | null;
   episode_return: number | null;
+  /** Backend-computed across-track frontier segment in world (x,z) coordinates. */
+  frontier_line?: [[number, number], [number, number]] | null;
+  frontier_progress_m?: number | null;
+  time_since_frontier_push_s?: number | null;
+  frontier_speed_mps?: number | null;
+  lap_supported?: boolean;
+  lap_count?: number;
+  last_lap_time_s?: number | null;
+  best_lap_time_s?: number | null;
+  lap_elapsed_s?: number | null;
   lidar?: number[];
   /** True on done/respawn frames — clear LiDAR; pose may be null. */
   reset?: boolean;
@@ -87,6 +99,8 @@ export interface FleetTelemetry {
   /** Metres â€” denorm for normalised lidar [0,1]. Defaults match Layer 1. */
   lidar_range_min?: number;
   lidar_range_max?: number;
+  /** Backend-computed virtual finish gate in map world (x,z) coordinates. */
+  lap_gate?: [[number, number], [number, number]] | null;
 }
 
 export type ConnState = "live" | "reconnecting" | "offline";
@@ -153,8 +167,38 @@ export interface MapCatalogEntry {
   mesh_preview_url?: string | null;
 }
 
+export interface MapLapGate {
+  supported: boolean;
+  reason?: string | null;
+  route_length_m?: number;
+  progress_m?: number;
+  default_progress_m?: number;
+  customized?: boolean;
+  centerline_built_at?: string | null;
+  gate_line?: [[number, number], [number, number]] | null;
+  preview?: {
+    width: number;
+    height: number;
+    gate_line: [[number, number], [number, number]];
+  } | null;
+}
+
 export function fetchMaps(): Promise<MapCatalogEntry[]> {
   return jsonFetch("/api/maps");
+}
+
+export function fetchMapLapGate(mapId: string): Promise<MapLapGate> {
+  return jsonFetch(`/api/maps/${encodeURIComponent(mapId)}/lap-gate`);
+}
+
+export function saveMapLapGate(
+  mapId: string,
+  progress_m: number | null
+): Promise<MapLapGate> {
+  return jsonFetch(`/api/maps/${encodeURIComponent(mapId)}/lap-gate`, {
+    method: "PUT",
+    body: JSON.stringify({ progress_m }),
+  });
 }
 
 export function generateMapMesh(mapId: string): Promise<{

@@ -225,7 +225,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--stagnation-speed-threshold", type=float, default=0.15)
     # ~5 s idle @ frame_skip=4 before truncate.
     p.add_argument("--stagnation-steps", type=int, default=50)
+    p.add_argument("--map-id", type=str, default="none")
+    p.add_argument("--frontier-stagnation-seconds", type=float, default=5.0)
     p.add_argument("--forward-scale", type=float, default=1.0)
+    p.add_argument("--route-progress-scale", type=float, default=10.0)
     p.add_argument("--collision-penalty", type=float, default=-5.0)
     p.add_argument("--slip-penalty", type=float, default=0.2)
     p.add_argument("--steer-jerk-penalty", type=float, default=0.05)

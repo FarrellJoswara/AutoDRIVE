@@ -46,6 +46,8 @@ from src.layer1.racer import Racer
 from src.layer1.telemetry import TelemetrySnapshot
 
 from .rewards import RewardConfig, compute_reward
+from .lap_tracker import LapTracker, map_lap_gate_config
+from .route_progress import RouteProgressTracker, map_centerline_path
 from .spaces import LIDAR_BEAMS, make_action_space, make_observation_space, snapshot_to_obs
 
 # Type alias: observation is always a dict with "lidar" and "state" arrays.
@@ -128,6 +130,8 @@ class AutoDriveEnv(gym.Env):
         stagnation_speed_threshold: float = 0.15,
         # Consecutive idle steps → truncated.
         stagnation_steps: int = 200,
+        map_id: str = "none",
+        frontier_stagnation_seconds: float = 5.0,
         # Seconds to wait for Unity to connect on reset/init.
         connect_timeout: float = 60.0,
         # Reward weights. None → RewardConfig() defaults (forward_scale=1, …).
@@ -159,6 +163,27 @@ class AutoDriveEnv(gym.Env):
         self.max_episode_steps = int(max_episode_steps)
         self.stagnation_speed_threshold = float(stagnation_speed_threshold)
         self.stagnation_steps = int(stagnation_steps)
+        self.map_id = str(map_id or "none")
+        self.frontier_stagnation_seconds = max(0.0, float(frontier_stagnation_seconds))
+        self.route_progress: Optional[RouteProgressTracker] = None
+        centerline_path = map_centerline_path(self.map_id)
+        if self.map_id != "none" and centerline_path is None:
+            raise FileNotFoundError(
+                f"Map '{self.map_id}' has no occupancy/centerline.csv; "
+                "generate and validate its centerline before training."
+            )
+        if centerline_path is not None:
+            try:
+                self.route_progress = RouteProgressTracker.from_csv(centerline_path)
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    f"Cannot use map '{self.map_id}' for route-progress training: {exc}"
+                ) from exc
+        lap_gate = map_lap_gate_config(self.map_id, route=self.route_progress)
+        self.lap_tracker = LapTracker(
+            self.route_progress,
+            gate_progress_m=lap_gate.get("progress_m") if lap_gate.get("supported") else None,
+        )
         self.connect_timeout = float(connect_timeout)
         self.reward_config = reward_config or RewardConfig()
         self.lidar_beams = int(lidar_beams)
@@ -249,6 +274,18 @@ class AutoDriveEnv(gym.Env):
         self._prev_steering = 0.0
         self._prev_collision_count = int(snap.collision_count)
         self._last_snap = snap
+        progress_state = None
+        progress_now = self._progress_time(snap)
+        if self.route_progress is not None:
+            try:
+                progress_state = self.route_progress.reset(
+                    float(snap.position[0]), float(snap.position[2]), progress_now
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Spawn for map '{self.map_id}' does not project onto its centerline: {exc}"
+                ) from exc
+        self.lap_tracker.reset(progress_state, progress_now)
 
         obs = snapshot_to_obs(snap, 0.0, 0.0, lidar_beams=self.lidar_beams)
         info = self._build_info(snap, reward=0.0, collision_event=False)
@@ -284,9 +321,21 @@ class AutoDriveEnv(gym.Env):
         # true after first contact. A new event is only a count increase.
         collision_event = int(snap.collision_count) > self._prev_collision_count
 
+        progress = None
+        if self.route_progress is not None:
+            progress = self.route_progress.update(
+                float(snap.position[0]), float(snap.position[2]), self._progress_time(snap)
+            )
+
+        self.lap_tracker.update(
+            progress["progress_m"] if progress is not None else None,
+            self._progress_time(snap),
+        )
+
         # Score this step (all reward math lives in rewards.py).
         reward = compute_reward(
             v_long=float(snap.v_long),
+            route_progress_delta_m=(progress["advanced_m"] if progress is not None else None),
             collision_event=collision_event,
             slip_angle=float(snap.slip_angle),
             prev_steering=self._prev_steering,
@@ -303,7 +352,14 @@ class AutoDriveEnv(gym.Env):
 
         # v1: never terminate on crash; only truncate on idle / optional max steps.
         terminated = False
-        hit_stagnation = self._idle_steps >= self.stagnation_steps
+        if progress is not None:
+            no_push_s = progress["time_since_push_s"] or 0.0
+            hit_stagnation = (
+                self.frontier_stagnation_seconds > 0
+                and no_push_s >= self.frontier_stagnation_seconds
+            )
+        else:
+            hit_stagnation = self._idle_steps >= self.stagnation_steps
         # max_episode_steps == 0 → disabled (no hard cap).
         hit_max_steps = (
             self.max_episode_steps > 0
@@ -318,9 +374,17 @@ class AutoDriveEnv(gym.Env):
             lidar_beams=self.lidar_beams,
         )
         info = self._build_info(snap, reward=reward, collision_event=collision_event)
+        if progress is not None:
+            info.update({
+                "frontier_line": progress["line"],
+                "frontier_progress_m": progress["progress_m"],
+                "time_since_frontier_push_s": progress["time_since_push_s"],
+                "frontier_speed_mps": progress["speed_mps"],
+            })
         if truncated:
             info["truncate_reason"] = (
-                "stagnation" if hit_stagnation else "max_episode_steps"
+                ("frontier_stagnation" if progress is not None else "stagnation")
+                if hit_stagnation else "max_episode_steps"
             )
 
         # Remember controls / collision count for the NEXT step.
@@ -330,6 +394,11 @@ class AutoDriveEnv(gym.Env):
         self._last_snap = snap
 
         return obs, reward, terminated, truncated, info
+
+    @staticmethod
+    def _progress_time(snap: TelemetrySnapshot) -> float:
+        stamp = float(snap.timestamp)
+        return stamp if np.isfinite(stamp) and stamp > 0 else time.monotonic()
 
     def _build_info(
         self,
@@ -346,7 +415,7 @@ class AutoDriveEnv(gym.Env):
         callbacks, debugging — not for the neural net unless you later copy
         fields into obs yourself.
         """
-        return {
+        info = {
             "step": self._episode_steps,
             "idle_steps": self._idle_steps,
             "reward": float(reward),
@@ -359,6 +428,8 @@ class AutoDriveEnv(gym.Env):
             # Radians — TelemetrySnapshot.heading_yaw (for fleet canvas later)
             "yaw": float(snap.heading_yaw),
         }
+        info.update(self.lap_tracker.sample(self._progress_time(snap)))
+        return info
 
     def close(self) -> None:
         """Tear down the Unity process if this env owns the Racer."""

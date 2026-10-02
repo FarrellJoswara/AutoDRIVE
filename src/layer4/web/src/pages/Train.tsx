@@ -26,7 +26,9 @@ const empty: Settings = {
   max_episode_steps: 1000,
   stagnation_speed_threshold: 0.15,
   stagnation_steps: 50,
+  frontier_stagnation_seconds: 5,
   forward_scale: 1,
+  route_progress_scale: 10,
   collision_penalty: -5,
   slip_penalty: 0.2,
   steer_jerk_penalty: 0.05,
@@ -447,12 +449,32 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
+            frontier_stagnation_seconds
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.frontier_stagnation_seconds}
+              onChange={(e) => num("frontier_stagnation_seconds", e.target.value)}
+            />
+          </label>
+          <label className="field">
             forward_scale
             <input
               type="number"
               step="any"
               value={form.forward_scale}
               onChange={(e) => num("forward_scale", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            route_progress_scale
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.route_progress_scale}
+              onChange={(e) => num("route_progress_scale", e.target.value)}
             />
           </label>
           <label className="field">

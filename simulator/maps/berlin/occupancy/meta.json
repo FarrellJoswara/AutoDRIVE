@@ -32,22 +32,23 @@
   },
   "centerline": {
     "status": "ready",
-    "built_at": "2026-10-01T22:05:05.339485+00:00",
-    "n_points": 692,
+    "built_at": "2026-10-02T18:37:40.427735+00:00",
+    "n_points": 308,
     "spacing_m": 0.25,
-    "closed": false,
+    "closed": true,
     "file": "centerline.csv",
-    "free_space_semantics": "known_free_v1"
+    "free_space_semantics": "known_free_v1",
+    "algorithm": "connected_skeleton_longest_valid_cycle_v2"
   },
   "spawn": {
-    "x": 9.89346,
+    "x": 8.879196,
     "y": 0.05,
-    "z": -7.174819,
-    "yaw": 0.290103,
+    "z": -8.870793,
+    "yaw": -2.407794,
     "source": "centerline",
     "file": "centerline.csv",
-    "width_m": 2.64845,
-    "index": 88,
-    "built_at": "2026-10-01T22:05:05.373732+00:00"
+    "width_m": 2.450001,
+    "index": 231,
+    "built_at": "2026-10-02T18:37:40.451978+00:00"
   }
 }

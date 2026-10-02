@@ -395,6 +395,10 @@ label.check {
   color: var(--danger);
 }
 
+.leg-lap {
+  color: #74daff;
+}
+
 .fleet-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
@@ -558,6 +562,51 @@ label.check {
   height: min(70vh, 640px);
   object-fit: contain;
   background: #0a100e;
+}
+
+.maps-lap-gate {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.maps-lap-gate-line {
+  stroke: #74daff;
+  stroke-width: 5;
+  stroke-dasharray: 12 7;
+  vector-effect: non-scaling-stroke;
+}
+
+.lap-gate-controls {
+  border: 1px solid var(--line);
+  background: var(--bg0);
+  padding: 0.8rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.lap-gate-controls h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+}
+
+.lap-gate-slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem 1rem;
+}
+
+.lap-gate-slider input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.lap-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
 }
 
 .maps-preview-empty {

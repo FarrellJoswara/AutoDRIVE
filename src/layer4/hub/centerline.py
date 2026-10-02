@@ -25,6 +25,7 @@ from src.layer4.hub.meshgen.pipeline import _find_yaml, _occupancy_dir
 
 
 CENTERLINE_FILENAME = "centerline.csv"
+CENTERLINE_ALGORITHM = "connected_skeleton_longest_valid_cycle_v2"
 
 
 @dataclass
@@ -104,7 +105,7 @@ def generate_centerline(
     *,
     spacing_m: float = 0.25,
 ) -> CenterlineResult:
-    """Skeletonize free space → polyline CSV under occupancy/centerline.csv."""
+    """Extract the longest validated closed route from known-free map cells."""
     map_dir = maps_root / map_id
     if not map_dir.is_dir():
         raise FileNotFoundError(f"unknown map id: {map_id}")
@@ -113,33 +114,12 @@ def generate_centerline(
     grid = load_occupancy(occ, yaml_path)
     # Unknown ROS cells (commonly grayscale 205) are not track surface.
     free = grid.free
-    free_u8 = (free.astype(np.uint8)) * 255
-    # Close small gaps then skeletonize
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    free_u8 = cv2.morphologyEx(free_u8, cv2.MORPH_CLOSE, k)
-    skel = _morph_skeleton(free_u8)
-    ys, xs = np.where(skel > 0)
-    if len(xs) < 8:
-        raise RuntimeError(f"could not extract centerline skeleton for '{map_id}'")
-
-    # Subsample dense skeleton before ordering (keeps NN walk tractable)
-    if len(xs) > 4000:
-        step = max(1, len(xs) // 3000)
-        xs, ys = xs[::step], ys[::step]
-    pts_px = np.column_stack([xs.astype(np.float64), ys.astype(np.float64)])  # col, row
-    ordered = _order_skeleton(pts_px)
-    world = np.zeros((len(ordered), 2), dtype=np.float64)
-    for i, (col, row) in enumerate(ordered):
-        world[i, 0], world[i, 1] = pixel_to_world(grid, float(col), float(row))
-
-    closed = bool(
-        len(world) > 3
-        and np.linalg.norm(world[0] - world[-1]) < max(0.5, 4 * grid.resolution)
-    )
-    if closed and not np.allclose(world[0], world[-1]):
-        world = np.vstack([world, world[0]])
-
-    resampled = _resample_polyline(world, spacing_m)
+    # Thin only confirmed free cells. Closing gaps here can create a synthetic
+    # bridge straight through a real wall, even if the later route is smooth.
+    free_u8 = free.astype(np.uint8)
+    skel = _thin_binary(free_u8)
+    resampled = _extract_valid_closed_route(grid, skel, spacing_m)
+    closed = True
     # Map resampled back to pixel for width — approximate via nearest skeleton pixel
     cols = (resampled[:, 0] - grid.origin_x) / grid.resolution
     h = grid.occupied.shape[0]
@@ -162,6 +142,7 @@ def generate_centerline(
         "closed": closed,
         "file": CENTERLINE_FILENAME,
         "free_space_semantics": "known_free_v1",
+        "algorithm": CENTERLINE_ALGORITHM,
     })
 
     # Keep vehicle spawn in sync with the new centerline (TrackLoader reads meta.spawn).
@@ -204,41 +185,157 @@ def _update_meta_centerline(occ: Path, info: Dict[str, Any]) -> None:
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
 
-def _morph_skeleton(img: np.ndarray) -> np.ndarray:
-    """Morphological skeleton (opencv-python-headless; no ximgproc required)."""
-    img = (img > 0).astype(np.uint8) * 255
-    skel = np.zeros_like(img)
-    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+def _thin_binary(mask: np.ndarray) -> np.ndarray:
+    """Zhang-Suen thinning; keeps a one-pixel, 8-connected medial skeleton."""
+    image = (mask > 0).astype(np.uint8)
+    h, w = image.shape
     while True:
-        opened = cv2.morphologyEx(img, cv2.MORPH_OPEN, element)
-        temp = cv2.subtract(img, opened)
-        eroded = cv2.erode(img, element)
-        skel = cv2.bitwise_or(skel, temp)
-        img = eroded
-        if cv2.countNonZero(img) == 0:
-            break
-    return skel
+        changed = False
+        for phase in (0, 1):
+            padded = np.pad(image, 1)
+            p2 = padded[0:h, 1 : w + 1]
+            p3 = padded[0:h, 2 : w + 2]
+            p4 = padded[1 : h + 1, 2 : w + 2]
+            p5 = padded[2 : h + 2, 2 : w + 2]
+            p6 = padded[2 : h + 2, 1 : w + 1]
+            p7 = padded[2 : h + 2, 0:w]
+            p8 = padded[1 : h + 1, 0:w]
+            p9 = padded[0:h, 0:w]
+            neighbors = (p2, p3, p4, p5, p6, p7, p8, p9)
+            count = sum(neighbors)
+            transitions = sum(
+                ((neighbors[i] == 0) & (neighbors[(i + 1) % 8] > 0)).astype(np.uint8)
+                for i in range(8)
+            )
+            remove = (image > 0) & (count >= 2) & (count <= 6) & (transitions == 1)
+            if phase == 0:
+                remove &= (p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0)
+            else:
+                remove &= (p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0)
+            if np.any(remove):
+                image[remove] = 0
+                changed = True
+        if not changed:
+            return image
 
 
-def _order_skeleton(pts: np.ndarray) -> np.ndarray:
-    """Greedy nearest-neighbour ordering; start at an endpoint-ish extreme."""
-    n = len(pts)
-    if n <= 2:
-        return pts
-    # Start at point with largest distance from centroid (outer loop-ish)
-    c = pts.mean(axis=0)
-    start = int(np.argmax(np.linalg.norm(pts - c, axis=1)))
-    used = np.zeros(n, dtype=bool)
-    order = [start]
-    used[start] = True
-    cur = pts[start]
-    for _ in range(n - 1):
-        dists = np.linalg.norm(pts - cur, axis=1)
-        dists[used] = np.inf
-        nxt = int(np.argmin(dists))
-        if not np.isfinite(dists[nxt]):
-            break
-        order.append(nxt)
-        used[nxt] = True
-        cur = pts[nxt]
-    return pts[order]
+def _extract_valid_closed_route(
+    grid: Any,
+    skeleton: np.ndarray,
+    spacing_m: float,
+    *,
+    minimum_clearance_m: float = 0.12,
+) -> np.ndarray:
+    """Trace connected skeleton cycles and choose the longest wall-safe one."""
+    import networkx as nx
+
+    rows, cols = np.where(skeleton > 0)
+    if len(rows) < 8:
+        raise RuntimeError("could not extract a usable centerline skeleton")
+    pixels = set(zip(rows.tolist(), cols.tolist()))
+    graph = nx.Graph()
+    graph.add_nodes_from(sorted(pixels))
+    scale = grid.resolution
+    # Add each undirected neighbour once. Suppress diagonal corner edges when
+    # an orthogonal route already connects the same pixel pair.
+    for row, col in sorted(pixels):
+        for dr, dc in ((0, 1), (1, -1), (1, 0), (1, 1)):
+            neighbor = (row + dr, col + dc)
+            if neighbor not in pixels:
+                continue
+            if dr and dc and (
+                (row, col + dc) in pixels or (row + dr, col) in pixels
+            ):
+                continue
+            graph.add_edge(
+                (row, col), neighbor,
+                weight=scale * (np.sqrt(2.0) if dr and dc else 1.0),
+            )
+
+    largest_component = max(nx.connected_components(graph), key=len)
+    connected = graph.subgraph(largest_component).copy()
+    _prune_short_skeleton_spurs(connected, max_length_m=1.0)
+    cycles = nx.cycle_basis(connected)
+    if not cycles:
+        raise RuntimeError("centerline skeleton has no closed drivable loop")
+
+    h = grid.free.shape[0]
+    clearance = cv2.distanceTransform(grid.free.astype(np.uint8), cv2.DIST_L2, 5)
+    candidates = []
+    for cycle in cycles:
+        if len(cycle) < 3:
+            continue
+        length = sum(
+            connected[a][b]["weight"]
+            for a, b in zip(cycle, cycle[1:] + cycle[:1])
+        )
+        if length < 3.0:
+            continue
+        world = np.asarray(
+            [pixel_to_world(grid, float(col), float(row)) for row, col in cycle],
+            dtype=np.float64,
+        )
+        world = np.vstack((world, world[0]))
+        sampled = _resample_polyline(world, spacing_m)
+        if _route_is_drivable(
+            grid, sampled, clearance, minimum_clearance_m=minimum_clearance_m
+        ):
+            candidates.append((float(length), sampled))
+
+    if not candidates:
+        raise RuntimeError(
+            "no closed centerline cycle stays in known-free space with "
+            f"at least {minimum_clearance_m:.2f} m clearance"
+        )
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _prune_short_skeleton_spurs(graph: Any, *, max_length_m: float) -> None:
+    """Remove short dead ends attached to a junction without cutting loops."""
+    while True:
+        remove = set()
+        for endpoint in [node for node in graph if graph.degree(node) == 1]:
+            chain = [endpoint]
+            previous = None
+            current = endpoint
+            length = 0.0
+            while graph.degree(current) <= 2:
+                next_nodes = [node for node in graph.neighbors(current) if node != previous]
+                if not next_nodes:
+                    break
+                following = next_nodes[0]
+                length += graph[current][following]["weight"]
+                previous, current = current, following
+                if graph.degree(current) != 2:
+                    break
+                chain.append(current)
+            if graph.degree(current) >= 3 and length < max_length_m:
+                remove.update(chain)
+        if not remove:
+            return
+        graph.remove_nodes_from(remove)
+
+
+def _route_is_drivable(
+    grid: Any,
+    route: np.ndarray,
+    clearance_px: np.ndarray,
+    *,
+    minimum_clearance_m: float,
+) -> bool:
+    """Check the full interpolated route, not just its sampled waypoints."""
+    h, w = grid.free.shape
+    minimum_px = minimum_clearance_m / grid.resolution
+    for start, end in zip(route[:-1], route[1:]):
+        distance = float(np.linalg.norm(end - start))
+        samples = max(1, int(np.ceil(distance / (grid.resolution * 0.5))))
+        for t in np.linspace(0.0, 1.0, samples + 1):
+            x, z = start * (1.0 - t) + end * t
+            col = int(round((x - grid.origin_x) / grid.resolution))
+            row = int(round(h - (z - grid.origin_z) / grid.resolution))
+            if not (0 <= row < h and 0 <= col < w and grid.free[row, col]):
+                return False
+            if clearance_px[row, col] < minimum_px:
+                return False
+    return True

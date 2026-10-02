@@ -274,6 +274,7 @@ export function WatchPage() {
           <div className="canvas-legend" aria-hidden>
             <span className="leg-car">▸ car</span>
             <span className="leg-x">✕ collision</span>
+            <span className="leg-lap">┄ finish gate</span>
           </div>
         </div>
 
@@ -319,6 +320,58 @@ export function WatchPage() {
                     : "—"}
                 </dd>
               </div>
+              <div>
+                <dt>Laps this episode</dt>
+                <dd>
+                  {selected.lap_supported
+                    ? selected.lap_count ?? 0
+                    : "unavailable"}
+                </dd>
+              </div>
+              {selected.lap_supported && (
+                <>
+                  <div>
+                    <dt>Current lap</dt>
+                    <dd>
+                      {selected.lap_elapsed_s != null
+                        ? `${selected.lap_elapsed_s.toFixed(1)} s`
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Last lap</dt>
+                    <dd>
+                      {selected.last_lap_time_s != null
+                        ? `${selected.last_lap_time_s.toFixed(2)} s`
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Best this episode</dt>
+                    <dd>
+                      {selected.best_lap_time_s != null
+                        ? `${selected.best_lap_time_s.toFixed(2)} s`
+                        : "—"}
+                    </dd>
+                  </div>
+                </>
+              )}
+              {selected.frontier_progress_m != null && (
+                <>
+                  <div>
+                    <dt>Frontier progress</dt>
+                    <dd>{selected.frontier_progress_m.toFixed(2)} m</dd>
+                  </div>
+                  <div>
+                    <dt>Frontier speed</dt>
+                    <dd>{(selected.frontier_speed_mps ?? 0).toFixed(2)} m/s</dd>
+                  </div>
+                  <div>
+                    <dt>Since last push</dt>
+                    <dd>{(selected.time_since_frontier_push_s ?? 0).toFixed(1)} s</dd>
+                  </div>
+                </>
+              )}
               <div>
                 <dt>Pose (x,z)</dt>
                 <dd>

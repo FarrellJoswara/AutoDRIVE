@@ -36,7 +36,12 @@ Copy tracked scripts into the AutoDRIVE project first:
 ```powershell
 Copy-Item -Recurse -Force simulator\unity\Assets\Scripts\AiCar `
   simulator\unity\AutoDRIVE\Assets\Scripts\AiCar
+Copy-Item -Recurse -Force simulator\unity\Assets\Plugins\SocketIO `
+  simulator\unity\AutoDRIVE\Assets\Plugins\
 ```
+
+The tracked Socket.IO overrides use UTC for worker-thread timestamps and avoid
+Unity's crashing local-time formatter when a bridge connection closes.
 
 Then:
 
@@ -44,7 +49,8 @@ Then:
 git clone --single-branch --branch AutoDRIVE-Simulator --depth 1 `
   https://github.com/Tinker-Twins/AutoDRIVE.git simulator\unity\AutoDRIVE
 bash simulator/unity/AutoDRIVE/Tools/unzip-and-clean.sh
-# copy Assets/Scripts/AiCar into AutoDRIVE (see above), then:
+# copy Assets/Scripts/AiCar and the tracked SocketIO overrides into AutoDRIVE
+# (see above), then:
 & "C:\Program Files\Unity\Hub\Editor\2022.3.52f1\Editor\Unity.exe" `
   -batchmode -nographics -quit `
   -projectPath "$PWD\simulator\unity\AutoDRIVE" `

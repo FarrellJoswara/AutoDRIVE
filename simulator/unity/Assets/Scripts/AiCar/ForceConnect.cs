@@ -133,6 +133,8 @@ namespace AiCar
                 Debug.Log($"[AiCar.ForceConnect] bounced SocketIO GameObject '{GetPath(go.transform)}'");
             }
 
+            SuppressSocketErrorFormatting(socketIos);
+
             if (!bounced)
             {
                 // Fallback when bounce isn't possible (already active / no GO).
@@ -150,6 +152,31 @@ namespace AiCar
             // Treat as success once SocketIO exists — autoConnect may finish async.
             // Caller stops retrying; SocketIO handles its own reconnect.
             return socketIos.Count > 0 || activated;
+        }
+
+        static void SuppressSocketErrorFormatting(List<MonoBehaviour> socketIos)
+        {
+            // WebSocketSharp formats connection-refused errors on its worker
+            // thread. Unity's Linux player crashes in Mono's timezone formatter
+            // while doing that work, so keep the network library's logger quiet.
+            // Connection state and bridge failures remain observable through
+            // the existing ForceConnect and Python bridge status logs.
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            foreach (var sio in socketIos)
+            {
+                if (sio == null) continue;
+                try
+                {
+                    var socketProperty = sio.GetType().GetProperty("socket", flags);
+                    var socket = socketProperty?.GetValue(sio, null) as WebSocketSharp.WebSocket;
+                    if (socket?.Log != null)
+                        socket.Log.Output = (data, path) => { };
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[AiCar.ForceConnect] could not configure Socket.IO logging: " + ex.Message);
+                }
+            }
         }
 
         static bool AnySocketIoConnected(List<MonoBehaviour> socketIos)

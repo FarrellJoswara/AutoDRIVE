@@ -81,5 +81,25 @@ echo "[sim] connecting to brain=$BRAIN_HOST ($BRAIN_IP) port=$SIM_PORT"
 echo "[sim] AICAR_MAP_ID=${AICAR_MAP_ID:-"(builtin)"} (via env/file, not argv)"
 echo "[sim] flags: -batchmode -nographics -ip $BRAIN_IP -port $SIM_PORT"
 
+# Unity's Socket.IO client crashes in its native error logger when it repeatedly
+# receives connection-refused errors during bridge startup. Keep the player
+# stopped until the Python Socket.IO server is actually listening on its port.
+BRIDGE_WAIT_TRIES="${SIM_BRIDGE_WAIT_TRIES:-1200}"
+BRIDGE_WAIT_INTERVAL="${SIM_BRIDGE_WAIT_INTERVAL:-0.25}"
+echo "[sim] waiting for bridge listener at $BRAIN_HOST:$SIM_PORT"
+BRIDGE_READY=0
+for _try in $(seq 1 "$BRIDGE_WAIT_TRIES"); do
+  if (exec 3<>"/dev/tcp/$BRAIN_HOST/$SIM_PORT") 2>/dev/null; then
+    BRIDGE_READY=1
+    break
+  fi
+  sleep "$BRIDGE_WAIT_INTERVAL"
+done
+if [ "$BRIDGE_READY" -ne 1 ]; then
+  echo "[sim] ERROR: bridge listener did not open at $BRAIN_HOST:$SIM_PORT after $BRIDGE_WAIT_TRIES attempts"
+  exit 1
+fi
+echo "[sim] bridge listener ready; starting Unity"
+
 cd "$(dirname "$SIM_PATH")"
 exec "$SIM_PATH" -batchmode -nographics -ip "$BRAIN_IP" -port "$SIM_PORT"

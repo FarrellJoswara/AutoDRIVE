@@ -55,6 +55,17 @@ def _min_pool_lidar(arr: np.ndarray, target_beams: int) -> List[float]:
     return [round(float(x), 3) for x in pooled.tolist()]
 
 
+def _lap_fields(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Forward Layer 2 lap diagnostics without doing route math in the hub."""
+    return {
+        "lap_supported": bool(info.get("lap_supported", False)),
+        "lap_count": int(info.get("lap_count", 0)),
+        "last_lap_time_s": info.get("last_lap_time_s"),
+        "best_lap_time_s": info.get("best_lap_time_s"),
+        "lap_elapsed_s": info.get("lap_elapsed_s"),
+    }
+
+
 class _Publisher:
     """Daemon thread: drop-oldest queue → HTTP POST with timeouts + breaker."""
 
@@ -292,7 +303,16 @@ class HubTelemetryCallback(BaseCallback):
 
         cars: List[Dict[str, Any]] = []
         n = len(infos)
+        lap_gate = next(
+            (
+                raw["lap_gate"]
+                for raw in infos
+                if isinstance(raw, dict) and raw.get("lap_gate") is not None
+            ),
+            None,
+        )
         for i in range(n):
+            info = infos[i] if isinstance(infos[i], dict) else {}
             # Done-step hazard: infos=terminal pose, new_obs=post-reset.
             if dones is not None and i < len(dones) and bool(dones[i]):
                 self._last_pose.pop(i, None)
@@ -308,12 +328,16 @@ class HubTelemetryCallback(BaseCallback):
                         else 0,
                         "speed": None,
                         "episode_return": None,
+                        "frontier_line": None,
+                        "frontier_progress_m": None,
+                        "time_since_frontier_push_s": None,
+                        "frontier_speed_mps": None,
+                        **_lap_fields(info),
                         "lidar": [],
                         "reset": True,
                     }
                 )
                 continue
-            info = infos[i] if isinstance(infos[i], dict) else {}
             pos = info.get("position")
             pose = None
             if pos is not None and len(pos) >= 3:
@@ -355,6 +379,11 @@ class HubTelemetryCallback(BaseCallback):
                     else None
                 ),
                 "reset": False,
+                "frontier_line": info.get("frontier_line"),
+                "frontier_progress_m": info.get("frontier_progress_m"),
+                "time_since_frontier_push_s": info.get("time_since_frontier_push_s"),
+                "frontier_speed_mps": info.get("frontier_speed_mps"),
+                **_lap_fields(info),
             }
             if self.lidar_max_envs <= 0:
                 include_lidar = False
@@ -378,6 +407,7 @@ class HubTelemetryCallback(BaseCallback):
             # RoboRacer planar LiDAR: 0.06 … 10.0 m
             "lidar_range_min": 0.06,
             "lidar_range_max": 10.0,
+            "lap_gate": lap_gate,
             "cars": cars,
         }
 

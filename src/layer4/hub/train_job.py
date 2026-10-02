@@ -91,9 +91,9 @@ class TrainJob:
 
         self._broadcast()
 
-        # Docker mode: sims may already be up from a previous run, having tried
-        # to connect before any Racer was listening. Start train first so ports
-        # bind, then restart sims so Unity reconnects.
+        # Docker sim entrypoints wait for the corresponding bridge port before
+        # launching Unity, so exited containers can be started before the train
+        # workers bind without triggering Unity's native reconnect crash.
         dockerish = bool(settings.docker_mode) or (
             os.environ.get("AICAR_IN_DOCKER", "").strip().lower()
             in {"1", "true", "yes", "on"}
@@ -156,28 +156,6 @@ class TrainJob:
             self._watcher.start()
 
         self._broadcast()
-
-        if dockerish:
-            # Bounce sims in the background so /train/start returns quickly and
-            # SubprocVecEnv has a moment to bind ports before Unity dials in.
-            def _bounce() -> None:
-                try:
-                    time.sleep(max(4.0, min(12.0, float(settings.connect_timeout) * 0.08)))
-                    from src.layer4.hub.docker_control import restart_compose_sims
-
-                    restarted = restart_compose_sims()
-                    if restarted:
-                        time.sleep(2.0)
-                except Exception as exc:
-                    with self._lock:
-                        prev = self.cleanup_error
-                        msg = f"sims restart after train start failed: {exc}"
-                        self.cleanup_error = f"{prev}; {msg}" if prev else msg
-                    self._broadcast()
-
-            threading.Thread(
-                target=_bounce, name="train-sim-bounce", daemon=True
-            ).start()
 
         return self.status()
 

@@ -21,6 +21,7 @@ No Unity / Socket.IO code lives here — only Gym spaces, rewards, and orchestra
 src/layer2/
 ├── __init__.py         # AutoDriveEnv, RewardConfig, compute_reward, default_simulator_path
 ├── autodrive_env.py    # gym.Env: reset / step / close, truncation, info
+├── lap_tracker.py     # closed-centerline lap count, full-width gate, lap timing
 ├── spaces.py           # action/obs spaces + snapshot → obs dict
 ├── rewards.py          # RewardConfig + compute_reward (edit this most)
 └── README.md           # This file
@@ -67,13 +68,14 @@ LiDAR is scaled; state is **raw** (state scaling deferred).
 
 | Piece | Role |
 |-------|------|
-| `RewardConfig` | Weights: `forward_scale`, `collision_penalty`, `slip_penalty`, `steer_jerk_penalty` |
+| `RewardConfig` | Weights: `forward_scale`, `route_progress_scale`, collision/slip/steering penalties |
 | `compute_reward(...)` | Pure function: facts in → one float out |
 
 Default formula:
 
 ```text
-r  = forward_scale * v_long          # default scale 1.0
+r  = forward_scale * v_long          # builtin map fallback
+or route_progress_scale * frontier_delta_m  # selected centerline map
 r += collision_penalty               # if collision_event; default 0
 r -= slip_penalty * |slip|           # default 0
 r -= steer_jerk_penalty * |Δsteer|   # default 0
@@ -86,6 +88,23 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 - **`forward_scale=1`** keeps reward ≈ m/s; raise only when you want speed to dominate  
 
 `@dataclass` on `RewardConfig` only auto-builds a simple weight bag.
+
+When `map_id` selects a map with `occupancy/centerline.csv`, Layer 2 uses the
+route frontier instead of raw forward speed: only new forward distance earns
+`route_progress_scale` reward. The per-episode frontier is monotonic, and the
+environment truncates after `frontier_stagnation_seconds` without a push. The
+route-progress tracker also supplies the across-track line, elapsed time since
+the last push, and recent frontier speed for Watch telemetry. Builtin (`none`)
+training keeps the existing velocity reward and speed-based stagnation rule.
+
+The current map centerlines are generator output and still need geometric
+validation. Lap timing is enabled only when the route is closed. Layer 2 places
+the full-width finish gate at the episode's reset pose projected onto the
+centerline, and adds `lap_supported`, `lap_count`, `lap_elapsed_s`,
+`last_lap_time_s`, `best_lap_time_s`, and `lap_gate` to Gym `info`. An open
+centerline still supports route progress but reports lap timing as unavailable.
+Do not treat route metrics as representative until the route and widths have
+been checked against the drivable course.
 
 ### `autodrive_env.py` — `AutoDriveEnv`
 
@@ -106,6 +125,8 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 | `max_episode_steps` | `0` | `0` = no hard cap; `>0` = truncate after N steps |
 | `stagnation_speed_threshold` | `0.15` | m/s idle threshold |
 | `stagnation_steps` | `200` | Consecutive idle → truncate |
+| `map_id` | `none` | Map centerline used for route-frontier reward; `none` keeps velocity reward |
+| `frontier_stagnation_seconds` | `5.0` | Time without a frontier push before truncating a mapped episode |
 | `headless` | `True` | Docker / server friendly |
 | `reward_config` | defaults | See `rewards.py` |
 

@@ -167,6 +167,47 @@ export function drawDynamic(
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
   const rMin = fleet.lidar_range_min ?? LIDAR_RANGE_MIN_M;
   const rMax = fleet.lidar_range_max ?? LIDAR_RANGE_MAX_M;
+  const gate = fleet.lap_gate;
+  if (view.showFleet && gate && gate.length === 2) {
+    const x1 = ox + gate[0][0] * scale;
+    const y1 = oy - gate[0][1] * scale;
+    const x2 = ox + gate[1][0] * scale;
+    const y2 = oy - gate[1][1] * scale;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = "rgba(116, 218, 255, 0.95)";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#74daff";
+    for (const [x, y] of [[x1, y1], [x2, y2]]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // The backend owns route projection and frontier geometry; canvas only draws it.
+  if (view.showFleet) {
+    for (const car of fleet.cars) {
+      const line = car.frontier_line;
+      if (car.reset || !line || line.length !== 2) continue;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.strokeStyle = car.env_id === view.selectedEnvId
+        ? "rgba(255, 205, 86, 0.95)"
+        : "rgba(255, 205, 86, 0.55)";
+      ctx.lineWidth = car.env_id === view.selectedEnvId ? 3 : 1.5;
+      ctx.setLineDash([7, 4]);
+      ctx.beginPath();
+      ctx.moveTo(ox + line[0][0] * scale, oy - line[0][1] * scale);
+      ctx.lineTo(ox + line[1][0] * scale, oy - line[1][1] * scale);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
   // Draw the ranges published by telemetry directly from the published pose.
   if (view.showLidar) {
     const car =

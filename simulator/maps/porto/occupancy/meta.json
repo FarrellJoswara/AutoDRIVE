@@ -17,12 +17,13 @@
   },
   "centerline": {
     "status": "ready",
-    "built_at": "2026-10-01T21:59:46.917448+00:00",
-    "n_points": 378,
+    "built_at": "2026-10-02T20:36:33.580538+00:00",
+    "n_points": 136,
     "spacing_m": 0.25,
-    "closed": false,
+    "closed": true,
     "file": "centerline.csv",
-    "free_space_semantics": "known_free_v1"
+    "free_space_semantics": "known_free_v1",
+    "algorithm": "connected_skeleton_longest_valid_cycle_v2"
   },
   "align": {
     "scale": 1.0,
@@ -31,14 +32,14 @@
     "source": "ros_identity"
   },
   "spawn": {
-    "x": 4.17368,
+    "x": 4.175001,
     "y": 0.05,
-    "z": 0.97368,
-    "yaw": 0.648267,
+    "z": 0.928669,
+    "yaw": 2.632881,
     "source": "centerline",
     "file": "centerline.csv",
-    "width_m": 1.278295,
-    "index": 337,
-    "built_at": "2026-10-01T21:59:46.947990+00:00"
+    "width_m": 1.28907,
+    "index": 110,
+    "built_at": "2026-10-02T20:36:33.618337+00:00"
   }
 }
