@@ -132,6 +132,7 @@ class AutoDriveEnv(gym.Env):
         stagnation_steps: int = 200,
         map_id: str = "none",
         frontier_stagnation_seconds: float = 5.0,
+        terminate_on_collision: bool = False,
         # Seconds to wait for Unity to connect on reset/init.
         connect_timeout: float = 60.0,
         # Reward weights. None → RewardConfig() defaults (forward_scale=1, …).
@@ -165,6 +166,7 @@ class AutoDriveEnv(gym.Env):
         self.stagnation_steps = int(stagnation_steps)
         self.map_id = str(map_id or "none")
         self.frontier_stagnation_seconds = max(0.0, float(frontier_stagnation_seconds))
+        self.terminate_on_collision = bool(terminate_on_collision)
         self.route_progress: Optional[RouteProgressTracker] = None
         centerline_path = map_centerline_path(self.map_id)
         if self.map_id != "none" and centerline_path is None:
@@ -350,8 +352,7 @@ class AutoDriveEnv(gym.Env):
         else:
             self._idle_steps = 0
 
-        # v1: never terminate on crash; only truncate on idle / optional max steps.
-        terminated = False
+        terminated = bool(self.terminate_on_collision and collision_event)
         if progress is not None:
             no_push_s = progress["time_since_push_s"] or 0.0
             hit_stagnation = (
@@ -365,7 +366,7 @@ class AutoDriveEnv(gym.Env):
             self.max_episode_steps > 0
             and self._episode_steps >= self.max_episode_steps
         )
-        truncated = bool(hit_stagnation or hit_max_steps)
+        truncated = bool((hit_stagnation or hit_max_steps) and not terminated)
 
         obs = snapshot_to_obs(
             snap,
@@ -386,6 +387,8 @@ class AutoDriveEnv(gym.Env):
                 ("frontier_stagnation" if progress is not None else "stagnation")
                 if hit_stagnation else "max_episode_steps"
             )
+        if terminated:
+            info["termination_reason"] = "collision"
 
         # Remember controls / collision count for the NEXT step.
         self._prev_throttle = throttle

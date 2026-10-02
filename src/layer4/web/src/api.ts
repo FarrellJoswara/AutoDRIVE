@@ -12,6 +12,7 @@ export interface TrainStatus {
   started_at: string | null;
   argv: string[];
   exit_code: number | null;
+  stop_reason?: string | null;
   log_path: string | null;
   hub_url: string;
   error: string | null;
@@ -23,8 +24,9 @@ export interface TrainStatus {
 
 export interface Settings {
   n_envs: number;
-  base_port: number;
   timesteps: number;
+  max_duration_seconds: number;
+  stop_after_laps: number;
   out: string | null;
   run_name: string | null;
   seed: number;
@@ -38,6 +40,7 @@ export interface Settings {
   stagnation_speed_threshold: number;
   stagnation_steps: number;
   frontier_stagnation_seconds: number;
+  terminate_on_collision: boolean;
   forward_scale: number;
   route_progress_scale: number;
   collision_penalty: number;

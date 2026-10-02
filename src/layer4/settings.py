@@ -17,9 +17,10 @@ class Settings(BaseModel):
     """Train CLI flags + hub-only telemetry knobs."""
 
     # Train / job — defaults aligned with src/layer3/train.py
-    n_envs: int = Field(default=1, ge=1)
-    base_port: int = Field(default=4567, ge=1)
+    n_envs: int = Field(default=1, ge=1, le=16)
     timesteps: int = Field(default=50_000, ge=1)
+    max_duration_seconds: float = Field(default=0.0, ge=0)
+    stop_after_laps: int = Field(default=0, ge=0)
     out: Optional[str] = None
     run_name: Optional[str] = None
     seed: int = 0
@@ -35,6 +36,7 @@ class Settings(BaseModel):
     stagnation_speed_threshold: float = 0.15
     stagnation_steps: int = Field(default=50, ge=0)
     frontier_stagnation_seconds: float = Field(default=5.0, ge=0)
+    terminate_on_collision: bool = False
     forward_scale: float = 1.0
     route_progress_scale: float = Field(default=10.0, ge=0)
     collision_penalty: float = -5.0
@@ -84,10 +86,12 @@ class Settings(BaseModel):
         argv: List[str] = [
             "--n-envs",
             str(self.n_envs),
-            "--base-port",
-            str(self.base_port),
             "--timesteps",
             str(self.timesteps),
+            "--max-duration-seconds",
+            str(self.max_duration_seconds),
+            "--stop-after-laps",
+            str(self.stop_after_laps),
             "--out",
             str(out),
             "--seed",
@@ -108,6 +112,7 @@ class Settings(BaseModel):
             self.map_id,
             "--frontier-stagnation-seconds",
             str(self.frontier_stagnation_seconds),
+            "--terminate-on-collision" if self.terminate_on_collision else "--no-terminate-on-collision",
             "--forward-scale",
             str(self.forward_scale),
             "--route-progress-scale",

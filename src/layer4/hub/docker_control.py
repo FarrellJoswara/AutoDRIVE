@@ -24,7 +24,9 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.socket_path)
 
 
-def _request(method: str, path: str, *, timeout_s: float = 30.0) -> Any:
+def _request(
+    method: str, path: str, *, timeout_s: float = 30.0, body: Optional[Dict[str, Any]] = None
+) -> Any:
     """Issue a Docker API request with enough time for the operation to finish.
 
     Docker's stop/restart query timeout is a grace period for the container;
@@ -33,7 +35,11 @@ def _request(method: str, path: str, *, timeout_s: float = 30.0) -> Any:
     """
     conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=timeout_s)
     try:
-        conn.request(method, path, headers={"Host": "localhost"})
+        payload = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Host": "localhost"}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        conn.request(method, path, body=payload, headers=headers)
         response = conn.getresponse()
         body = response.read()
         if response.status not in range(200, 300) and response.status != 304:
@@ -83,6 +89,87 @@ def stop_compose_containers(*, full_stack: bool, timeout_s: int = 10) -> List[st
 def _container_name(container: Dict[str, Any]) -> str:
     names = container.get("Names") or [str(container.get("Id", ""))[:12]]
     return str(names[0]).lstrip("/")
+
+
+def _create_sim_replica(template: Dict[str, Any], index: int, expected: int) -> str:
+    """Create a Compose-compatible sim replica cloned from an existing one."""
+    config = template["Config"]
+    labels = dict(config.get("Labels") or {})
+    labels["com.docker.compose.container-number"] = str(index)
+    config = {
+        key: config[key]
+        for key in (
+            "Image", "Env", "Cmd", "Entrypoint", "WorkingDir", "User",
+            "Tty", "OpenStdin", "AttachStdin", "AttachStdout", "AttachStderr",
+        )
+        if key in config
+    }
+    env = [
+        item for item in config.get("Env", [])
+        if not item.startswith(("AICAR_EXPECTED_SIMS=", "PORT="))
+    ]
+    env.append(f"AICAR_EXPECTED_SIMS={expected}")
+    env.append(f"PORT={4566 + index}")
+    config["Env"] = env
+    config["Labels"] = labels
+    config["Hostname"] = f"{COMPOSE_PROJECT}-sim-{index}"
+
+    host = template.get("HostConfig") or {}
+    host_config = {
+        key: host[key]
+        for key in ("Binds", "NetworkMode", "RestartPolicy", "ShmSize")
+        if key in host
+    }
+    network_settings = template.get("NetworkSettings", {}).get("Networks", {})
+    endpoints = {}
+    for network_name, endpoint in network_settings.items():
+        endpoints[network_name] = {
+            "Aliases": [f"{COMPOSE_PROJECT}-sim-{index}", "sim"]
+        }
+
+    name = f"{COMPOSE_PROJECT}-sim-{index}"
+    response = _request(
+        "POST",
+        f"/containers/create?name={quote(name, safe='')}",
+        body={
+            **config,
+            "HostConfig": host_config,
+            "NetworkingConfig": {"EndpointsConfig": endpoints},
+        },
+    )
+    container_id = str(response["Id"])
+    _request("POST", f"/containers/{container_id}/start")
+    return name
+
+
+def reconcile_compose_sims(desired_count: int, *, timeout_s: int = 20) -> List[str]:
+    """Make the Compose simulator pool match the requested training env count."""
+    if not 1 <= int(desired_count) <= 16:
+        raise ValueError("simulator count must be between 1 and 16")
+    desired_count = int(desired_count)
+    containers = _list_compose_containers(service="sim", all_containers=True)
+    if not containers:
+        raise RuntimeError("no Compose simulator exists to use as a replica template")
+
+    template_id = str(containers[0]["Id"])
+    template = _request("GET", f"/containers/{template_id}/json")
+
+    # Recreate the pool with explicit per-replica ports. DNS ordering is not
+    # stable when a pool shrinks, so deriving a port from DNS position can leave
+    # a single remaining sim listening on (for example) 4568 instead of 4567.
+    for container in containers:
+        container_id = str(container["Id"])
+        if (container.get("State") or "").lower() == "running":
+            _request(
+                "POST", f"/containers/{container_id}/stop?t={int(timeout_s)}",
+                timeout_s=max(30.0, float(timeout_s) + 10.0),
+            )
+        _request("DELETE", f"/containers/{container_id}?force=1&v=1")
+
+    names: List[str] = []
+    for index in range(1, desired_count + 1):
+        names.append(_create_sim_replica(template, index, desired_count))
+    return names
 
 
 def ensure_compose_sims_running(*, timeout_s: int = 20) -> List[str]:

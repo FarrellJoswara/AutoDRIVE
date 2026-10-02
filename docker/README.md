@@ -38,11 +38,11 @@ If `docker` is missing in PowerShell:
 
 ---
 
-## Quick start (1 brain + 2 sims)
+## Quick start (1 brain + automatically scaled sims)
 
 ```bash
-# Build and start brain (Mission Control :8090) + two sim containers
-docker compose up --build --scale sim=2
+# Build and start brain (Mission Control :8090) + initial sim container
+docker compose up --build
 ```
 
 Check Mission Control hub:
@@ -53,13 +53,12 @@ curl http://localhost:8090/health
 # Browser → http://localhost:8090
 ```
 
-Train from inside the brain (sims already connected; do not auto-launch Unity):
+Train from inside the brain; Mission Control creates one simulator per environment:
 
 ```bash
 docker compose exec brain \
   python scripts/demo.py train \
     --n-envs 2 \
-    --base-port 4567 \
     --no-auto-launch \
     --timesteps 10000 \
     --out logs/rl/docker_smoke
@@ -103,16 +102,16 @@ docker compose down
 
 ### Widening the range
 
-Edit **both** sides of the mapping in `docker-compose.yml`, e.g. for 32 envs:
+The bridge range currently supports up to 16 environments. Mission Control assigns ports automatically from this internal range when Train starts; no port setting or manual simulator scaling is needed.
+
+To support more than 16 environments, widen **both** sides of the mapping in `docker-compose.yml`, for example:
 
 ```yaml
 ports:
   - "4567-4598:4567-4598"
 ```
 
-Keep `BASE_PORT=4567` on sims and pass matching `--base-port 4567 --n-envs N` on train.
-Sim entrypoint assigns `PORT = BASE_PORT + replica_index - 1` from the container
-hostname when `PORT` is unset (`…-sim-1` → 4567, `…-sim-2` → 4568, …).
+Mission Control recreates exactly N simulator replicas for N training environments and assigns each one a stable internal port (`4567` onward). The port setting is intentionally not exposed in Train.
 
 ---
 

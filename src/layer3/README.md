@@ -127,7 +127,7 @@ scripts/test_layer3_extractor.py
 python scripts/demo.py train --n-envs 1 --timesteps 100000 --out logs/rl/run1
 
 # teach — parallel sims (planned)
-python scripts/demo.py train --n-envs 2 --base-port 4567 --timesteps 100000 --out logs/rl/run2
+python scripts/demo.py train --n-envs 2 --timesteps 100000 --out logs/rl/run2
 
 # watch / eval (always 1 env, no learning)
 python scripts/demo.py play --model logs/rl/run2/final_model.zip --steps 2000

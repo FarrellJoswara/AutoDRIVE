@@ -229,8 +229,6 @@ def _cmd_train(args: argparse.Namespace) -> int:
     argv = [
         "--n-envs",
         str(args.n_envs),
-        "--base-port",
-        str(args.base_port),
         "--timesteps",
         str(args.timesteps),
         "--seed",
@@ -313,7 +311,6 @@ def main() -> int:
 
     pt = sub.add_parser("train", help="Layer 3 PPO train")
     pt.add_argument("--n-envs", type=int, default=1)
-    pt.add_argument("--base-port", type=int, default=4567)
     pt.add_argument("--timesteps", type=int, default=50_000)
     pt.add_argument("--out", type=Path, default=None)
     pt.add_argument("--seed", type=int, default=0)

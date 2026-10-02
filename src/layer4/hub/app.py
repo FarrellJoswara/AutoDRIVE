@@ -445,6 +445,23 @@ async def train_start(request: Request) -> Dict[str, Any]:
             settings = Settings.model_validate(raw)
     except Exception:
         pass
+    if settings.stop_after_laps > 0:
+        if settings.map_id == "none":
+            raise HTTPException(
+                status_code=400,
+                detail="lap-based stopping requires a map with a supported centerline",
+            )
+        from src.layer2.lap_tracker import map_lap_gate_config
+
+        gate = map_lap_gate_config(
+            settings.map_id,
+            repository_root=MAPS_DIR.resolve().parent.parent if MAPS_DIR else ROOT,
+        )
+        if not gate.get("supported"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"lap-based stopping is unavailable: {gate.get('reason', 'unsupported map')}",
+            )
     _settings = settings
     try:
         await asyncio.to_thread(save_settings, _settings)

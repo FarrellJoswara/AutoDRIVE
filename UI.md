@@ -346,8 +346,7 @@ First-class Pydantic (or equivalent) model on the hub; **UI page is not buried**
 
 | Settings field | CLI flag | Default (today) | Notes |
 | :--- | :--- | :--- | :--- |
-| `n_envs` | `--n-envs` | `1` | Docker: match `--scale sim=N` |
-| `base_port` | `--base-port` | `4567` | Ports `base .. base+n_envs-1` |
+| `n_envs` | `--n-envs` | `1` | Mission Control scales one simulator per environment (1–16); bridge ports are assigned automatically |
 | `timesteps` | `--timesteps` | `10000` | |
 | `out` | `--out` | stamp under `logs/rl/` | Or derive from `run_name` |
 | `run_name` | (UI-only → `--out`) | optional | Convenience for Settings UI |
@@ -407,7 +406,6 @@ Write JSON under e.g. `logs/layer4/settings.json` (volume-mounted). `PUT /settin
 ```text
 python -m src.layer3.train
   --n-envs {n_envs}
-  --base-port {base_port}
   --timesteps {timesteps}
   --out {out}
   --seed {seed}
@@ -562,7 +560,7 @@ Layers 1–3 remain the learning path under `src/layer1|2|3`. Layer 4 is infra f
 | Compose note | Publish `8080` only if in-B Vite HMR needs a separate port; otherwise **`:8090` alone** |
 
 ```text
-docker compose up --build --scale sim=2
+docker compose up --build
 # B: uvicorn src.layer4.hub.app:app --host 0.0.0.0 --port 8090
 #    (+ static from layer4/web/dist in prod)
 # A×2: dial brain:4567, brain:4568
@@ -715,7 +713,7 @@ Locked: **later**, not day 1 — see §7. Prefer start-of-run Settings (Phase 4 
 | 5 | During train, WS clients receive telemetry samples |
 | 6 | Settings round-trip matches CLI flags in §7 |
 | 7 | CLI train without `HUB_URL` still works (no hub required) |
-| 8 | Docker: `--scale sim=N` + Settings `n_envs=N`, `auto_launch=false` |
+| 8 | Docker: Train setting `n_envs=N` automatically scales the simulator pool; `auto_launch=false` |
 | 9 | **Hub killed *and* hub hung (`SIGSTOP`) mid-run → train keeps stepping at full rate**; samples drop, no exception |
 | 10 | WS client killed / tab closed mid-run → hub keeps broadcasting; reopened tab resyncs via `GET /train/status` |
 

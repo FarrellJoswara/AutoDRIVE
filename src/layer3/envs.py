@@ -9,6 +9,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
 from src.layer2 import AutoDriveEnv, RewardConfig
 
+BRIDGE_BASE_PORT = 4567
+
 
 def build_env(
     *,
@@ -23,6 +25,7 @@ def build_env(
     stagnation_steps: int = 50,
     map_id: str = "none",
     frontier_stagnation_seconds: float = 5.0,
+    terminate_on_collision: bool = False,
     route_progress_scale: float = 10.0,
     forward_scale: float = 1.0,
     collision_penalty: float = -5.0,
@@ -41,6 +44,7 @@ def build_env(
         stagnation_steps=stagnation_steps,
         map_id=map_id,
         frontier_stagnation_seconds=frontier_stagnation_seconds,
+        terminate_on_collision=terminate_on_collision,
         reward_config=RewardConfig(
             forward_scale=forward_scale,
             route_progress_scale=route_progress_scale,
@@ -65,7 +69,6 @@ def make_env(
 def make_vec_env(
     n_envs: int,
     *,
-    base_port: int = 4567,
     seed: int = 0,
     **env_kwargs: Any,
 ) -> VecEnv:
@@ -77,9 +80,12 @@ def make_vec_env(
     """
     if n_envs < 1:
         raise ValueError(f"n_envs must be >= 1, got {n_envs}")
+    if n_envs > 16:
+        raise ValueError("n_envs must be <= 16 (the simulator bridge range)")
 
     env_fns = [
-        make_env(port=base_port + i, seed=seed + i, **env_kwargs) for i in range(n_envs)
+        make_env(port=BRIDGE_BASE_PORT + i, seed=seed + i, **env_kwargs)
+        for i in range(n_envs)
     ]
     if n_envs == 1:
         return DummyVecEnv(env_fns)
@@ -100,6 +106,7 @@ def env_kwargs_from_args(args: Any) -> Dict[str, Any]:
         "stagnation_steps",
         "map_id",
         "frontier_stagnation_seconds",
+        "terminate_on_collision",
         "route_progress_scale",
         "forward_scale",
         "collision_penalty",

@@ -16,7 +16,7 @@ That is the easy start. It will:
 
 1. Check Docker Desktop is running  
 2. Download the AutoDRIVE simulator zip from GitHub Releases if `./simulator/` is missing  
-3. `docker compose up --build --scale sim=2` (brain + 2 sims)  
+3. `docker compose up --build` (brain + initial sim; Train scales the pool)  
 4. Wait until Mission Control is healthy  
 5. Open **http://127.0.0.1:8090** in your browser  
 
@@ -95,11 +95,11 @@ python -m pytest scripts/test_layer1.py scripts/test_layer3_extractor.py -v
 Full how-to: **[`docker/README.md`](docker/README.md)**. Docker CLI should be on PATH (Docker Desktop → `…\DockerDesktop\resources\bin`).
 
 ```bash
-docker compose up --build --scale sim=2
+docker compose up --build
 # Browser → http://localhost:8090
 
 docker compose exec brain \
-  python scripts/demo.py train --n-envs 2 --base-port 4567 --no-auto-launch \
+  python scripts/demo.py train --n-envs 2 --no-auto-launch \
   --timesteps 10000 --device cuda --out logs/rl/docker_smoke
 ```
 
@@ -181,7 +181,7 @@ Layers 1–3 = learning path. Layer 4 = infra UI. Docker files stay under `docke
 
 ### One env = one Racer = one port
 
-`n_envs=2` means two Gym envs → two Socket.IO ports (`4567` and `4568` if `base_port=4567`). In Docker you need **`--scale sim=2`** so two Unity containers connect to those ports.
+`n_envs=2` means two Gym environments and Mission Control automatically creates two simulator instances, assigning each its own bridge port. You only set the environment count in Train.
 
 ### Docker mode vs local
 
@@ -228,7 +228,7 @@ LiDAR in the sim is **1080** beams; for the UI we **min-pool to ~120** so the br
 
 Almost every field on Settings maps to `python -m src.layer3.train …`:
 
-`n_envs`, `base_port`, `timesteps`, `out`, `seed`, `device`, `resume`, `headless`, `auto_launch`, `connect_timeout`, `frame_skip`, `max_episode_steps`, stagnation/reward knobs, …
+`n_envs`, `timesteps`, `out`, `seed`, `device`, `resume`, `headless`, `auto_launch`, `connect_timeout`, `frame_skip`, `max_episode_steps`, stagnation/reward knobs, …
 
 **Hub-only** (env vars / hub behavior, not train argv):
 
@@ -277,11 +277,11 @@ If the panel says **stale**, no fresh fleet sample recently (PPO update gaps are
 ### A) Docker (recommended)
 
 ```bash
-docker compose up --build --scale sim=2
+docker compose up --build
 ```
 
 1. Open **http://localhost:8090**
-2. **Settings**: `docker_mode=true`, `n_envs=2`, `base_port=4567`, `timesteps=50000`, `device=cuda`
+2. **Settings**: `docker_mode=true`, `n_envs=2`, `timesteps=50000`, `device=cuda`
 3. **Train** → Start
 4. **Live** / **Fleet** → watch
 
@@ -289,7 +289,7 @@ Train CLI equivalent inside the brain:
 
 ```bash
 docker compose exec brain \
-  python scripts/demo.py train --n-envs 2 --base-port 4567 --no-auto-launch \
+  python scripts/demo.py train --n-envs 2 --no-auto-launch \
   --timesteps 50000 --device cuda --out logs/rl/fleet_demo_50k
 ```
 

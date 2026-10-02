@@ -572,6 +572,11 @@ label.check {
   pointer-events: none;
 }
 
+.run-stop-help {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .maps-lap-gate-line {
   stroke: #74daff;
   stroke-width: 5;

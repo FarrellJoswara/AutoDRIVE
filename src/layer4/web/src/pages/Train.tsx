@@ -12,8 +12,9 @@ import { useHubStore } from "../store";
 
 const empty: Settings = {
   n_envs: 1,
-  base_port: 4567,
   timesteps: 50000,
+  max_duration_seconds: 0,
+  stop_after_laps: 0,
   out: null,
   run_name: null,
   seed: 0,
@@ -27,6 +28,7 @@ const empty: Settings = {
   stagnation_speed_threshold: 0.15,
   stagnation_steps: 50,
   frontier_stagnation_seconds: 5,
+  terminate_on_collision: false,
   forward_scale: 1,
   route_progress_scale: 10,
   collision_penalty: -5,
@@ -224,6 +226,15 @@ export function TrainPage() {
           {status.log_path ? ` — see ${status.log_path}` : ""}.
         </p>
       )}
+      {state === "exited" && status?.stop_reason && (
+        <p className="msg">
+          Training finished: {status.stop_reason === "lap_target"
+            ? "a car reached the lap target"
+            : status.stop_reason === "max_duration"
+              ? "the run duration limit was reached"
+              : "the timestep limit was reached"}.
+        </p>
+      )}
 
       <div className="meta" style={{ marginBottom: "1rem" }}>
         <div>
@@ -306,24 +317,17 @@ export function TrainPage() {
 
           <div className="section-title">Train / job</div>
           <label className="field">
-            n_envs
+            Environments (simulators scale automatically)
             <input
               type="number"
               min={1}
+              max={16}
               value={form.n_envs}
               onChange={(e) => num("n_envs", e.target.value)}
             />
           </label>
           <label className="field">
-            base_port
-            <input
-              type="number"
-              value={form.base_port}
-              onChange={(e) => num("base_port", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            timesteps
+            Maximum training timesteps
             <input
               type="number"
               min={1}
@@ -423,7 +427,7 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            max_episode_steps
+            Per-car episode step cap (0 disables)
             <input
               type="number"
               min={0}
@@ -432,7 +436,7 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            stagnation_speed_threshold
+            Idle speed threshold (builtin map)
             <input
               type="number"
               step="any"
@@ -441,15 +445,41 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            stagnation_steps
+            Idle episode timeout in steps (builtin map)
             <input
               type="number"
               value={form.stagnation_steps}
               onChange={(e) => num("stagnation_steps", e.target.value)}
             />
           </label>
+          <div className="section-title">Run stopping (0 disables optional limits)</div>
           <label className="field">
-            frontier_stagnation_seconds
+            Maximum training duration (seconds)
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.max_duration_seconds}
+              onChange={(e) => num("max_duration_seconds", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Stop when any car completes this many laps (total)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={form.stop_after_laps}
+              onChange={(e) => num("stop_after_laps", e.target.value)}
+            />
+          </label>
+          <p className="meta run-stop-help">
+            The timestep limit is always the safety cap. Lap stopping needs a supported
+            centerline and ends the whole run when the first car reaches the target, even across episodes.
+            Collision and no-progress rules reset only the affected car’s episode.
+          </p>
+          <label className="field">
+            End episode after no frontier progress (centerline maps; 0 disables)
             <input
               type="number"
               min={0}
@@ -457,6 +487,16 @@ export function TrainPage() {
               value={form.frontier_stagnation_seconds}
               onChange={(e) => num("frontier_stagnation_seconds", e.target.value)}
             />
+          </label>
+          <label className="field check">
+            <input
+              type="checkbox"
+              checked={form.terminate_on_collision}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, terminate_on_collision: e.target.checked }))
+              }
+            />
+            End that car’s episode on collision
           </label>
           <label className="field">
             forward_scale

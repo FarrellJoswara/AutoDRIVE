@@ -71,7 +71,7 @@ Env2 + Sim2 (port 4569) ─┘
 | Train / play modules | **`src/layer3/train.py`** and **`play.py`** (logic); `scripts/demo.py` thin CLI only |
 | Parallelism | **Plan includes `SubprocVecEnv` + N sims** (see §5). Smoke first with `n_envs=1`, then scale. |
 | `n_envs` default (real train) | **2** to start; CLI `--n-envs`; raise toward 4 if VRAM/CPU allow |
-| Ports | `base_port + i` (default base `4567`) — one unique port per env |
+| Ports | Backend assigns one internal bridge port per environment (4567–4582); no Train port setting |
 | Sim launch (host v1) | Each worker **`auto_launch=True`** headless Unity (N processes on one machine) |
 | Sim launch (Docker later) | Optional: sims already up → `auto_launch=False`, connect by port |
 | Play | **Always 1 env** (no VecEnv needed to evaluate) |
@@ -108,9 +108,9 @@ logs/rl/<run>/         # gitignored contents
 In **`src/layer3/envs.py`** + **`train.py`**:
 
 1. **`make_env(port, rank, seed, ...)`** — returns a **thunk** `() -> AutoDriveEnv` (SB3 requires picklable env factories for subprocesses).
-2. **`make_vec_env(n_envs, base_port, ...)`**
+2. **`make_vec_env(n_envs, ...)`**
    - `n_envs == 1` → `DummyVecEnv` (same process; easiest smoke) **or** still Subproc with 1 worker (prefer Dummy for `n_envs=1`).
-   - `n_envs >= 2` → **`SubprocVecEnv`** with `n_envs` factories on ports `base_port .. base_port+n_envs-1`.
+   - `n_envs >= 2` → **`SubprocVecEnv`** with `n_envs` factories on backend-assigned ports.
 3. **`train.py`** builds `PPO(..., env=vec_env)`, then `learn(...)`.
 4. On exit: `vec_env.close()` so every worker kills its `Racer` / Unity.
 
@@ -131,9 +131,9 @@ def make_env(port: int, seed: int, **env_kwargs):
         return env
     return _init
 
-def make_vec_env(n_envs: int, base_port: int = 4567, seed: int = 0, **env_kwargs):
+def make_vec_env(n_envs: int, seed: int = 0, **env_kwargs):
     env_fns = [
-        make_env(port=base_port + i, seed=seed + i, **env_kwargs)
+        make_env(port=4567 + i, seed=seed + i, **env_kwargs)
         for i in range(n_envs)
     ]
     if n_envs == 1:
@@ -143,7 +143,7 @@ def make_vec_env(n_envs: int, base_port: int = 4567, seed: int = 0, **env_kwargs
 
 ```python
 # train.py (concept)
-vec_env = make_vec_env(n_envs=args.n_envs, base_port=args.base_port, ...)
+vec_env = make_vec_env(n_envs=args.n_envs, ...)
 model = PPO("MultiInputPolicy", vec_env, policy_kwargs={...}, ...)
 model.learn(total_timesteps=args.timesteps)
 model.save(out / "final_model")
@@ -155,7 +155,7 @@ vec_env.close()
 | Constraint | Mitigation |
 |------------|------------|
 | N Unity on one GPU | Start `--n-envs 2`; watch VRAM/CPU; don’t jump to 8 |
-| Port collisions | Unique `base_port + i`; fail fast if bind fails |
+| Port collisions | Mission Control gives every worker a unique port from the internal range |
 | Windows + spawn | Env factory must be **importable/picklable** (module-level functions, not lambdas closing over weird state) |
 | Slow connect | Per-env `connect_timeout`; staggered launch optional if N sims thundering-herd |
 | Play vs train | Play uses **single** `AutoDriveEnv`; train uses VecEnv |
@@ -190,7 +190,7 @@ Starting points still: `learning_rate=3e-4`, `n_steps=2048`, `batch_size=64`, `g
 
 ### `envs.py`
 
-- `make_env` / `make_vec_env`
+- `make_env` / `make_vec_env` (bridge ports are assigned internally)
 - Chooses `DummyVecEnv` vs `SubprocVecEnv`
 - Central place for port map + seed offsets
 
@@ -198,7 +198,7 @@ Starting points still: `learning_rate=3e-4`, `n_steps=2048`, `batch_size=64`, `g
 
 - `make_model(vec_env, ...)` — PPO + extractor + `policy_kwargs`
 - `train(...)` — callbacks, `learn`, save zip + `config.json` (include `n_envs`, ports)
-- `main()` — `--n-envs`, `--base-port`, `--timesteps`, `--out`, `--device`, `--seed`, `--resume`
+- `main()` — `--n-envs`, `--timesteps`, `--out`, `--device`, `--seed`, `--resume`
 
 ### `play.py`
 
@@ -230,7 +230,7 @@ demo.py play  → src.layer3.play.main
 
 1. [ ] Implement `SubprocVecEnv` path in `envs.py` for `n_envs >= 2`
 2. [ ] Verify picklable env factory on **Windows**
-3. [ ] `train --n-envs 2 --base-port 4567` — two headless Unities, one policy
+3. [ ] `train --n-envs 2` — Mission Control starts two headless simulators, one policy
 4. [ ] Confirm `vec_env.close()` kills both sims
 5. [ ] Document VRAM guidance; optional `--n-envs 4` trial
 6. [ ] Write `n_envs` / ports into `config.json`
