@@ -144,6 +144,13 @@ def generate_mesh(
         },
     )
 
+    try:
+        from src.layer4.hub.map_align import ensure_align
+
+        ensure_align(map_id, maps_root, persist=True)
+    except Exception:
+        pass
+
     return MeshResult(
         map_id=map_id,
         track_obj=track_obj,

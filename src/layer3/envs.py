@@ -17,14 +17,14 @@ def build_env(
     headless: bool = True,
     auto_launch: bool = True,
     connect_timeout: float = 60.0,
-    frame_skip: int = 1,
-    max_episode_steps: int = 0,
+    frame_skip: int = 4,
+    max_episode_steps: int = 1000,
     stagnation_speed_threshold: float = 0.15,
-    stagnation_steps: int = 200,
+    stagnation_steps: int = 50,
     forward_scale: float = 1.0,
-    collision_penalty: float = 0.0,
-    slip_penalty: float = 0.0,
-    steer_jerk_penalty: float = 0.0,
+    collision_penalty: float = -5.0,
+    slip_penalty: float = 0.2,
+    steer_jerk_penalty: float = 0.05,
 ) -> AutoDriveEnv:
     """Construct one AutoDriveEnv (top-level for Windows pickling / partial)."""
     env = AutoDriveEnv(

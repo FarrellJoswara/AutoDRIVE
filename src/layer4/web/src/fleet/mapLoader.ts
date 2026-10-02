@@ -94,6 +94,7 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   if (i < bytes.length && bytes[i] <= 0x20) i++;
   const pixels = bytes.subarray(i, i + width * height);
   const rgba = new Uint8ClampedArray(width * height * 4);
+  // ROS negate:0 → high grey = free, low = occupied.
   for (let p = 0; p < width * height; p++) {
     let g = pixels[p] ?? 0;
     if (maxval !== 255) g = Math.round((g / maxval) * 255);
@@ -109,9 +110,11 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   return { bitmap, width, height };
 }
 
-async function loadRaster(
-  url: string
-): Promise<{ source: CanvasImageSource; width: number; height: number }> {
+async function loadRaster(url: string): Promise<{
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+}> {
   if (url.toLowerCase().endsWith(".pgm")) {
     const { bitmap, width, height } = await loadPgmAsImageBitmap(url);
     return { source: bitmap, width, height };
@@ -123,7 +126,11 @@ async function loadRaster(
     img.onerror = () => reject(new Error(`image load failed: ${url}`));
     img.src = url;
   });
-  return { source: img, width: img.naturalWidth, height: img.naturalHeight };
+  return {
+    source: img,
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  };
 }
 
 /** Load map by hub catalog yaml URL (e.g. /maps/porto/occupancy/Porto.yaml). */
@@ -136,24 +143,7 @@ export async function loadMap(id: string, yamlUrl: string): Promise<LoadedMap> {
   return { id, yaml, image: source, width, height };
 }
 
-/**
- * World (Unity X–Z metres) → image pixel.
- * ROS map: origin = lower-left of image in world; row 0 is top of image.
- * We treat yaml origin[1] as Unity Z.
- */
-export function worldToMapPixel(
-  map: LoadedMap,
-  x: number,
-  z: number
-): { px: number; py: number } {
-  const res = map.yaml.resolution;
-  const [ox, oz] = map.yaml.origin;
-  const px = (x - ox) / res;
-  const py = map.height - (z - oz) / res;
-  return { px, py };
-}
-
-/** Bounds of map in world metres (x,z). */
+/** Bounds of map in world metres (x,z). Fleet poses are already map metres. */
 export function mapWorldBounds(map: LoadedMap): {
   minX: number;
   maxX: number;

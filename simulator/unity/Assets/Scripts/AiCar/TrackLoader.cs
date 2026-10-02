@@ -5,9 +5,8 @@
 // disabling every Renderer/Collider (incl. inactive children), forceRenderingOff,
 // LODGroups off, and SetActive(false) on mesh-bearing children — track ROOT
 // GameObjects stay active so LapTimer / checkpoint name refs do not NRE.
-// Custom occupancy meshes are aligned to the builtin track world AABB when
-// present (ROS metres ≈ AutoDRIVE metres after SketchUp globalScale 0.0254);
-// otherwise Y is lifted to duct height.
+// Custom occupancy meshes load in ROS/map metres: identity XZ (scale=1, no
+// builtin AABB recenter). Only Y is lifted to duct floor height.
 
 using System;
 using System.Collections.Generic;
@@ -78,7 +77,8 @@ namespace AiCar
                 return;
             }
 
-            // Capture builtin pose/materials BEFORE neutralizing renderers.
+            // Capture builtin materials / floor Y BEFORE neutralizing renderers.
+            // Do NOT use builtin XZ AABB — ROS mesh verts stay in map metres.
             Bounds? builtinBounds = TryGetBuiltinTrackWorldBounds(mapId, out Transform builtinRoot);
             Material ductMat = TryStealDuctMaterial(builtinRoot);
 
@@ -112,48 +112,31 @@ namespace AiCar
             Debug.Log(
                 $"[AiCar.TrackLoader] loaded map={mapId} visual={loadVisual} " +
                 $"localBounds={visual.bounds} worldBounds={wb} " +
-                $"alignBuiltin={(builtinBounds.HasValue ? builtinBounds.Value.ToString() : "none")} " +
+                $"alignBuiltin=none " +
                 $"mat={(mr.sharedMaterial != null ? mr.sharedMaterial.name : "null")}");
         }
 
         /// <summary>
-        /// Map ROS-metre OBJ into the AutoDRIVE scene. When a builtin duct track
-        /// exists for this map id, match its world XZ AABB (uniform scale ≈ 1 —
-        /// SketchUp Porto uses globalScale 0.0254 in→m, same metres as ROS yaml).
-        /// Translation recenters the driveable loop onto spawn/checkpoints.
+        /// Place ROS-metre OBJ in Unity with identity XZ (scale=1, tx=tz=0).
+        /// Porto/Berlin behave like custom maps (icra): world XZ ≈ ROS yaml metres.
+        /// Only Y is lifted so the mesh floor sits near the baked duct height.
         /// </summary>
         static void AlignTrackTransform(Transform t, Bounds localMeshBounds, Bounds? builtinWorld)
         {
-            if (!builtinWorld.HasValue)
+            t.localScale = Vector3.one;
+
+            float yFloor = BuiltinTrackY;
+            if (builtinWorld.HasValue)
             {
-                t.localScale = Vector3.one;
-                t.position = new Vector3(0f, BuiltinTrackY, 0f);
-                Debug.Log($"[AiCar.TrackLoader] align fallback y={BuiltinTrackY} (no builtin bounds)");
-                return;
+                float y = builtinWorld.Value.min.y;
+                if (y >= 0f && y <= 1f)
+                    yFloor = y;
             }
 
-            Bounds dst = builtinWorld.Value;
-            float srcX = Mathf.Max(localMeshBounds.size.x, 1e-4f);
-            float srcZ = Mathf.Max(localMeshBounds.size.z, 1e-4f);
-            // Uniform XZ scale — ROS resolution metres vs AutoDRIVE duct metres.
-            float s = 0.5f * (dst.size.x / srcX + dst.size.z / srcZ);
-            // Clamp so a bad bounds read cannot explode/shrink the track.
-            s = Mathf.Clamp(s, 0.5f, 2.0f);
-            t.localScale = new Vector3(s, s, s);
-
-            Vector3 scaledCenter = Vector3.Scale(localMeshBounds.center, t.localScale);
-            // Keep duct base near builtin floor (dst.min.y ≈ 0.127).
-            float y = dst.min.y;
-            if (y < 0f || y > 1f)
-                y = BuiltinTrackY;
-            t.position = new Vector3(
-                dst.center.x - scaledCenter.x,
-                y - localMeshBounds.min.y * s,
-                dst.center.z - scaledCenter.z);
-
+            t.position = new Vector3(0f, yFloor - localMeshBounds.min.y, 0f);
             Debug.Log(
-                $"[AiCar.TrackLoader] align scale={s:F4} pos={t.position} " +
-                $"srcXZ=({srcX:F2},{srcZ:F2}) dstXZ=({dst.size.x:F2},{dst.size.z:F2})");
+                $"[AiCar.TrackLoader] align identity XZ scale=1 pos={t.position} " +
+                $"(ROS metres; floorY={yFloor:F3})");
         }
 
         static Bounds? TryGetBuiltinTrackWorldBounds(string mapId, out Transform builtinRoot)
@@ -557,9 +540,26 @@ namespace AiCar
                 {
                     lt.enabled = false;
                     n++;
+                    int triggersDisabled = 0;
+                    if (batch)
+                    {
+                        // Unity still dispatches OnTriggerEnter to disabled
+                        // MonoBehaviours. LapTimer parses scene-authored HUD text
+                        // and is not part of headless simulation, so remove its
+                        // trigger source as well as disabling the script.
+                        foreach (var trigger in lt.GetComponentsInChildren<Collider>(true))
+                        {
+                            if (trigger == null || !trigger.isTrigger || !trigger.enabled)
+                                continue;
+                            trigger.enabled = false;
+                            triggersDisabled++;
+                        }
+                    }
                     Debug.Log(
                         $"[AiCar.TrackLoader] disabled LapTimer on '{GetPath(lt.transform)}' " +
-                        (batch ? "(batchmode)" : "(null HUD refs)"));
+                        (batch
+                            ? $"(batchmode; trigger colliders disabled={triggersDisabled})"
+                            : "(null HUD refs)"));
                 }
             }
             if (n == 0)
@@ -739,7 +739,7 @@ namespace AiCar
             }
 
             // Spawn is authored in mesh/ROS metres (same frame as track.obj verts).
-            // Transform through AiCarTrack so builtin-AABB align is applied.
+            // AiCarTrack is identity XZ — TransformPoint only applies floor Y lift.
             Transform track = transform.Find("AiCarTrack");
             Vector3 worldPos;
             Quaternion worldRot;

@@ -379,7 +379,11 @@ async def train_status() -> Dict[str, Any]:
 
 @app.post("/train/start")
 async def train_start(request: Request) -> Dict[str, Any]:
-    """Body = full Settings snapshot (preferred); empty body → last saved Settings."""
+    """Body = full Settings snapshot (preferred); empty body → last saved Settings.
+
+    Locks in settings.map_id before Popen: activate that map (restart sims only
+    when it differs from the currently active physics map).
+    """
     import asyncio
 
     global _settings
@@ -395,6 +399,43 @@ async def train_start(request: Request) -> Dict[str, Any]:
         await asyncio.to_thread(save_settings, _settings)
     except Exception:
         pass
+
+    # Lock in map selection for this run (Train dropdown → physics + Watch underlay).
+    mid = (settings.map_id or "none").strip() or "none"
+    if MAPS_DIR is not None:
+        try:
+            from src.layer4.hub.map_activate import read_active_map
+
+            current = read_active_map(MAPS_DIR).get("id")
+            current_key = current if current else "none"
+            if mid != current_key:
+                await asyncio.to_thread(
+                    activate_map,
+                    MAPS_DIR,
+                    mid,
+                    restart=True,
+                    train_running=False,
+                    force=False,
+                )
+            elif mid != "none":
+                # Same map already active — still ensure spawn/meta without sim bounce.
+                await asyncio.to_thread(
+                    activate_map,
+                    MAPS_DIR,
+                    mid,
+                    restart=False,
+                    train_running=False,
+                    force=False,
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"map activate failed: {exc}"
+            ) from exc
+
     try:
         # Popen can stall briefly on Windows; never block the event loop.
         return await asyncio.to_thread(job.start, settings)

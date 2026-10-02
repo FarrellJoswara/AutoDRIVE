@@ -54,6 +54,12 @@ export function FleetCanvas(props: FleetCanvasProps) {
     let cancelled = false;
     mapRef.current = null;
     mapDirty.current = true;
+    // Reset grow-only pose fit so a new underlay re-frames around current cars.
+    const v = viewRef.current;
+    v.fitMinX = Infinity;
+    v.fitMaxX = -Infinity;
+    v.fitMinZ = Infinity;
+    v.fitMaxZ = -Infinity;
     if (props.mapId === "none" || !props.mapYamlUrl) {
       return;
     }
@@ -84,6 +90,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
     let raf = 0;
     let alive = true;
     let lastDrawnKey = "";
+    let lastBoundsKey = "";
 
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
@@ -123,6 +130,14 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const map = mapRef.current;
       const bounds = resolveBounds(map, view, fleet);
+      const boundsKey =
+        bounds.minX.toFixed(2) +
+        ":" +
+        bounds.maxX.toFixed(2) +
+        ":" +
+        bounds.minZ.toFixed(2) +
+        ":" +
+        bounds.maxZ.toFixed(2);
 
       const seq =
         (fleet?.ts ?? "") +
@@ -134,9 +149,12 @@ export function FleetCanvas(props: FleetCanvasProps) {
         view.showLidar +
         view.selectedEnvId +
         (map?.id ?? "none") +
+        boundsKey +
         stale;
 
-      if (mapDirty.current) {
+      // Redraw static underlay when map OR fitted bounds change.
+      if (mapDirty.current || boundsKey !== lastBoundsKey) {
+        lastBoundsKey = boundsKey;
         const sctx = sc.getContext("2d");
         if (sctx) {
           drawStaticMap(sctx, map, view.showMap, cssW, cssH, dpr, bounds);
@@ -159,7 +177,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
         cssH,
         dpr,
       };
-      drawDynamic(dctx, opts);
+      drawDynamic(dctx, opts, bounds);
       lastFleetSeq.current += 1;
     };
 

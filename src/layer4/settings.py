@@ -16,28 +16,28 @@ DEFAULT_SETTINGS_PATH = ROOT / "logs" / "layer4" / "settings.json"
 class Settings(BaseModel):
     """Train CLI flags + hub-only telemetry knobs."""
 
-    # Train / job
+    # Train / job — defaults aligned with src/layer3/train.py
     n_envs: int = Field(default=1, ge=1)
     base_port: int = Field(default=4567, ge=1)
-    timesteps: int = Field(default=10_000, ge=1)
+    timesteps: int = Field(default=50_000, ge=1)
     out: Optional[str] = None
     run_name: Optional[str] = None
     seed: int = 0
     device: Literal["auto", "cpu", "cuda"] = "auto"
     resume: Optional[str] = None
 
-    # Env kwargs
+    # Env kwargs — match train.py CLI defaults for a usable first policy
     headless: bool = True
     auto_launch: bool = True
     connect_timeout: float = Field(default=90.0, gt=0)
-    frame_skip: int = Field(default=1, ge=1)
-    max_episode_steps: int = Field(default=0, ge=0)
+    frame_skip: int = Field(default=4, ge=1)
+    max_episode_steps: int = Field(default=1000, ge=0)
     stagnation_speed_threshold: float = 0.15
-    stagnation_steps: int = Field(default=200, ge=0)
+    stagnation_steps: int = Field(default=50, ge=0)
     forward_scale: float = 1.0
-    collision_penalty: float = 0.0
-    slip_penalty: float = 0.0
-    steer_jerk_penalty: float = 0.0
+    collision_penalty: float = -5.0
+    slip_penalty: float = 0.2
+    steer_jerk_penalty: float = 0.05
 
     # Hub-only (not train argv)
     telemetry_every_n: int = Field(default=200, ge=1)
@@ -47,6 +47,9 @@ class Settings(BaseModel):
     docker_mode: bool = False
     stop_sims_on_train_exit: bool = True
     stop_stack_on_train_exit: bool = False
+    # Mission Control map selection — locked in on Train Start (Watch underlay).
+    # "none" = builtin Unity track (grid underlay only).
+    map_id: str = "none"
 
     @field_validator("device", mode="before")
     @classmethod

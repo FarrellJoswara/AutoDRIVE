@@ -22,7 +22,8 @@ def _write_rect_map(root: Path, map_id: str = "toy") -> Path:
     occ = root / map_id / "occupancy"
     occ.mkdir(parents=True)
     h, w = 80, 100
-    img = np.full((h, w), 254, dtype=np.uint8)  # free
+    img = np.full((h, w), 205, dtype=np.uint8)  # ROS unknown background
+    img[15:65, 15:85] = 254  # known free region
     img[10:15, 10:90] = 0
     img[65:70, 10:90] = 0
     img[10:70, 10:15] = 0
@@ -74,6 +75,53 @@ class MeshgenTest(unittest.TestCase):
             self.assertTrue(xs and zs)
             self.assertLess(max(xs) - min(xs), 10.0)
             self.assertLess(max(zs) - min(zs), 10.0)
+
+    def test_ros_unknown_cells_are_not_free(self) -> None:
+        from src.layer4.hub.meshgen.occupancy import load_occupancy
+        from src.layer4.hub.meshgen.pipeline import _find_yaml, _occupancy_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _write_rect_map(Path(tmp))
+            occ = _occupancy_dir(root / "toy")
+            grid = load_occupancy(occ, _find_yaml(occ))
+            self.assertFalse(grid.free[0, 0])  # grayscale 205 = ROS unknown
+            self.assertTrue(grid.free[30, 30])  # grayscale 254 = known free
+            self.assertTrue(grid.occupied[10, 30])  # dark wall
+
+    def test_stale_spawn_in_unknown_region_is_rebuilt(self) -> None:
+        from src.layer4.hub.meshgen.occupancy import load_occupancy
+        from src.layer4.hub.meshgen.pipeline import _find_yaml, _occupancy_dir
+        from src.layer4.hub.spawn import ensure_spawn
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _write_rect_map(Path(tmp))
+            map_dir = root / "toy"
+            occ = _occupancy_dir(map_dir)
+            meta_path = occ / "meta.json"
+            meta_path.write_text(
+                json.dumps({
+                    "spawn": {"x": -2.0, "y": 0.05, "z": 2.0, "yaw": 0.0},
+                    "centerline": {"status": "ready", "file": "centerline.csv"},
+                }),
+                encoding="utf-8",
+            )
+            (occ / "centerline.csv").write_text(
+                "# x_m,y_m,w_tr_right_m,w_tr_left_m\n-2,2,1,1\n-1.5,2,1,1\n",
+                encoding="utf-8",
+            )
+
+            spawn = ensure_spawn("toy", root)
+            grid = load_occupancy(occ, _find_yaml(occ))
+            col = round((spawn["x"] - grid.origin_x) / grid.resolution)
+            row = round(grid.free.shape[0] - (spawn["z"] - grid.origin_z) / grid.resolution)
+
+            self.assertTrue(grid.free[row, col])
+            self.assertEqual(
+                json.loads(meta_path.read_text(encoding="utf-8"))["centerline"][
+                    "free_space_semantics"
+                ],
+                "known_free_v1",
+            )
 
     def test_porto_smoke(self) -> None:
         from src.layer4.hub.meshgen import generate_mesh

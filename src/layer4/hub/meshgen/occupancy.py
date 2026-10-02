@@ -13,9 +13,10 @@ from PIL import Image
 
 @dataclass(frozen=True)
 class OccupancyGrid:
-    """Binary occupied mask; True = wall/obstacle."""
+    """Known obstacle and known free masks; threshold-band cells stay unknown."""
 
     occupied: np.ndarray  # (H, W) bool, row 0 = image top
+    free: np.ndarray  # (H, W) bool; unknown cells are false in both masks
     resolution: float
     origin_x: float
     origin_z: float  # ROS yaml origin[1] → Unity Z in this stack
@@ -133,15 +134,18 @@ def load_occupancy(occupancy_dir: Path, yaml_path: Path) -> OccupancyGrid:
     origin_z = float(origin[1])
     negate = int(meta.get("negate", 0) or 0)
     occ_thresh = float(meta.get("occupied_thresh", 0.65) or 0.65)
-    # ROS map_server: pixel/255 compared to occupied_thresh (after optional negate)
+    free_thresh = float(meta.get("free_thresh", 0.196) or 0.196)
+    # ROS map_server: negate first, then convert grayscale to occupancy
+    # probability. Values between thresholds are unknown, not free.
     vals = gray.astype(np.float32) / 255.0
     if negate:
         vals = 1.0 - vals
-    # Standard: high value = free; occupied when (1 - val) > occupied_thresh
-    # i.e. val < (1 - occupied_thresh). Dark pixels = walls.
-    occupied = vals < (1.0 - occ_thresh)
+    occupancy = 1.0 - vals
+    occupied = occupancy > occ_thresh
+    free = occupancy < free_thresh
     return OccupancyGrid(
         occupied=occupied,
+        free=free,
         resolution=resolution,
         origin_x=origin_x,
         origin_z=origin_z,

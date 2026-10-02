@@ -8,7 +8,7 @@ cloned locally to `simulator/unity/AutoDRIVE/` (gitignored).
 | File | Role |
 | :--- | :--- |
 | `TrackLoaderBootstrap.cs` | Injects TrackLoader + ForceConnect at boot |
-| `TrackLoader.cs` | Load `maps/<id>/mesh/*.obj` + MeshCollider |
+| `TrackLoader.cs` | Load `maps/<id>/mesh/*.obj` + MeshCollider (ROS metres, identity XZ) |
 | `ForceConnect.cs` | Auto-activate Socket.IO when `-ip`/`-port` or batchmode |
 | `MapConfig.cs` | `-map-id` / `AICAR_MAP_ID` / `.active_map.json` |
 | `Hotfix/ForceConnectHotfix.cs` | Optional Windows Mono drop-in (see below) |

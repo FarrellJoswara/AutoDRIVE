@@ -142,15 +142,61 @@ def _occupancy_dir(map_dir: Path) -> Path:
     return map_dir
 
 
-def _find_thumbnail(occ: Path, image_path: Path, maps_root: Path) -> Optional[str]:
-    """Prefer generated occupancy/preview.png, else the ROS yaml image (canvas source).
+_BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _is_browser_image(path: Path) -> bool:
+    return path.suffix.lower() in _BROWSER_IMAGE_SUFFIXES
+
+
+def _write_occupancy_preview_png(
+    occ: Path, image_path: Path, *, max_edge: int = 256
+) -> Optional[Path]:
+    """Downscale occupancy image → occupancy/preview.png (browser-safe)."""
+    out = occ / "preview.png"
+    if out.is_file():
+        return out
+    if not image_path.is_file():
+        return None
+    try:
+        from PIL import Image as PILImage
+
+        img = PILImage.open(image_path)
+        w, h = img.size
+        scale = min(1.0, float(max_edge) / float(max(w, h)))
+        if scale < 1.0:
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                PILImage.Resampling.BILINEAR,
+            )
+        img.save(out, format="PNG")
+        return out
+    except Exception:
+        return None
+
+
+def _find_thumbnail(
+    occ: Path, image_path: Path, maps_root: Path, map_id: str
+) -> Optional[str]:
+    """Prefer occupancy/preview.png; else a browser-safe ROS image.
+
+    Never return .pgm/.pbm URLs — browsers cannot render them in <img>, which
+    made Maps/Train thumbnails look broken. If only a PGM exists, generate
+    occupancy/preview.png.
 
     Do not prefer arbitrary *_preview.* files — e.g. Porto_preview.png is a wide
     decorative render that does not match Porto.pgm orientation/aspect.
     """
+    _ = map_id
     generated = occ / "preview.png"
-    chosen = generated if generated.is_file() else image_path
-    if not chosen.is_file():
+    if generated.is_file():
+        chosen: Optional[Path] = generated
+    elif _is_browser_image(image_path) and image_path.is_file():
+        chosen = image_path
+    else:
+        chosen = _write_occupancy_preview_png(occ, image_path)
+
+    if chosen is None or not chosen.is_file() or not _is_browser_image(chosen):
         return None
     try:
         return f"/maps/{chosen.relative_to(maps_root).as_posix()}"
@@ -274,7 +320,7 @@ def scan_maps(maps_root: Path) -> List[MapInfo]:
         is_active = active_id == map_id
         # Physics honest: Fleet overlay only unless TrackLoader player + mesh + active
         overlay_only = not (loader_ok and mesh == "ready" and is_active)
-        thumb = _find_thumbnail(occ, image_path, maps_root)
+        thumb = _find_thumbnail(occ, image_path, maps_root, map_id)
         cl_url, cl_status = _find_centerline_url(occ, maps_root, meta)
         mesh_prev = _find_mesh_preview_url(child, maps_root)
 
