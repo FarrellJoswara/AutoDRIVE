@@ -247,10 +247,9 @@ Almost every field on Settings maps to `python -m src.layer3.train …`:
 
 | Tab | Job |
 | :--- | :--- |
-| **Settings** | Edit every train flag + hub knobs; Save (PUT `/settings`) |
-| **Train** | Start / Stop; shows argv, pid, state, log path |
-| **Live** | Streaming metrics from `/ws` (step, reward, episode) |
-| **Fleet** | Canvas 2D: map underlay, cars, optional LiDAR, collision as **X**, side panel |
+| **Train** | Start / Stop + full settings; map dropdown (builtin + mesh-ready); Start locks map in |
+| **Maps** | Upload / generate mesh / centerline (authoring only — does not run train) |
+| **Watch** | Fleet canvas + compact live metrics; underlay from Train map; car focus / speeds |
 
 ### Fleet canvas (how to read it)
 

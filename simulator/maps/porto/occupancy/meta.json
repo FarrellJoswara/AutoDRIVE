@@ -3,8 +3,8 @@
   "source": "https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Racetracks",
   "mesh": {
     "status": "ready",
-    "built_at": "2026-10-01T04:21:57.963356+00:00",
-    "wall_height_m": 0.35,
+    "built_at": "2026-10-02T00:41:07.288286+00:00",
+    "wall_height_m": 1.0,
     "wall_thickness_m": 0.12,
     "collider_stride": 1,
     "n_contours": 5,
@@ -17,21 +17,28 @@
   },
   "centerline": {
     "status": "ready",
-    "built_at": "2026-10-01T15:05:00.753042+00:00",
-    "n_points": 834,
+    "built_at": "2026-10-01T21:59:46.917448+00:00",
+    "n_points": 378,
     "spacing_m": 0.25,
     "closed": false,
-    "file": "centerline.csv"
+    "file": "centerline.csv",
+    "free_space_semantics": "known_free_v1"
+  },
+  "align": {
+    "scale": 1.0,
+    "tx": 0.0,
+    "tz": 0.0,
+    "source": "ros_identity"
   },
   "spawn": {
-    "x": 7.695072,
+    "x": 4.17368,
     "y": 0.05,
-    "z": -1.391688,
-    "yaw": 1.577419,
+    "z": 0.97368,
+    "yaw": 0.648267,
     "source": "centerline",
     "file": "centerline.csv",
-    "width_m": 2.1969,
-    "index": 651,
-    "built_at": "2026-10-01T15:05:13.608937+00:00"
+    "width_m": 1.278295,
+    "index": 337,
+    "built_at": "2026-10-01T21:59:46.947990+00:00"
   }
 }

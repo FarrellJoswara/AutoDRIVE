@@ -23,5 +23,31 @@
     "n_verts": 888,
     "n_faces": 666,
     "frame": "occupancy_image"
+  },
+  "align": {
+    "scale": 1.0,
+    "tx": 0.0,
+    "tz": 0.0,
+    "source": "ros_identity"
+  },
+  "centerline": {
+    "status": "ready",
+    "built_at": "2026-10-01T22:05:05.339485+00:00",
+    "n_points": 692,
+    "spacing_m": 0.25,
+    "closed": false,
+    "file": "centerline.csv",
+    "free_space_semantics": "known_free_v1"
+  },
+  "spawn": {
+    "x": 9.89346,
+    "y": 0.05,
+    "z": -7.174819,
+    "yaw": 0.290103,
+    "source": "centerline",
+    "file": "centerline.csv",
+    "width_m": 2.64845,
+    "index": 88,
+    "built_at": "2026-10-01T22:05:05.373732+00:00"
   }
 }

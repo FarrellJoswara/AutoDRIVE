@@ -17,21 +17,28 @@
   },
   "centerline": {
     "status": "ready",
-    "built_at": "2026-10-01T15:04:21.629609+00:00",
-    "n_points": 2388,
+    "built_at": "2026-10-02T07:26:11.439788+00:00",
+    "n_points": 1599,
     "spacing_m": 0.25,
     "closed": false,
-    "file": "centerline.csv"
+    "file": "centerline.csv",
+    "free_space_semantics": "known_free_v1"
   },
   "spawn": {
-    "x": -9.619605,
+    "x": -6.55531,
     "y": 0.05,
-    "z": 3.152599,
-    "yaw": -1.859073,
+    "z": 3.857,
+    "yaw": 1.203531,
     "source": "centerline",
     "file": "centerline.csv",
-    "width_m": 1.745644,
-    "index": 695,
-    "built_at": "2026-10-01T15:05:13.606386+00:00"
+    "width_m": 1.863208,
+    "index": 557,
+    "built_at": "2026-10-02T07:26:11.499111+00:00"
+  },
+  "align": {
+    "scale": 1.0,
+    "tx": 0.0,
+    "tz": 0.0,
+    "source": "ros_identity"
   }
 }

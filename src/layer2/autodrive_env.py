@@ -280,10 +280,9 @@ class AutoDriveEnv(gym.Env):
         for _ in range(self.frame_skip):
             snap = self.racer.step(throttle, steering)
 
-        # Collision "event": flag this tick OR collision_count increased.
-        collision_event = bool(snap.collision) or (
-            int(snap.collision_count) > self._prev_collision_count
-        )
+        # The bridge flag is derived from Unity's cumulative count, so it stays
+        # true after first contact. A new event is only a count increase.
+        collision_event = int(snap.collision_count) > self._prev_collision_count
 
         # Score this step (all reward math lives in rewards.py).
         reward = compute_reward(

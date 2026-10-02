@@ -127,6 +127,7 @@ def activate_map(
 
     spawn: Optional[Dict[str, Any]] = None
     spawn_error: Optional[str] = None
+    align: Optional[Dict[str, Any]] = None
     if mid and mid != "none":
         try:
             from src.layer4.hub.spawn import ensure_spawn
@@ -134,6 +135,12 @@ def activate_map(
             spawn = ensure_spawn(mid, maps_root, generate_if_missing=True)
         except Exception as exc:
             spawn_error = str(exc)
+        try:
+            from src.layer4.hub.map_align import ensure_align
+
+            align = ensure_align(mid, maps_root, persist=True)
+        except Exception:
+            align = None
 
     restarted: List[str] = []
     restart_error: Optional[str] = None
@@ -150,6 +157,7 @@ def activate_map(
         "active": written,
         "spawn": spawn,
         "spawn_error": spawn_error,
+        "align": align,
         "restarted": restarted,
         "restart_error": restart_error,
         "trackloader": trackloader_available(),

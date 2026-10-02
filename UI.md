@@ -429,10 +429,11 @@ Keep v1 **simple** — **full Settings** + Train + Live from the first React shi
 
 | Section | Content |
 | :--- | :--- |
-| **Settings** | **First-class** form bound to full Settings model (all train CLI flags §7); Save; Docker preset toggle |
-| **Train** | Start / Stop; status badge; PID; link/path to log; last exit code |
-| **Live** | Table or sparkline: step, reward, episode, optional loss; last checkpoint |
-| **Fleet** (Phase 6) | Layered canvas (map → cars → LiDAR → collision **X**); side panel + layer toggles; WS-driven only — see Phase 6 |
+| **Settings** | **First-class** form bound to full Settings model (all train CLI flags §7); Save; Docker preset toggle; **map dropdown** (builtin + mesh-ready) |
+| **Train** | Merged into Settings surface: Start / Stop; status badge; PID; log path; Start **locks in** selected map |
+| **Live** | Merged into **Watch**: compact step/reward/episode + sparkline; Details disclosure |
+| **Fleet** | Renamed **Watch**: layered canvas; no map picker; underlay from Train `map_id` |
+| **Maps** | Authoring only: upload / mesh / centerline — does not Activate or Start train |
 
 ### Where Vite runs — **Docker B (brain)** — **LOCKED, Docker-first**
 

@@ -99,7 +99,8 @@ namespace AiCar.Hotfix
 
             var goTrack = new GameObject("AiCarTrack");
             goTrack.transform.SetParent(transform, false);
-            // Match baked Porto Track root height in F1TENTH.unity
+            // ROS metres identity XZ; only lift Y to baked Porto Track floor.
+            goTrack.transform.localScale = Vector3.one;
             goTrack.transform.position = new Vector3(0f, 0.127f, 0f);
             goTrack.AddComponent<MeshFilter>().sharedMesh = visual;
             goTrack.AddComponent<MeshRenderer>().sharedMaterial = MakeMat();

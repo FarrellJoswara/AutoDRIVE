@@ -24,8 +24,14 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.socket_path)
 
 
-def _request(method: str, path: str) -> Any:
-    conn = _UnixHTTPConnection(DOCKER_SOCKET)
+def _request(method: str, path: str, *, timeout_s: float = 30.0) -> Any:
+    """Issue a Docker API request with enough time for the operation to finish.
+
+    Docker's stop/restart query timeout is a grace period for the container;
+    the HTTP client must wait longer than that period or it can report a false
+    timeout while Docker is still completing the requested operation.
+    """
+    conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=timeout_s)
     try:
         conn.request(method, path, headers={"Host": "localhost"})
         response = conn.getresponse()
@@ -66,7 +72,10 @@ def stop_compose_containers(*, full_stack: bool, timeout_s: int = 10) -> List[st
         container_id = str(container["Id"])
         names = container.get("Names") or [container_id[:12]]
         name = str(names[0]).lstrip("/")
-        _request("POST", f"/containers/{container_id}/stop?t={int(timeout_s)}")
+        _request(
+            "POST", f"/containers/{container_id}/stop?t={int(timeout_s)}",
+            timeout_s=max(30.0, float(timeout_s) + 10.0),
+        )
         stopped.append(name)
     return stopped
 
@@ -107,6 +116,9 @@ def restart_compose_sims(*, timeout_s: int = 20) -> List[str]:
     for container in containers:
         container_id = str(container["Id"])
         name = _container_name(container)
-        _request("POST", f"/containers/{container_id}/restart?t={int(timeout_s)}")
+        _request(
+            "POST", f"/containers/{container_id}/restart?t={int(timeout_s)}",
+            timeout_s=max(30.0, float(timeout_s) + 10.0),
+        )
         restarted.append(name)
     return restarted

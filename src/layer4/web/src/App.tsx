@@ -1,19 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { shutdownHub } from "./api";
-import { SettingsPage } from "./pages/Settings";
 import { TrainPage } from "./pages/Train";
-import { LivePage } from "./pages/Live";
+import { MapsPage } from "./pages/Maps";
 import { startStore, useHubStore } from "./store";
 import "./styles.css";
 
-const FleetPage = lazy(() =>
-  import("./pages/Fleet").then((m) => ({ default: m.FleetPage }))
+const WatchPage = lazy(() =>
+  import("./pages/Watch").then((m) => ({ default: m.WatchPage }))
 );
 
-type Page = "settings" | "train" | "live" | "fleet";
+type Page = "train" | "maps" | "watch";
 
 export function App() {
-  const [page, setPage] = useState<Page>("settings");
+  const [page, setPage] = useState<Page>("train");
   const [shuttingDown, setShuttingDown] = useState(false);
   const { conn } = useHubStore();
 
@@ -59,10 +58,9 @@ export function App() {
       <nav className="nav">
         {(
           [
-            ["settings", "Settings"],
             ["train", "Train"],
-            ["live", "Live"],
-            ["fleet", "Fleet"],
+            ["maps", "Maps"],
+            ["watch", "Watch"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -76,19 +74,18 @@ export function App() {
         ))}
       </nav>
 
-      {page === "settings" && <SettingsPage />}
       {page === "train" && <TrainPage />}
-      {page === "live" && <LivePage />}
-      {page === "fleet" && (
+      {page === "maps" && <MapsPage />}
+      {page === "watch" && (
         <Suspense
           fallback={
             <section className="panel">
-              <h2>Fleet</h2>
+              <h2>Watch</h2>
               <p className="lede">Loading…</p>
             </section>
           }
         >
-          <FleetPage />
+          <WatchPage />
         </Suspense>
       )}
     </div>

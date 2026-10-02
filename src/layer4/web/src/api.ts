@@ -48,6 +48,8 @@ export interface Settings {
   docker_mode: boolean;
   stop_sims_on_train_exit: boolean;
   stop_stack_on_train_exit: boolean;
+  /** Train-selected map id; locked in on Start. "none" = builtin. */
+  map_id: string;
 }
 
 export interface MetricsTelemetry {
@@ -66,9 +68,13 @@ export interface FleetCar {
   pose: [number, number] | null;
   yaw: number | null;
   collision: boolean;
+  /** Contacts counted since this environment's current episode began. */
+  collision_count?: number;
   speed: number | null;
   episode_return: number | null;
   lidar?: number[];
+  /** True on done/respawn frames — clear LiDAR; pose may be null. */
+  reset?: boolean;
 }
 
 export interface FleetTelemetry {
@@ -248,6 +254,18 @@ export function generateMapMeshPreview(mapId: string): Promise<{
 }> {
   return jsonFetch(
     `/api/maps/${encodeURIComponent(mapId)}/generate-mesh-preview`,
+    { method: "POST" }
+  );
+}
+
+export function generateMapThumbnail(mapId: string): Promise<{
+  ok: boolean;
+  path: string;
+  url: string;
+  maps: MapCatalogEntry[];
+}> {
+  return jsonFetch(
+    `/api/maps/${encodeURIComponent(mapId)}/generate-thumbnail`,
     { method: "POST" }
   );
 }

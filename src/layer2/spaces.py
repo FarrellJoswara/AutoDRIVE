@@ -66,10 +66,11 @@ def make_observation_space(lidar_beams: int = LIDAR_BEAMS) -> spaces.Dict:
 
 def _body_frame_accel(snap: TelemetrySnapshot) -> Tuple[float, float]:
     """
-    Convert world-frame linear acceleration into body forward / sideways.
+    Convert linear acceleration into body forward / sideways.
 
-    Unity: X = right, Y = up, Z = forward on the ground plane.
-    Same rotation idea Layer 1 uses for v_long / v_lat.
+    Assumes snap.linear_acceleration is Unity world XYZ (X right, Y up, Z
+    forward), same projection Layer 1 uses for v_long / v_lat. If Bridge ever
+    emits body-frame accel, this would double-rotate — leave as-is until proven.
     """
     ax_w, _, az_w = snap.linear_acceleration
     yaw = snap.heading_yaw
@@ -97,7 +98,7 @@ def _normalize_lidar(snap: TelemetrySnapshot, lidar_beams: int = LIDAR_BEAMS) ->
     elif raw.size > lidar_beams:
         raw = raw[:lidar_beams].copy()
 
-    rmax = float(snap.lidar_range_max) if snap.lidar_range_max > 0 else 30.0
+    rmax = float(snap.lidar_range_max) if snap.lidar_range_max > 0 else 10.0
     rmin = float(snap.lidar_range_min)
     clipped = np.clip(raw, rmin, rmax)
     # Linear map [rmin, rmax] → [0, 1].
@@ -117,7 +118,7 @@ def snapshot_to_obs(
     state vector layout (index → meaning):
       0  v_long          forward speed (m/s), body frame
       1  v_lat           sideways speed (m/s), body frame
-      2  yaw_rate        rad/s about Unity Y (up)
+      2  yaw_rate        rad/s in Unity +Y yaw convention
       3  a_long          forward accel (m/s^2), body frame
       4  a_lat           sideways accel (m/s^2), body frame
       5  slip_angle      sideslip β (radians)
@@ -125,8 +126,9 @@ def snapshot_to_obs(
       7  prev_steering   last steering command we sent [-1, 1]
     """
     a_long, a_lat = _body_frame_accel(snap)
-    # Unity Y-up: yaw rate ≈ angular_velocity.y
-    yaw_rate = float(snap.angular_velocity[1])
+    # Bridge yaw is about its +Z axis. The Bridge→Unity frame conversion
+    # reverses that axis, so Unity +Y yaw rate is -wz.
+    yaw_rate = -float(snap.angular_velocity[2])
 
     state = np.array(
         [

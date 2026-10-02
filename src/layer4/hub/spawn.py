@@ -3,9 +3,10 @@
 Writes occupancy/meta.json:
   "spawn": { "x": ..., "y": ..., "z": ..., "yaw": ..., "source": "centerline"|"freespace" }
 
-Coordinates are ROS/mesh metres (x, z ground plane; y up). TrackLoader transforms
-them through the AiCarTrack align matrix into Unity world space.
-Yaw is radians, Unity Y-up: 0 = +Z forward, positive = CCW when viewed from above.
+Coordinates are ROS/mesh metres (x, z ground plane; y up). TrackLoader places
+AiCarTrack at identity XZ (scale=1), so spawn metres match Unity world XZ
+(only floor Y is lifted). Yaw is radians, Unity Y-up: 0 = +Z forward,
+positive = CCW when viewed from above.
 """
 
 from __future__ import annotations
@@ -38,10 +39,29 @@ def ensure_spawn(
     meta_path = occ / "meta.json"
     meta = _read_meta(meta_path)
     existing = meta.get("spawn")
-    if isinstance(existing, dict) and _valid_spawn(existing):
+    cl = find_centerline(map_dir)
+    centerline_info = meta.get("centerline")
+    centerline_is_current = (
+        isinstance(centerline_info, dict)
+        and centerline_info.get("free_space_semantics") == "known_free_v1"
+    )
+
+    # Existing centerlines were generated with unknown cells treated as free.
+    # Recompute those once with known-free occupancy semantics, then replace
+    # any spawn that falls outside actual known free map cells.
+    if cl is not None and not centerline_is_current and generate_if_missing:
+        generate_centerline(map_id, maps_root)
+        meta = _read_meta(meta_path)
+        existing = meta.get("spawn")
+        cl = find_centerline(map_dir)
+
+    if (
+        isinstance(existing, dict)
+        and _valid_spawn(existing)
+        and _spawn_is_known_free(existing, occ)
+    ):
         return dict(existing)
 
-    cl = find_centerline(map_dir)
     if cl is None and generate_if_missing:
         generate_centerline(map_id, maps_root)
         cl = find_centerline(map_dir)
@@ -77,6 +97,21 @@ def _read_meta(path: Path) -> Dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return raw if isinstance(raw, dict) else {}
+
+
+def _spawn_is_known_free(spawn: Dict[str, Any], occ: Path) -> bool:
+    """Return whether a stored world pose lands on a known-free map cell."""
+    try:
+        grid = load_occupancy(occ, _find_yaml(occ))
+        col = int(round((float(spawn["x"]) - grid.origin_x) / grid.resolution))
+        row = int(round(grid.free.shape[0] - (float(spawn["z"]) - grid.origin_z) / grid.resolution))
+        return (
+            0 <= row < grid.free.shape[0]
+            and 0 <= col < grid.free.shape[1]
+            and bool(grid.free[row, col])
+        )
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
 
 
 def _spawn_from_centerline(path: Path) -> Dict[str, Any]:
@@ -139,7 +174,8 @@ def _spawn_from_centerline(path: Path) -> Dict[str, Any]:
 
 def _spawn_from_freespace(occ: Path) -> Dict[str, Any]:
     grid = load_occupancy(occ, _find_yaml(occ))
-    free = (~grid.occupied).astype(np.uint8)
+    # Spawn only in known free cells; unknown map background is not drivable.
+    free = grid.free.astype(np.uint8)
     dist = cv2.distanceTransform(free, cv2.DIST_L2, 5)
     r, c = np.unravel_index(int(np.argmax(dist)), dist.shape)
     x, z = pixel_to_world(grid, float(c), float(r))

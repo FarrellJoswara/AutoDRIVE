@@ -13,6 +13,9 @@ import { mapWorldBounds } from "./mapLoader";
  *   world x  → canvas +x
  *   world z  → canvas −y  (Unity Y-up; screen Y-down)
  *   screen car angle = −yaw
+ *
+ * Fleet poses are map metres (Bridge→Unity swizzle in layer1 telemetry;
+ * hub publishes [x,z]). Canvas does not remap.
  */
 
 export interface ViewState {
@@ -38,7 +41,10 @@ export interface DrawFrameOpts {
 }
 
 const PAD = 24;
-const CAR_R = 5;
+/** Half-length of the car glyph in metres (F1TENTH / RoboRacer ≈ 0.5 m long). */
+const CAR_HALF_LEN_M = 0.16;
+const CAR_R_PX_MIN = 3;
+const CAR_R_PX_MAX = 7;
 
 function expandFit(view: ViewState, cars: FleetCar[]): void {
   for (const c of cars) {
@@ -83,22 +89,17 @@ export function drawStaticMap(
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
 
   if (showMap && map) {
-    // Draw occupancy: image lower-left = origin in world; flip Y via transform
+    // Place occupancy in the same CSS-pixel frame as cars/LiDAR.
+    // Avoid drawImage(..., negative height) — ImageBitmap + neg dest is flaky
+    // and was shifting the underlay off the fleet glyphs.
     const res = map.yaml.resolution;
     const [oxW, ozW] = map.yaml.origin;
-    ctx.save();
+    const worldW = map.width * res;
+    const worldH = map.height * res;
+    const x0 = ox + oxW * scale;
+    const y0 = oy - (ozW + worldH) * scale;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.translate(ox, oy);
-    ctx.scale(scale, -scale);
-    // ROS: image row 0 = top = origin_z + height*res; flip via negative height
-    ctx.drawImage(
-      map.image,
-      oxW,
-      ozW + map.height * res,
-      map.width * res,
-      -map.height * res
-    );
-    ctx.restore();
+    ctx.drawImage(map.image, x0, y0, worldW * scale, worldH * scale);
   } else {
     // Grid fallback
     ctx.save();
@@ -148,9 +149,11 @@ function niceGridStep(w: number, h: number): number {
 
 export function drawDynamic(
   ctx: CanvasRenderingContext2D,
-  opts: DrawFrameOpts
+  opts: DrawFrameOpts,
+  /** Must match the bounds passed to drawStaticMap in the same frame. */
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
 ): void {
-  const { map, fleet, stale, view, cssW, cssH, dpr } = opts;
+  const { fleet, stale, view, cssW, cssH, dpr } = opts;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
@@ -161,35 +164,28 @@ export function drawDynamic(
     return;
   }
 
-  if (!map) {
-    expandFit(view, fleet.cars);
-  }
-
-  const bounds = map
-    ? mapWorldBounds(map)
-    : {
-        minX: view.fitMinX,
-        maxX: view.fitMaxX,
-        minZ: view.fitMinZ,
-        maxZ: view.fitMaxZ,
-      };
-
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
   const rMin = fleet.lidar_range_min ?? LIDAR_RANGE_MIN_M;
   const rMax = fleet.lidar_range_max ?? LIDAR_RANGE_MAX_M;
-
-  // LiDAR under cars
+  // Draw the ranges published by telemetry directly from the published pose.
   if (view.showLidar) {
     const car =
       fleet.cars.find((c) => c.env_id === view.selectedEnvId) ?? fleet.cars[0];
-    if (car?.pose && car.lidar && car.lidar.length && car.yaw != null) {
+    if (
+      car &&
+      !car.reset &&
+      car.pose &&
+      car.lidar &&
+      car.lidar.length &&
+      car.yaw != null
+    ) {
       drawLidarPolygon(ctx, car, scale, ox, oy, rMin, rMax, dpr);
     }
   }
 
   if (view.showFleet) {
     for (const car of fleet.cars) {
-      if (!car.pose) continue;
+      if (car.reset || !car.pose) continue;
       drawCar(ctx, car, scale, ox, oy, car.env_id === view.selectedEnvId, dpr);
     }
   }
@@ -200,6 +196,13 @@ export function drawDynamic(
     ctx.font = "11px Cascadia Code, Consolas, monospace";
     ctx.fillText("stale (PPO gap / no recent sample)", 12, 18);
   }
+}
+
+function carRadiusPx(scale: number): number {
+  return Math.min(
+    CAR_R_PX_MAX,
+    Math.max(CAR_R_PX_MIN, CAR_HALF_LEN_M * scale)
+  );
 }
 
 function drawLidarPolygon(
@@ -219,24 +222,32 @@ function drawLidarPolygon(
   const [wx, wz] = pose;
   const sx0 = ox + wx * scale;
   const sy0 = oy - wz * scale;
+  const maxSpan = rMax - rMin;
 
-  const path = new Path2D();
-  path.moveTo(sx0, sy0);
+  // Clip each beam to occupancy walls so rays cannot paint through the underlay.
+  const outline = new Path2D();
+  outline.moveTo(sx0, sy0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.lineWidth = 1;
   for (let i = 0; i < n; i++) {
     const ang = beamWorldAngleRad(yaw, i, n);
     const dist = lidarNormToMetres(beams[i], rMin, rMax);
-    const hx = wx + Math.cos(ang) * dist;
-    const hz = wz + Math.sin(ang) * dist;
-    path.lineTo(ox + hx * scale, oy - hz * scale);
+    const hx = wx + Math.sin(ang) * dist;
+    const hz = wz + Math.cos(ang) * dist;
+    const sx = ox + hx * scale;
+    const sy = oy - hz * scale;
+    outline.lineTo(sx, sy);
+    const hit = maxSpan > 1e-6 ? (dist - rMin) / maxSpan : 1;
+    const a = hit < 0.95 ? 0.55 : 0.18;
+    ctx.strokeStyle = `rgba(62, 207, 142, ${a})`;
+    ctx.beginPath();
+    ctx.moveTo(sx0, sy0);
+    ctx.lineTo(sx, sy);
+    ctx.stroke();
   }
-  path.closePath();
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "rgba(62, 207, 142, 0.22)";
-  ctx.strokeStyle = "rgba(62, 207, 142, 0.45)";
-  ctx.lineWidth = 1;
-  ctx.fill(path);
-  ctx.stroke(path);
+  outline.closePath();
+  ctx.fillStyle = "rgba(62, 207, 142, 0.10)";
+  ctx.fill(outline);
 }
 
 function drawCar(
@@ -252,31 +263,32 @@ function drawCar(
   const sx = ox + wx * scale;
   const sy = oy - wz * scale;
   const yaw = car.yaw ?? 0;
+  const r = carRadiusPx(scale);
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.translate(sx, sy);
-  // screen angle = −yaw
-  ctx.rotate(-yaw);
+  // Unity yaw=0 → +Z; screen angle of forward = atan2(-cos(yaw), sin(yaw))
+  ctx.rotate(Math.atan2(-Math.cos(yaw), Math.sin(yaw)));
 
   if (car.collision) {
     ctx.strokeStyle = "#e85d5d";
     ctx.lineWidth = selected ? 2.5 : 2;
     ctx.beginPath();
-    ctx.moveTo(-CAR_R, -CAR_R);
-    ctx.lineTo(CAR_R, CAR_R);
-    ctx.moveTo(CAR_R, -CAR_R);
-    ctx.lineTo(-CAR_R, CAR_R);
+    ctx.moveTo(-r, -r);
+    ctx.lineTo(r, r);
+    ctx.moveTo(r, -r);
+    ctx.lineTo(-r, r);
     ctx.stroke();
   } else {
     ctx.fillStyle = selected ? "#3ecf8e" : "#8aa396";
     ctx.strokeStyle = selected ? "#e6f0ea" : "#2a3d34";
     ctx.lineWidth = 1.5;
-    // Chevron pointing +x (forward in car frame after −yaw rotate)
+    // Chevron pointing +x in local frame (= world forward after rotate)
     ctx.beginPath();
-    ctx.moveTo(CAR_R + 2, 0);
-    ctx.lineTo(-CAR_R, CAR_R * 0.85);
-    ctx.lineTo(-CAR_R * 0.4, 0);
-    ctx.lineTo(-CAR_R, -CAR_R * 0.85);
+    ctx.moveTo(r + 1, 0);
+    ctx.lineTo(-r, r * 0.85);
+    ctx.lineTo(-r * 0.4, 0);
+    ctx.lineTo(-r, -r * 0.85);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -285,7 +297,11 @@ function drawCar(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "rgba(230, 240, 234, 0.75)";
   ctx.font = "10px Cascadia Code, Consolas, monospace";
-  ctx.fillText(String(car.env_id), sx + CAR_R + 3, sy - CAR_R);
+  const labelY = sy - r - 2;
+  ctx.fillText(String(car.env_id), sx + r + 3, labelY);
+  if (car.speed != null && Number.isFinite(car.speed)) {
+    ctx.fillText(`${car.speed.toFixed(1)}`, sx + r + 3, labelY + 11);
+  }
 }
 
 export function resolveBounds(
@@ -293,21 +309,59 @@ export function resolveBounds(
   view: ViewState,
   fleet: FleetTelemetry | null
 ): { minX: number; maxX: number; minZ: number; maxZ: number } {
-  if (map) return mapWorldBounds(map);
-  if (fleet) expandFit(view, fleet.cars);
-  if (
-    !Number.isFinite(view.fitMinX) ||
-    view.fitMaxX <= view.fitMinX ||
-    view.fitMaxZ <= view.fitMinZ
-  ) {
-    return { minX: -15, maxX: 15, minZ: -15, maxZ: 15 };
+  const pad = 2;
+
+  if (map) {
+    // Use the same published map-frame coordinates for the map and cars.
+    const mb = mapWorldBounds(map);
+    let minX = mb.minX;
+    let maxX = mb.maxX;
+    let minZ = mb.minZ;
+    let maxZ = mb.maxZ;
+    const span = Math.max(mb.maxX - mb.minX, mb.maxZ - mb.minZ, 1);
+    const near = span * 0.35;
+    if (fleet) {
+      for (const c of fleet.cars) {
+        if (!c.pose || c.reset) continue;
+        const [x, z] = c.pose;
+        if (
+          x < mb.minX - near ||
+          x > mb.maxX + near ||
+          z < mb.minZ - near ||
+          z > mb.maxZ + near
+        ) {
+          continue;
+        }
+        minX = Math.min(minX, x - 2);
+        maxX = Math.max(maxX, x + 2);
+        minZ = Math.min(minZ, z - 2);
+        maxZ = Math.max(maxZ, z + 2);
+      }
+    }
+    return {
+      minX: minX - pad,
+      maxX: maxX + pad,
+      minZ: minZ - pad,
+      maxZ: maxZ + pad,
+    };
   }
-  return {
-    minX: view.fitMinX,
-    maxX: view.fitMaxX,
-    minZ: view.fitMinZ,
-    maxZ: view.fitMaxZ,
-  };
+
+  if (fleet) expandFit(view, fleet.cars);
+
+  if (
+    Number.isFinite(view.fitMinX) &&
+    view.fitMaxX > view.fitMinX &&
+    view.fitMaxZ > view.fitMinZ
+  ) {
+    return {
+      minX: view.fitMinX - pad,
+      maxX: view.fitMaxX + pad,
+      minZ: view.fitMinZ - pad,
+      maxZ: view.fitMaxZ + pad,
+    };
+  }
+
+  return { minX: -15, maxX: 15, minZ: -15, maxZ: 15 };
 }
 
 export function initialViewState(): ViewState {

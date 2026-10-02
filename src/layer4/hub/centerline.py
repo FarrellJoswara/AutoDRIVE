@@ -111,7 +111,8 @@ def generate_centerline(
     occ = _occupancy_dir(map_dir)
     yaml_path = _find_yaml(occ)
     grid = load_occupancy(occ, yaml_path)
-    free = ~grid.occupied
+    # Unknown ROS cells (commonly grayscale 205) are not track surface.
+    free = grid.free
     free_u8 = (free.astype(np.uint8)) * 255
     # Close small gaps then skeletonize
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -160,6 +161,7 @@ def generate_centerline(
         "spacing_m": spacing_m,
         "closed": closed,
         "file": CENTERLINE_FILENAME,
+        "free_space_semantics": "known_free_v1",
     })
 
     # Keep vehicle spawn in sync with the new centerline (TrackLoader reads meta.spawn).

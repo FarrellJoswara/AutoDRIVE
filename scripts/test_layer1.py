@@ -28,35 +28,105 @@ from src.layer1.track import RaceTrack
 
 def test_telemetry_snapshot_parsing():
     """Parse a raw AutoDRIVE Bridge packet into TelemetrySnapshot."""
+    # Real Socket capture at Porto spawn. Bridge position order is (z,-x,y);
+    # quaternion rotation is around Bridge Z and becomes Unity Y yaw.
     raw_packet = {
-        "V1 Position": [10.5, 0.2, -5.3],
-        "V1 Orientation": [0.0, 0.7071, 0.0, 0.7071],
+        "V1 Position": "-1.3900 -7.5350 0.0861",
+        "V1 Orientation Quaternion": "0.0103 0.0103 -0.7094 0.7047",
+        "V1 Orientation Euler Angles": "0.0021 0.0291 4.7058",
         "V1 Linear Velocity": [3.0, 0.0, 4.0],
+        "V1 Angular Velocity": [0.0, 0.1, 0.55],
         "V1 Linear Acceleration": [0.0, 0.0, 9.80665],
-        "V1 Left Encoder": 12.5,
-        "V1 Right Encoder": 12.8,
+        "V1 Encoder Angles": [12.5, 12.8],
+        "V1 Encoder Ticks": [100, 102],
         "V1 Lidar Scan": [1.5] * 1080,
+        "V1 LIDAR Scan Rate": 40.0,
         "V1 Throttle": 0.8,
         "V1 Steering": -0.15,
         "V1 Lap Count": 2,
         "V1 Lap Time": 14.25,
-        "V1 Collision": False,
+        "V1 Collisions": 0,
     }
 
     snap = TelemetrySnapshot.from_raw_dict(raw_packet, step_id=42)
 
     assert snap.step_id == 42
-    assert snap.position == (10.5, 0.2, -5.3)
+    assert snap.position == pytest.approx((7.535, 0.0861, -1.39))
     assert pytest.approx(snap.true_speed, 0.001) == 5.0
     assert pytest.approx(snap.encoder_left, 0.001) == 12.5
     assert pytest.approx(snap.encoder_right, 0.001) == 12.8
+    assert pytest.approx(snap.encoder_ticks_left, 0.001) == 100.0
+    assert pytest.approx(snap.encoder_ticks_right, 0.001) == 102.0
     assert len(snap.lidar_ranges) == 1080
     assert snap.lidar_ranges[0] == 1.5
+    assert snap.lidar_scan_rate == 40.0
     assert snap.throttle == 0.8
     assert snap.steering == -0.15
     assert snap.lap_count == 2
     assert not snap.collision
-    assert pytest.approx(snap.heading_yaw, 0.01) == math.pi / 2
+    assert snap.collision_count == 0
+    assert pytest.approx(snap.heading_yaw, 0.01) == 1.577
+
+
+def test_orientation_euler_and_collision_keys():
+    """Euler Angles fallback + V1 Collisions primary key."""
+    raw = {
+        "V1 Position": [0.0, 0.0, 0.0],
+        "V1 Orientation Euler Angles": f"0.0 0.0 {math.pi / 4:.6f}",
+        "V1 Linear Velocity": [0.0, 0.0, 0.0],
+        "V1 Collisions": 3,
+        "V1 LIDAR Scan Rate": 20.0,
+    }
+    snap = TelemetrySnapshot.from_raw_dict(raw, step_id=1)
+    assert pytest.approx(snap.heading_yaw, 0.01) == -math.pi / 4
+    assert snap.collision
+    assert snap.collision_count == 3
+    assert snap.lidar_scan_rate == 20.0
+
+
+def test_velocity_yaw_only_when_orientation_missing():
+    """Velocity heading is last resort — not used when quat is valid (incl. yaw≈0)."""
+    # Identity + high speed → velocity yaw (atan2(vx, vz)).
+    q_identity = {
+        "V1 Position": [0.0, 0.0, 0.0],
+        "V1 Orientation Quaternion": [0.0, 0.0, 0.0, 1.0],
+        "V1 Linear Velocity": [3.0, 0.0, 4.0],
+    }
+    snap_fallback = TelemetrySnapshot.from_raw_dict(q_identity, step_id=1)
+    assert pytest.approx(snap_fallback.heading_yaw, 0.01) == math.atan2(3.0, 4.0)
+
+    # Euler yaw=0 with sideways velocity must keep IMU yaw (not velocity).
+    euler_zero = {
+        "V1 Position": [0.0, 0.0, 0.0],
+        "V1 Orientation Euler Angles": "0.0 0.0 0.0",
+        "V1 Linear Velocity": [5.0, 0.0, 0.0],
+    }
+    snap_keep = TelemetrySnapshot.from_raw_dict(euler_zero, step_id=2)
+    assert pytest.approx(snap_keep.heading_yaw, 1e-6) == 0.0
+
+
+def test_yaw_rate_converts_bridge_z_to_unity_y():
+    """Bridge +Z angular rate reverses into the Unity +Y yaw convention."""
+    from src.layer2.spaces import snapshot_to_obs
+
+    snap = TelemetrySnapshot(
+        angular_velocity=(0.1, 0.2, 0.75),
+        v_long=1.0,
+        v_lat=0.0,
+        slip_angle=0.0,
+        linear_acceleration=(0.0, 0.0, 0.0),
+    )
+    obs = snapshot_to_obs(snap, prev_throttle=0.0, prev_steering=0.0)
+    assert pytest.approx(float(obs["state"][2]), 1e-6) == -0.75
+
+
+def test_bridge_lidar_scan_is_canonicalized_to_ccw_order():
+    raw = {
+        "V1 Position": [0.0, 0.0, 0.0],
+        "V1 LIDAR Range Array": [0.1, 0.2, 0.3, 0.4],
+    }
+    snap = TelemetrySnapshot.from_raw_dict(raw, step_id=1)
+    assert snap.lidar_ranges.tolist() == pytest.approx([0.4, 0.3, 0.2, 0.1])
 
 
 def test_trajectory_logger_csv_export():
@@ -152,17 +222,19 @@ def test_lockstep_stepping_and_kill():
             while running and client.connected:
                 fake_bridge_data = {
                     "V1 Position": [step_num * 0.1, 0.0, step_num * 0.5],
-                    "V1 Orientation": [0.0, 0.0, 0.0, 1.0],
+                    "V1 Orientation Quaternion": [0.0, 0.0, 0.0, 1.0],
                     "V1 Linear Velocity": [0.0, 0.0, 10.0],
+                    "V1 Angular Velocity": [0.0, 0.0, 0.0],
                     "V1 Linear Acceleration": [0.0, 0.0, 1.0],
-                    "V1 Left Encoder": step_num * 1.5,
-                    "V1 Right Encoder": step_num * 1.5,
+                    "V1 Encoder Angles": [step_num * 1.5, step_num * 1.5],
+                    "V1 Encoder Ticks": [step_num * 10, step_num * 10],
                     "V1 Lidar Scan": [5.0] * 1080,
+                    "V1 LIDAR Scan Rate": 40.0,
                     "V1 Throttle": 0.5,
                     "V1 Steering": 0.0,
                     "V1 Lap Count": 0,
                     "V1 Lap Time": step_num * 0.025,
-                    "V1 Collision": False,
+                    "V1 Collisions": 0,
                 }
                 try:
                     client.emit("Bridge", fake_bridge_data)
@@ -257,16 +329,20 @@ def test_two_instances_lockstep_drive():
             step = 1
             while running and client.connected:
                 data = {
-                    "V1 Position": f"{car_idx * 2.0} 0.0 {step * 0.5}",
-                    "V1 Orientation": "0.0 0.0 0.0 1.0",
+                    # Bridge wire order is (z, -x, y); want Unity (x=car*2, y=0, z=step*0.5)
+                    "V1 Position": f"{step * 0.5} {-car_idx * 2.0} 0.0",
+                    "V1 Orientation Quaternion": "0.0 0.0 0.0 1.0",
                     "V1 Linear Velocity": "0.0 0.0 8.5",
+                    "V1 Angular Velocity": "0.0 0.0 0.0",
                     "V1 Linear Acceleration": "0.0 0.0 0.5",
                     "V1 Encoder Angles": f"{step * 1.2} {step * 1.2}",
+                    "V1 Encoder Ticks": f"{step * 8} {step * 8}",
+                    "V1 LIDAR Scan Rate": "40.0",
                     "V1 Throttle": "0.6",
                     "V1 Steering": "0.0",
                     "V1 Lap Count": "0",
                     "V1 Lap Time": f"{step * 0.025:.3f}",
-                    "V1 Collision": "0",
+                    "V1 Collisions": "0",
                 }
                 try:
                     client.emit("Bridge", data)

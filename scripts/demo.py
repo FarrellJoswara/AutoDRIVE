@@ -314,7 +314,7 @@ def main() -> int:
     pt = sub.add_parser("train", help="Layer 3 PPO train")
     pt.add_argument("--n-envs", type=int, default=1)
     pt.add_argument("--base-port", type=int, default=4567)
-    pt.add_argument("--timesteps", type=int, default=10_000)
+    pt.add_argument("--timesteps", type=int, default=50_000)
     pt.add_argument("--out", type=Path, default=None)
     pt.add_argument("--seed", type=int, default=0)
     pt.add_argument("--device", type=str, default="auto")
@@ -323,7 +323,7 @@ def main() -> int:
     pt.add_argument("--auto-launch", action=argparse.BooleanOptionalAction, default=True)
     pt.add_argument("--connect-timeout", type=float, default=90.0)
     pt.add_argument("--forward-scale", type=float, default=1.0)
-    pt.add_argument("--collision-penalty", type=float, default=0.0)
+    pt.add_argument("--collision-penalty", type=float, default=-5.0)
     pt.set_defaults(func=_cmd_train)
 
     pp = sub.add_parser("play", help="Layer 3 PPO play (no learning)")

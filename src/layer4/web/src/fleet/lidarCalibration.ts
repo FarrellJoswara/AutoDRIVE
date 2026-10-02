@@ -1,28 +1,28 @@
 /**
  * LiDAR beam aiming for the fleet canvas.
  *
- * Layer 1/2 publish distances only (normalised [0,1]). Drawing rays also needs
- * where beam 0 points relative to car yaw, and the angular step around the car.
+ * Layer 1/2 publish distances only (normalised [0,1]). Drawing needs where
+ * beam 0 points relative to car yaw, FOV, and range bounds.
  *
- * TODO(F7): These defaults are unmeasured for AutoDRIVE RoboRacer. Park beside
- * a wall, tweak OFFSET / SIGN until hit points land on map geometry, then commit.
- *
- * Assumptions until calibrated:
- * - Full 360° FOV over the published beam count (after min-pool, typically 120)
- * - Beam 0 aligns with car forward (+yaw), then ANGLE_SIGN * increment
- * - ANGLE_SIGN = +1 → counterclockwise in the Unity X–Z world frame
+ * RoboRacer / AutoDRIVE 2025 guide (1080-beam planar scan):
+ *   FOV −135° … +135° (270°), res 0.25°, range 0.06 … 10.0 m
+ *   Beam 0 = θ_min = −135° relative to vehicle forward (Unity +Z at yaw=0)
+ *   θ increases CCW in the vehicle/world X–Z frame
+ *   World hit: (x, z) = pose + (sin(yaw+θ), cos(yaw+θ)) * range
  */
-export const LIDAR_FOV_RAD = Math.PI * 2;
 
-/** Added to yaw for beam 0 (radians). */
-export const LIDAR_ANGLE_OFFSET_RAD = 0;
+/** Full angular span of the published scan (radians). */
+export const LIDAR_FOV_RAD = (270 * Math.PI) / 180;
 
-/** +1 = CCW from beam 0; −1 = CW. */
+/** First beam angle relative to yaw (radians). Beam 0 = −135°. */
+export const LIDAR_ANGLE_MIN_RAD = (-135 * Math.PI) / 180;
+
+/** +1 = CCW from beam 0 (RoboRacer / ROS LaserScan convention). */
 export const LIDAR_ANGLE_SIGN = 1;
 
-/** Fallback denorm when fleet sample omits range bounds (Layer 1 defaults). */
-export const LIDAR_RANGE_MIN_M = 0.05;
-export const LIDAR_RANGE_MAX_M = 30.0;
+/** RoboRacer linear range (metres). */
+export const LIDAR_RANGE_MIN_M = 0.06;
+export const LIDAR_RANGE_MAX_M = 10.0;
 
 export function beamWorldAngleRad(
   yaw: number,
@@ -31,8 +31,12 @@ export function beamWorldAngleRad(
 ): number {
   const n = Math.max(1, beamCount);
   const step = LIDAR_FOV_RAD / n;
-  // Center of each min-pooled sector
-  return yaw + LIDAR_ANGLE_OFFSET_RAD + LIDAR_ANGLE_SIGN * (beamIndex + 0.5) * step;
+  // Center of each min-pooled sector within [angle_min, angle_min+fov]
+  return (
+    yaw +
+    LIDAR_ANGLE_MIN_RAD +
+    LIDAR_ANGLE_SIGN * (beamIndex + 0.5) * step
+  );
 }
 
 export function lidarNormToMetres(
@@ -40,5 +44,6 @@ export function lidarNormToMetres(
   rangeMin = LIDAR_RANGE_MIN_M,
   rangeMax = LIDAR_RANGE_MAX_M
 ): number {
-  return norm * (rangeMax - rangeMin) + rangeMin;
+  const n = Number.isFinite(norm) ? Math.min(1, Math.max(0, norm)) : 1;
+  return n * (rangeMax - rangeMin) + rangeMin;
 }
