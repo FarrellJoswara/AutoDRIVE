@@ -8,7 +8,7 @@ Layer 2 wraps **one** Layer 1 `Racer` as a standard [Gymnasium](https://gymnasiu
 
 - **1 env = 1 car = 1 port** (no multi-car inside one env)  
 - Headless by default; full **1080** LiDAR; `frame_skip=1` (every physics tick; cannot be `0`)  
-- Crashes do **not** end the episode (`terminated` stays `False`); `collision_penalty` defaults to `0`  
+- Crashes end the episode when `terminate_on_collision` is enabled; each new collision receives the configured penalty (default `-100`)
 - Episodes end by **stagnation** truncation (and optional `max_episode_steps` if `> 0`)  
 
 No Unity / Socket.IO code lives here — only Gym spaces, rewards, and orchestration of Layer 1.
@@ -68,15 +68,17 @@ LiDAR is scaled; state is **raw** (state scaling deferred).
 
 | Piece | Role |
 |-------|------|
-| `RewardConfig` | Weights: `forward_scale`, `route_progress_scale`, collision/slip/steering penalties |
-| `compute_reward(...)` | Pure function: facts in → one float out |
+| `RewardConfig` | Weights for route progress, reverse motion, collision, lap, slip, and steering |
+| `compute_reward(...)` | Pure function: facts in → scalar PPO reward |
+| `compute_reward_components(...)` | Same calculation with each term exposed for telemetry |
 
 Default formula:
 
 ```text
-r  = forward_scale * v_long          # builtin map fallback
-or route_progress_scale * frontier_delta_m  # selected centerline map
-r += collision_penalty               # if collision_event; default 0
+r  = route_progress_scale * signed_route_delta_m # mapped route, every step
+or forward_scale * v_long             # builtin map fallback
+r -= backward_speed_penalty_scale * reverse_distance_m
+r += collision_penalty               # default -100 on a new collision
 r -= slip_penalty * |slip|           # default 0
 r -= steer_jerk_penalty * |Δsteer|   # default 0
 ```
@@ -85,20 +87,25 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 - **`collision_event`** — env-built: `snap.collision` or `collision_count` increased  
 - **`slip_angle`** — from snapshot  
 - **Steer jerk** — `|steering − prev_steering|` × weight (not a sensor)  
-- **`forward_scale=1`** keeps reward ≈ m/s; raise only when you want speed to dominate  
+- **`forward_scale`** is used only when training without a mapped centerline; mapped tracks use signed route progress
 
 `@dataclass` on `RewardConfig` only auto-builds a simple weight bag.
 
-When `map_id` selects a map with `occupancy/centerline.csv`, Layer 2 uses the
-route frontier instead of raw forward speed: only new forward distance earns
-`route_progress_scale` reward. The per-episode frontier is monotonic, and the
-environment truncates after `frontier_stagnation_seconds` without a push. The
-route-progress tracker also supplies the across-track line, elapsed time since
-the last push, and recent frontier speed for Watch telemetry. Builtin (`none`)
-training keeps the existing velocity reward and speed-based stagnation rule.
+When `map_id` selects a map with `occupancy/centerline.csv`, Layer 2 projects
+each pose onto the nearby route and rewards signed movement along it every step.
+Forward route movement earns reward; backward route movement loses reward. No
+reward depends on distance from the centerline. Separately, the frontier stays
+as a monotonic best-progress marker and still drives the frontier-stagnation
+rule, lap accounting, and frontier-speed telemetry. Watch receives both the
+moving current-position bar and the stationary-unless-beaten frontier. Builtin
+(`none`) training keeps the velocity fallback. Reward component telemetry
+reports route progress, body-relative reverse motion, collision, lap, slip,
+steering change, and the total separately.
 
-The current map centerlines are generator output and still need geometric
-validation. Lap timing is enabled only when the route is closed. Layer 2 places
+Map centerlines are generated from occupancy data and validated by the map
+pipeline. Review the generated map preview before treating a new map's lap
+times as authoritative. Lap timing is enabled only when the route is closed.
+Layer 2 places
 the full-width finish gate at the episode's reset pose projected onto the
 centerline, and adds `lap_supported`, `lap_count`, `lap_elapsed_s`,
 `last_lap_time_s`, `best_lap_time_s`, and `lap_gate` to Gym `info`. An open

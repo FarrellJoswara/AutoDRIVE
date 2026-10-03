@@ -16,6 +16,8 @@ export interface LoadedMap {
   image: CanvasImageSource;
   width: number;
   height: number;
+  /** Pixel bounds containing occupied cells; avoids fitting large empty margins. */
+  contentBounds: { minX: number; maxX: number; minY: number; maxY: number } | null;
 }
 
 /** Catalog id from hub (`none` = grid only). */
@@ -61,6 +63,7 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   bitmap: ImageBitmap;
   width: number;
   height: number;
+  contentBounds: LoadedMap["contentBounds"];
 }> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`PGM fetch ${res.status}`);
@@ -94,10 +97,22 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   if (i < bytes.length && bytes[i] <= 0x20) i++;
   const pixels = bytes.subarray(i, i + width * height);
   const rgba = new Uint8ClampedArray(width * height * 4);
+  let minX = width;
+  let maxX = -1;
+  let minY = height;
+  let maxY = -1;
   // ROS negate:0 → high grey = free, low = occupied.
   for (let p = 0; p < width * height; p++) {
     let g = pixels[p] ?? 0;
     if (maxval !== 255) g = Math.round((g / maxval) * 255);
+    if (g < 128) {
+      const x = p % width;
+      const y = Math.floor(p / width);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
     const v = 255 - g;
     const o = p * 4;
     rgba[o] = Math.round(v * 0.55 + 20);
@@ -107,17 +122,50 @@ async function loadPgmAsImageBitmap(url: string): Promise<{
   }
   const imageData = new ImageData(rgba, width, height);
   const bitmap = await createImageBitmap(imageData);
-  return { bitmap, width, height };
+  return {
+    bitmap,
+    width,
+    height,
+    contentBounds: maxX >= minX ? { minX, maxX: maxX + 1, minY, maxY: maxY + 1 } : null,
+  };
+}
+
+function occupiedBounds(source: CanvasImageSource, width: number, height: number): LoadedMap["contentBounds"] {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, width, height);
+  const pixels = ctx.getImageData(0, 0, width, height).data;
+  let minX = width;
+  let maxX = -1;
+  let minY = height;
+  let maxY = -1;
+  for (let p = 0; p < width * height; p++) {
+    const i = p * 4;
+    const luminance = (pixels[i] * 299 + pixels[i + 1] * 587 + pixels[i + 2] * 114) / 1000;
+    if (luminance < 128) {
+      const x = p % width;
+      const y = Math.floor(p / width);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  return maxX >= minX ? { minX, maxX: maxX + 1, minY, maxY: maxY + 1 } : null;
 }
 
 async function loadRaster(url: string): Promise<{
   source: CanvasImageSource;
   width: number;
   height: number;
+  contentBounds: LoadedMap["contentBounds"];
 }> {
   if (url.toLowerCase().endsWith(".pgm")) {
-    const { bitmap, width, height } = await loadPgmAsImageBitmap(url);
-    return { source: bitmap, width, height };
+    const { bitmap, width, height, contentBounds } = await loadPgmAsImageBitmap(url);
+    return { source: bitmap, width, height, contentBounds };
   }
   const img = new Image();
   img.decoding = "async";
@@ -130,6 +178,7 @@ async function loadRaster(url: string): Promise<{
     source: img,
     width: img.naturalWidth,
     height: img.naturalHeight,
+    contentBounds: occupiedBounds(img, img.naturalWidth, img.naturalHeight),
   };
 }
 
@@ -139,8 +188,8 @@ export async function loadMap(id: string, yamlUrl: string): Promise<LoadedMap> {
   const yaml = parseMapYaml(yamlText);
   const base = yamlUrl.replace(/[^/]+$/, "");
   const imageUrl = base + yaml.image;
-  const { source, width, height } = await loadRaster(imageUrl);
-  return { id, yaml, image: source, width, height };
+  const { source, width, height, contentBounds } = await loadRaster(imageUrl);
+  return { id, yaml, image: source, width, height, contentBounds };
 }
 
 /** Bounds of map in world metres (x,z). Fleet poses are already map metres. */
@@ -152,6 +201,15 @@ export function mapWorldBounds(map: LoadedMap): {
 } {
   const res = map.yaml.resolution;
   const [ox, oz] = map.yaml.origin;
+  const content = map.contentBounds;
+  if (content) {
+    return {
+      minX: ox + content.minX * res,
+      maxX: ox + content.maxX * res,
+      minZ: oz + (map.height - content.maxY) * res,
+      maxZ: oz + (map.height - content.minY) * res,
+    };
+  }
   return {
     minX: ox,
     maxX: ox + map.width * res,

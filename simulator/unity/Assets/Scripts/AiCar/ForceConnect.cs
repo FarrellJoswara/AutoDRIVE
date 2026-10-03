@@ -51,6 +51,14 @@ namespace AiCar
             while (!_done && _attempts < MaxAttempts)
             {
                 _attempts++;
+                // Don't let Layer 1 start stepping until TrackLoader has applied
+                // the selected map spawn and populated Socket.ResetManagers. A
+                // reset sent before that setup is silently ignored by AutoDRIVE.
+                if (!TrackLoader.IsReady)
+                {
+                    yield return new WaitForSecondsRealtime(RetryInterval);
+                    continue;
+                }
                 if (TryForceConnect())
                 {
                     _done = true;
@@ -61,6 +69,13 @@ namespace AiCar
 
             if (!_done)
             {
+                if (!TrackLoader.IsReady)
+                {
+                    Debug.LogError(
+                        $"[AiCar.ForceConnect] TrackLoader map/reset initialization did not finish " +
+                        $"after {_attempts} attempts; Bridge connection was withheld");
+                    yield break;
+                }
                 Debug.LogError(
                     $"[AiCar.ForceConnect] gave up after {_attempts} attempts — " +
                     "SocketIOComponent / Socket GameObjects not found or Connect failed");

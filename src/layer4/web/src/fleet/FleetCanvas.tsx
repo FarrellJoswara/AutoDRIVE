@@ -10,12 +10,23 @@ import {
 } from "./draw";
 import type { LoadedMap, MapId } from "./mapLoader";
 import { loadMap } from "./mapLoader";
-import { getFleetHot, getFleetHotAgeMs } from "../store";
+import {
+  getFleetHot,
+  getFleetHotAgeMs,
+  getReplayFleetHot,
+  getReplayFleetHotAgeMs,
+  getTrainingPhaseAgeMs,
+  getTrainingPhaseHot,
+  getTrainingStateHot,
+} from "../store";
 
 export interface FleetCanvasProps {
   showMap: boolean;
   showFleet: boolean;
+  showFrontier: boolean;
+  showCurrentProgress: boolean;
   showLidar: boolean;
+  fleetSource?: "train" | "replay";
   selectedEnvId: number;
   mapId: MapId;
   /** Hub catalog yaml URL; null when mapId is none or unknown. */
@@ -44,10 +55,12 @@ export function FleetCanvas(props: FleetCanvasProps) {
     const v = viewRef.current;
     v.showMap = props.showMap;
     v.showFleet = props.showFleet;
+    v.showFrontier = props.showFrontier;
+    v.showCurrentProgress = props.showCurrentProgress;
     v.showLidar = props.showLidar;
     v.selectedEnvId = props.selectedEnvId;
     mapDirty.current = true;
-  }, [props.showMap, props.showFleet, props.showLidar, props.selectedEnvId]);
+  }, [props.showMap, props.showFleet, props.showFrontier, props.showCurrentProgress, props.showLidar, props.selectedEnvId]);
 
   // Load occupancy map
   useEffect(() => {
@@ -115,13 +128,30 @@ export function FleetCanvas(props: FleetCanvasProps) {
       if (!alive) return;
       raf = requestAnimationFrame(tick);
 
-      const fleet = getFleetHot();
-      const age = getFleetHotAgeMs();
-      const stale = age > 500;
       const p = propsRef.current;
+      const fleet = p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
+      const age = p.fleetSource === "replay" ? getReplayFleetHotAgeMs() : getFleetHotAgeMs();
+      const stale = age > 500;
+      const phase = p.fleetSource === "train" ? getTrainingPhaseHot() : null;
+      const trainState = getTrainingStateHot();
+      const trainActive = trainState === "starting" || trainState === "running" || trainState === "stopping";
+      const ppoUpdating =
+        trainActive &&
+        phase?.phase === "ppo_update" &&
+        getTrainingPhaseAgeMs() < 60_000 &&
+        phase.step >= (fleet?.step ?? 0);
+      const staleLabel = stale
+        ? ppoUpdating
+          ? "PPO updating — simulator paused"
+          : p.fleetSource === "train" && !trainActive
+            ? null
+            : `No recent ${p.fleetSource === "replay" ? "replay " : ""}fleet telemetry (${Math.max(1, Math.floor(age / 1000))}s)`
+        : null;
       const view = viewRef.current;
       view.showMap = p.showMap;
       view.showFleet = p.showFleet;
+      view.showFrontier = p.showFrontier;
+      view.showCurrentProgress = p.showCurrentProgress;
       view.showLidar = p.showLidar;
       view.selectedEnvId = p.selectedEnvId;
 
@@ -146,11 +176,13 @@ export function FleetCanvas(props: FleetCanvasProps) {
         ":" +
         view.showMap +
         view.showFleet +
+        view.showFrontier +
+        view.showCurrentProgress +
         view.showLidar +
         view.selectedEnvId +
         (map?.id ?? "none") +
         boundsKey +
-        stale;
+        staleLabel;
 
       // Redraw static underlay when map OR fitted bounds change.
       if (mapDirty.current || boundsKey !== lastBoundsKey) {
@@ -171,7 +203,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const opts: DrawFrameOpts = {
         map,
         fleet,
-        stale,
+        staleLabel,
         view,
         cssW,
         cssH,

@@ -7,68 +7,24 @@ import {
 import { FleetCanvas } from "../fleet/FleetCanvas";
 import { useHubStore } from "../store";
 
-function Sparkline({
-  steps,
-  rewards,
-  len,
-}: {
-  steps: Float32Array;
-  rewards: Float32Array;
-  len: number;
-}) {
-  const ref = useRef<SVGSVGElement>(null);
-
-  useEffect(() => {
-    const svg = ref.current;
-    if (!svg || len < 2) return;
-    const w = 800;
-    const h = 56;
-    const n = Math.min(len, steps.length);
-    let minR = Infinity;
-    let maxR = -Infinity;
-    for (let i = 0; i < n; i++) {
-      minR = Math.min(minR, rewards[i]);
-      maxR = Math.max(maxR, rewards[i]);
-    }
-    if (!Number.isFinite(minR) || !Number.isFinite(maxR) || minR === maxR) {
-      maxR = minR + 1;
-    }
-    const pts: string[] = [];
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * (w - 4) + 2;
-      const y = h - 4 - ((rewards[i] - minR) / (maxR - minR)) * (h - 8);
-      pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-    }
-    const poly = svg.querySelector("polyline");
-    if (poly) poly.setAttribute("points", pts.join(" "));
-  }, [steps, rewards, len]);
-
-  return (
-    <svg ref={ref} className="spark spark-compact" viewBox="0 0 800 56" preserveAspectRatio="none">
-      <polyline fill="none" stroke="#3ecf8e" strokeWidth="2" points="" />
-    </svg>
-  );
-}
-
 /**
  * Observe surface — underlay from Train-selected map_id; no map picker / Activate.
  */
 export function WatchPage() {
-  const { fleet, fleetAgeMs, metrics, steps, rewards, metricsLen } = useHubStore();
+  const { fleet, fleetAgeMs, metrics } = useHubStore();
   const stale = fleetAgeMs > 500;
-  const cars = useMemo(
-    () => (fleet?.cars ?? []).filter((c) => !c.reset),
-    [fleet]
-  );
+  const cars = useMemo(() => fleet?.cars ?? [], [fleet]);
   const [showMap, setShowMap] = useState(true);
   const [showFleet, setShowFleet] = useState(true);
+  const [showFrontier, setShowFrontier] = useState(true);
+  const [showCurrentProgress, setShowCurrentProgress] = useState(true);
   const [showLidar, setShowLidar] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
   const [mapId, setMapId] = useState("none");
   const [maps, setMaps] = useState<MapCatalogEntry[]>([]);
   const [mapNote, setMapNote] = useState<string | null>(null);
   const [mapLoadErr, setMapLoadErr] = useState<string | null>(null);
-  const [selectedEnvId, setSelectedEnvId] = useState(0);
+  const [selectedEnvId, setSelectedEnvId] = useState<number | null>(null);
   const mapsRef = useRef<MapCatalogEntry[]>([]);
   mapsRef.current = maps;
 
@@ -139,20 +95,16 @@ export function WatchPage() {
     [maps, mapId]
   );
 
-  const selected = useMemo(() => {
-    if (!cars.length) return null;
-    return cars.find((c) => c.env_id === selectedEnvId) ?? cars[0];
-  }, [cars, selectedEnvId]);
+  const selected = useMemo(
+    () => selectedEnvId == null ? null : cars.find((c) => c.env_id === selectedEnvId) ?? null,
+    [cars, selectedEnvId]
+  );
 
-  const multi = cars.length > 1;
+  const lapSupported = cars.filter((c) => c.lap_supported);
 
   return (
     <section className="panel fleet-panel">
       <h2>Watch</h2>
-      <p className="lede">
-        Fleet + live metrics from hub telemetry. Map underlay follows the Train
-        selection (locked on Start) — no map controls here.
-      </p>
 
       <div className="watch-metrics">
         <div className="watch-metrics-row">
@@ -160,12 +112,9 @@ export function WatchPage() {
             <strong>step</strong> {metrics?.step ?? "—"}
           </span>
           <span>
-            <strong>reward</strong>{" "}
-            {metrics?.reward != null ? metrics.reward.toFixed(3) : "—"}
-          </span>
-          <span>
             <strong>episode</strong> {metrics?.episode ?? "—"}
           </span>
+          <span><strong>cars</strong> {cars.length}</span>
           <span className="meta">
             underlay <strong>{mapId}</strong>
           </span>
@@ -177,7 +126,6 @@ export function WatchPage() {
             {showDetails ? "Hide details" : "Details"}
           </button>
         </div>
-        <Sparkline steps={steps} rewards={rewards} len={metricsLen} />
         {showDetails && (
           <table className="live-table">
             <tbody>
@@ -222,19 +170,37 @@ export function WatchPage() {
         <label className="check-inline">
           <input
             type="checkbox"
+            checked={showFrontier}
+            onChange={(e) => setShowFrontier(e.target.checked)}
+          />
+          Frontier
+        </label>
+        <label className="check-inline">
+          <input
+            type="checkbox"
+            checked={showCurrentProgress}
+            onChange={(e) => setShowCurrentProgress(e.target.checked)}
+          />
+          Current position
+        </label>
+        <label className="check-inline">
+          <input
+            type="checkbox"
             checked={showLidar}
+            disabled={selectedEnvId == null}
             onChange={(e) => setShowLidar(e.target.checked)}
           />
-          LiDAR
+          LiDAR {selectedEnvId == null ? "(select a car)" : ""}
         </label>
 
-        {multi && (
+        {cars.length > 0 && (
           <label className="field-inline">
-            Focus car
+            Focus
             <select
-              value={selected?.env_id ?? 0}
-              onChange={(e) => setSelectedEnvId(Number(e.target.value))}
+              value={selectedEnvId ?? "all"}
+              onChange={(e) => setSelectedEnvId(e.target.value === "all" ? null : Number(e.target.value))}
             >
+              <option value="all">All cars</option>
               {cars.map((c) => (
                 <option key={c.env_id} value={c.env_id}>
                   env {c.env_id}
@@ -265,31 +231,44 @@ export function WatchPage() {
           <FleetCanvas
             showMap={showMap}
             showFleet={showFleet}
+            showFrontier={showFrontier}
+            showCurrentProgress={showCurrentProgress}
             showLidar={showLidar}
-            selectedEnvId={selected?.env_id ?? selectedEnvId}
+            selectedEnvId={selected?.env_id ?? -1}
             mapId={mapId}
             mapYamlUrl={selectedMap?.yaml_url ?? null}
             fleetPanel={fleet}
           />
           <div className="canvas-legend" aria-hidden>
             <span className="leg-car">▸ car</span>
-            <span className="leg-x">✕ collision</span>
+            <span className="leg-collision">red car · collision event</span>
+            <span className="leg-current">━ current route position</span>
+            <span className="leg-frontier">┄ best progress</span>
             <span className="leg-lap">┄ finish gate</span>
           </div>
         </div>
 
         <aside className="fleet-side">
-          <h3>Focused</h3>
+          <h3>{selected ? `Env ${selected.env_id}` : "Fleet overview"}</h3>
           {!selected ? (
-            <p className="meta">
-              No fleet sample yet. Start a train job with HUB_URL set.
-            </p>
+            cars.length === 0 ? <p className="meta">No fleet sample yet. Start a train job with HUB_URL set.</p> : <>
+              {lapSupported.length === 0 ? <p className="meta">Lap tracking is unavailable on this map.</p> :
+                <div className="lap-list">{lapSupported.map((car) => (
+                  <details className="lap-disclosure" key={car.env_id}>
+                    <summary>
+                      <span>Env {car.env_id}</span>
+                      <strong>{car.lap_count ?? 0} laps</strong>
+                    </summary>
+                    <dl className="lap-times">
+                      <div><dt>Current lap</dt><dd>{car.lap_elapsed_s != null ? `${car.lap_elapsed_s.toFixed(2)} s` : "—"}</dd></div>
+                      <div><dt>Last lap</dt><dd>{car.last_lap_time_s != null ? `${car.last_lap_time_s.toFixed(2)} s` : "—"}</dd></div>
+                      <div><dt>Best lap</dt><dd>{car.best_lap_time_s != null ? `${car.best_lap_time_s.toFixed(2)} s` : "—"}</dd></div>
+                    </dl>
+                  </details>
+                ))}</div>}
+            </>
           ) : (
             <dl className="fleet-stats">
-              <div>
-                <dt>Env</dt>
-                <dd>{selected.env_id}</dd>
-              </div>
               <div>
                 <dt>Episode #</dt>
                 <dd>{fleet?.episode ?? "—"}</dd>
@@ -307,16 +286,34 @@ export function WatchPage() {
                 </dd>
               </div>
               <div>
-                <dt>Contacts this episode</dt>
-                <dd data-bad={selected.collision ? "1" : "0"}>
-                  {selected.collision_count ?? (selected.collision ? "1+" : 0)}
-                </dd>
-              </div>
-              <div>
                 <dt>Speed</dt>
                 <dd>
                   {selected.speed != null
                     ? `${selected.speed.toFixed(2)} m/s`
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Forward speed (signed)</dt>
+                <dd>
+                  {selected.v_long != null
+                    ? `${selected.v_long.toFixed(2)} m/s`
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Throttle command</dt>
+                <dd>
+                  {selected.throttle_command != null
+                    ? selected.throttle_command.toFixed(2)
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Steering command</dt>
+                <dd>
+                  {selected.steering_command != null
+                    ? selected.steering_command.toFixed(2)
                     : "—"}
                 </dd>
               </div>
@@ -370,6 +367,24 @@ export function WatchPage() {
                     <dt>Since last push</dt>
                     <dd>{(selected.time_since_frontier_push_s ?? 0).toFixed(1)} s</dd>
                   </div>
+                </>
+              )}
+              {selected.current_progress_m != null && (
+                <div>
+                  <dt>Current route position</dt>
+                  <dd>
+                    {selected.current_progress_m.toFixed(2)} m
+                    {selected.signed_route_delta_m != null &&
+                      ` (${selected.current_route_speed_mps != null && selected.current_route_speed_mps >= 0 ? "+" : ""}${selected.current_route_speed_mps?.toFixed(2) ?? "—"} m/s route)`}
+                  </dd>
+                </div>
+              )}
+              {selected.reward_components && (
+                <>
+                  <div><dt>Reward · progress</dt><dd>{(selected.reward_components.route_progress ?? 0).toFixed(3)}</dd></div>
+                  <div><dt>Reward · reverse</dt><dd>{(selected.reward_components.backward_motion ?? 0).toFixed(3)}</dd></div>
+                  <div><dt>Reward · collision</dt><dd>{(selected.reward_components.collision ?? 0).toFixed(1)}</dd></div>
+                  <div><dt>Reward · total</dt><dd>{(selected.reward_components.total ?? 0).toFixed(3)}</dd></div>
                 </>
               )}
               <div>

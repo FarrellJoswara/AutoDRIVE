@@ -4,7 +4,8 @@ AiCar — one command to start everything.
 
   python main.py
 
-Starts Docker (brain + sims), waits for Mission Control, opens the browser.
+Builds only missing Docker images, starts brain + sims, waits for Mission Control,
+and opens its bundled web UI in the browser.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ ROOT = Path(__file__).resolve().parent
 HUB_URL = "http://127.0.0.1:8090"
 HEALTH_URL = f"{HUB_URL}/health"
 DEFAULT_SIMS = 2
+SERVICE_IMAGES = {
+    "brain": "aicar-brain:latest",
+    "sim": "aicar-sim:latest",
+}
 
 # GitHub release asset with gitignored Unity binaries (linux + windows).
 SIM_RELEASE_TAG = "simulator-binaries"
@@ -139,6 +144,87 @@ def _compose(docker: str, *args: str, check: bool = True) -> subprocess.Complete
     return subprocess.run(cmd, cwd=str(ROOT), check=check)
 
 
+def _image_exists(docker: str, image: str) -> bool:
+    result = subprocess.run(
+        [docker, "image", "inspect", image],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _ensure_images(docker: str, *, force_build: bool, no_build: bool) -> None:
+    missing = [
+        service for service, image in SERVICE_IMAGES.items()
+        if not _image_exists(docker, image)
+    ]
+    if force_build:
+        services = list(SERVICE_IMAGES)
+        _banner("Rebuilding Docker images (explicit --build)")
+        _compose(docker, "build", *services)
+        return
+    if not missing:
+        print("Docker images: reusing cached brain and simulator images.")
+        return
+    if no_build:
+        _banner("Docker image missing")
+        print("Missing: " + ", ".join(SERVICE_IMAGES[name] for name in missing))
+        print("Run `python main.py --build` once to create the missing image(s).")
+        sys.exit(1)
+
+    _banner("Building missing Docker images")
+    print("Only building: " + ", ".join(missing))
+    _compose(docker, "build", *missing)
+
+
+def _ensure_web_ui() -> None:
+    """Build the bind-mounted UI only when its source changed; otherwise reuse dist."""
+    web_dir = ROOT / "src" / "layer4" / "web"
+    dist_index = web_dir / "dist" / "index.html"
+    npm = shutil.which("npm")
+    if not npm:
+        print("Web UI: using the bundle already packaged in the brain image (npm not found).")
+        return
+
+    source_files = [
+        web_dir / "index.html",
+        web_dir / "vite.config.ts",
+        web_dir / "package.json",
+        web_dir / "package-lock.json",
+        *[p for p in (web_dir / "src").rglob("*") if p.is_file()],
+    ]
+    newest_source = max((p.stat().st_mtime for p in source_files if p.exists()), default=0)
+    if dist_index.is_file() and dist_index.stat().st_mtime >= newest_source:
+        print("Web UI: existing production bundle is current.")
+        return
+
+    node_modules = web_dir / "node_modules"
+    install_marker = node_modules / ".package-lock.json"
+    lock_file = web_dir / "package-lock.json"
+    needs_install = (
+        not node_modules.is_dir()
+        or not install_marker.is_file()
+        or (lock_file.is_file() and install_marker.stat().st_mtime < lock_file.stat().st_mtime)
+    )
+    if needs_install:
+        _banner("Installing web UI dependencies (first run or lockfile changed)")
+        subprocess.run(
+            [npm, "ci", "--no-audit", "--no-fund", "--legacy-peer-deps"],
+            cwd=str(web_dir),
+            check=True,
+            shell=(os.name == "nt"),
+        )
+    _banner("Building updated Mission Control web UI")
+    subprocess.run(
+        [npm, "run", "build"],
+        cwd=str(web_dir),
+        check=True,
+        shell=(os.name == "nt"),
+    )
+
+
 def _wait_health(timeout_s: float = 300.0) -> None:
     print(f"Waiting for Mission Control at {HEALTH_URL} …")
     deadline = time.time() + timeout_s
@@ -168,10 +254,16 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_SIMS,
         help=f"Number of sim containers (default {DEFAULT_SIMS})",
     )
-    parser.add_argument(
+    build_group = parser.add_mutually_exclusive_group()
+    build_group.add_argument(
+        "--build",
+        action="store_true",
+        help="Force rebuild both Docker images (normally cached images are reused)",
+    )
+    build_group.add_argument(
         "--no-build",
         action="store_true",
-        help="Skip --build (faster if images already exist)",
+        help="Never build images; exit with instructions if an image is missing",
     )
     parser.add_argument(
         "--no-browser",
@@ -206,11 +298,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _ensure_simulator(args.sim_url, skip_download=args.no_download_sim)
+    _ensure_web_ui()
+    _ensure_images(docker, force_build=args.build, no_build=args.no_build)
 
     _banner("Starting AiCar (brain + sims + Mission Control)")
-    up_args = ["up", "-d"]
-    if not args.no_build:
-        up_args.append("--build")
+    up_args = ["up", "-d", "--no-build"]
     up_args.extend(["--scale", f"sim={max(1, args.sims)}"])
     _compose(docker, *up_args)
 
@@ -219,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     _banner("OPEN THIS IN YOUR BROWSER")
     print(f"  {HUB_URL}")
     print()
-    print("Pages: Settings · Train · Live · Fleet")
+    print("Pages: Train · Maps · Watch · Replay")
     print("Stop later:  python main.py --stop")
     print("=" * 60)
 

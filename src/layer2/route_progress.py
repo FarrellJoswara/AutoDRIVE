@@ -66,6 +66,9 @@ class RouteProgressTracker:
         self.max_lateral_m = max(0.1, float(max_lateral_m))
         self.min_push_m = max(0.0, float(min_push_m))
         self.frontier_s: Optional[float] = None
+        # The car's current route coordinate can move in either direction;
+        # frontier_s remains the monotonic best-so-far coordinate.
+        self.current_s: Optional[float] = None
         self.last_push_time: Optional[float] = None
         self.last_time: Optional[float] = None
         self.frontier_speed_mps = 0.0
@@ -113,10 +116,14 @@ class RouteProgressTracker:
         if candidate is None:
             raise ValueError("spawn pose is too far from the selected map centerline")
         self.frontier_s = candidate[0]
+        self.current_s = candidate[0]
         self.last_push_time = t
         self.last_time = t
         self.frontier_speed_mps = 0.0
-        return self.sample(t)
+        result = self.sample(t)
+        result["current_delta_m"] = 0.0
+        result["current_projection_valid"] = True
+        return result
 
     def update(self, x: float, z: float, now: Optional[float] = None) -> dict:
         """Update progress; the returned frontier can never retreat."""
@@ -125,31 +132,51 @@ class RouteProgressTracker:
             return self.reset(x, z, t)
 
         old = self.frontier_s
-        candidate = self._project(float(x), float(z), old)
+        previous_current = self.current_s if self.current_s is not None else old
+        candidate = self._project(float(x), float(z), previous_current)
         dt = max(1e-6, t - (self.last_time if self.last_time is not None else t))
         pushed = 0.0
-        if candidate is not None and candidate[0] - old >= self.min_push_m:
-            self.frontier_s = candidate[0]
-            pushed = self.frontier_s - old
-            self.last_push_time = t
-            self.frontier_speed_mps = pushed / dt
+        current_delta = 0.0
+        if candidate is not None:
+            # Signed per-step movement is measured against the car's previous
+            # route coordinate, not the high-water frontier. This gives reward
+            # for recovering ground and a negative delta while moving backward.
+            self.current_s = float(candidate[0])
+            current_delta = self.current_s - previous_current
+            proposed = max(old, self.current_s)
+            if proposed - old >= self.min_push_m:
+                self.frontier_s = proposed
+                pushed = self.frontier_s - old
+                self.last_push_time = t
+                self.frontier_speed_mps = pushed / dt
+            else:
+                self.frontier_speed_mps = 0.0
         else:
             self.frontier_speed_mps = 0.0
         self.last_time = t
         result = self.sample(t)
         result["advanced_m"] = pushed
+        result["current_delta_m"] = current_delta
+        result["current_projection_valid"] = candidate is not None
         return result
 
     def sample(self, now: Optional[float] = None) -> dict:
         t = time.monotonic() if now is None else float(now)
         if self.frontier_s is None:
             return {"progress_m": 0.0, "line": None, "time_since_push_s": None,
+                    "current_progress_m": None, "current_line": None,
+                    "current_delta_m": 0.0, "current_projection_valid": False,
                     "speed_mps": 0.0, "advanced_m": 0.0}
         line = self._line_at(self.frontier_s)
+        current = self.current_s if self.current_s is not None else self.frontier_s
+        current_line = self._line_at(current)
         return {
             "progress_m": float(self.frontier_s),
             "line": [[float(line[0][0]), float(line[0][1])],
                      [float(line[1][0]), float(line[1][1])]],
+            "current_progress_m": float(current),
+            "current_line": [[float(current_line[0][0]), float(current_line[0][1])],
+                             [float(current_line[1][0]), float(current_line[1][1])]],
             "time_since_push_s": max(0.0, t - self.last_push_time)
             if self.last_push_time is not None else None,
             "speed_mps": float(self.frontier_speed_mps),
@@ -213,7 +240,17 @@ class RouteProgressTracker:
             if len(indices):
                 idx = indices[int(np.argmin(lateral[indices]))]
                 candidate = (float(lateral[idx]), float(route_s[idx]))
-                if best is None or candidate[0] < best[0]:
+                candidate_is_closer = best is None or candidate[0] < best[0] - 0.02
+                if best is not None and frontier is not None:
+                    # At a lap seam or self-crossing, multiple ordered route
+                    # segments can be equally close geometrically. Prefer the
+                    # segment continuous with the previous route coordinate.
+                    same_lateral_fit = abs(candidate[0] - best[0]) <= 0.02
+                    candidate_is_closer = candidate_is_closer or (
+                        same_lateral_fit
+                        and abs(candidate[1] - frontier) < abs(best[1] - frontier)
+                    )
+                if candidate_is_closer:
                     best = candidate
         if best is None:
             return None

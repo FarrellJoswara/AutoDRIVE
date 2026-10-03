@@ -1,8 +1,8 @@
 # Mission Control UI — Architecture Plan
 
-**Status:** Phases 1–3 implemented (hub + Settings/Train/Live); Phase 6 fleet canvas stubbed.  
-**Depends on:** Layer 3 train CLI (`python -m src.layer3.train`) · Docker A/B (`docker/`)  
-**Code home (planned):** **`src/layer4/`** — FastAPI hub + Vite/React frontend + shared types/settings  
+**Status:** Current implementation includes Train, Maps, Watch, and Replay. The phased checklist below is retained as design history and may describe earlier UI names or deferred work.
+**Depends on:** Layer 3 train CLI (`python -m src.layer3.train`) · Docker A/B (`docker/`)
+**Code home:** **`src/layer4/`** — FastAPI hub + Vite/React frontend + shared types/settings
 **Infra:** stays in `docker/` / compose — **not** under `src/`
 
 **Start here** for watch+control of training. **Layers 1–3 = learning path; Layer 4 = Mission Control infra** (hub + web). Dockerfiles/compose stay at repo root.
@@ -47,7 +47,7 @@ Ship a **Mission Control** surface that:
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Browser  → http://localhost:8090  (single entry: brain B)              │
-│  Vite/React ON B (not host-default)  · Settings · Train · Live · Fleet  │
+│  Vite/React ON B (not host-default)  · Train · Maps · Watch · Replay   │
 └───────────────┬───────────────────────────────▲─────────────────────────┘
                 │ REST (start/stop/status/settings)│ WS /ws (fan-out)
                 ▼                                  │
@@ -288,7 +288,7 @@ Rough per-car, per-sample cost at 15 Hz:
 
 Each LiDAR reading is just **distances** (how far until a hit per beam index). That list alone cannot aim anything on the map. To draw **rays** you also need:
 
-1. **Where beam 0 points** relative to the car (start angle vs yaw), and  
+1. **Where beam 0 points** relative to the car (start angle vs yaw), and
 2. The **angular step** around the car from beam to beam (and FOV / CW vs CCW).
 
 **Calibration is not documented in this repo yet.** Layers 1–2 only expose beam count and range bounds (`LIDAR_BEAMS`, `range_min` / `range_max`). **Do not guess 360°/CCW.**
@@ -746,8 +746,8 @@ Train and UI talk to the hub API, not to Redis. Swapping the bus backend must no
 
 ## Related docs
 
-- [`LAYER3.md`](LAYER3.md) — PPO train/play plan  
-- [`PLAN.md`](PLAN.md) — system overview (UI section points here)  
-- [`docker/README.md`](docker/README.md) — A/B compose  
-- [`README.md`](README.md) — status + quick start  
-- [`src/layer3/train.py`](src/layer3/train.py) — authoritative CLI flags  
+- [`LAYER3.md`](LAYER3.md) — PPO train/play plan
+- [`PLAN.md`](PLAN.md) — system overview (UI section points here)
+- [`docker/README.md`](docker/README.md) — A/B compose
+- [`README.md`](README.md) — status + quick start
+- [`src/layer3/train.py`](src/layer3/train.py) — authoritative CLI flags

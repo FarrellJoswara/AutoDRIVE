@@ -18,6 +18,9 @@ class TelemetryBus:
 
     last_metrics: Optional[Dict[str, Any]] = None
     last_fleet: Optional[Dict[str, Any]] = None
+    last_train_phase: Optional[Dict[str, Any]] = None
+    last_replay_fleet: Optional[Dict[str, Any]] = None
+    last_replay_status: Optional[Dict[str, Any]] = None
     metrics_ring: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=600))
     _clients: Set["WSClient"] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -34,9 +37,17 @@ class TelemetryBus:
                 kind = payload.get("kind", "metrics")
                 if kind == "fleet":
                     self.last_fleet = payload
+                elif kind == "phase":
+                    self.last_train_phase = payload
                 else:
                     self.last_metrics = payload
                     self.metrics_ring.append(payload)
+            elif event_type == "replay_telemetry" and payload.get("kind") == "fleet":
+                self.last_replay_fleet = payload
+            elif event_type == "replay_status":
+                self.last_replay_status = payload
+            elif event_type == "train_phase":
+                self.last_train_phase = payload
             clients = list(self._clients)
             loop = self._loop
 
@@ -55,6 +66,16 @@ class TelemetryBus:
     def publish_status(self, payload: Dict[str, Any]) -> None:
         self.publish("status", payload)
 
+    def publish_train_phase(self, payload: Dict[str, Any]) -> None:
+        self.publish("train_phase", payload)
+
+    def publish_replay_status(self, payload: Dict[str, Any]) -> None:
+        self.publish("replay_status", payload)
+
+    def clear_train_phase(self) -> None:
+        with self._lock:
+            self.last_train_phase = None
+
     def attach(self, client: "WSClient") -> None:
         with self._lock:
             self._clients.add(client)
@@ -71,6 +92,12 @@ class TelemetryBus:
                 out.append({"type": "telemetry", "payload": self.last_metrics})
             if self.last_fleet is not None:
                 out.append({"type": "telemetry", "payload": self.last_fleet})
+            if self.last_train_phase is not None:
+                out.append({"type": "train_phase", "payload": self.last_train_phase})
+            if self.last_replay_fleet is not None:
+                out.append({"type": "replay_telemetry", "payload": self.last_replay_fleet})
+            if self.last_replay_status is not None:
+                out.append({"type": "replay_status", "payload": self.last_replay_status})
         return out
 
 

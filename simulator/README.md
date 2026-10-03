@@ -1,7 +1,9 @@
 # AutoDRIVE Simulator
 
-Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). Executables are
-**gitignored**; only this doc lives in git.
+Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). The Linux
+player is included in the repository for Docker's bind-mounted simulator
+service. `main.py` downloads it from the simulator release if it is missing.
+The Windows player is used for local headed demos.
 
 ## Easiest: use `python main.py`
 

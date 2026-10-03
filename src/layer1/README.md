@@ -13,7 +13,9 @@ This layer has **no Gymnasium and no neural nets**. It only:
 - manage a fleet of cars (`RaceTrack`)  
 - optional CSV trajectory export  
 
-Higher layers call this API: Layer 2 wraps one `Racer` as a Gym env; the UI (later) will call `RaceTrack` for launch / kill / live telemetry.
+Higher layers call this API: Layer 2 wraps one `Racer` as a Gym env. Mission
+Control watches telemetry published by training and manages simulator
+containers; it does not create a second `RaceTrack` step loop.
 
 ---
 

@@ -1,10 +1,10 @@
-# Layer 3 — PPO Training Plan
+# Layer 3 — PPO Training and Implementation Notes
 
-**Status:** Implemented (v1) — extractor + train/play + SubprocVecEnv path.  
-**Depends on:** Layer 1 (`src/layer1/`) verified · Layer 2 (`src/layer2/`) implemented  
+**Status:** Implemented — extractor, train/play, `SubprocVecEnv`, and Docker-backed simulator sessions. The phase sections below preserve the original build order for context; they are not pending work.
+**Depends on:** Layer 1 (`src/layer1/`) verified · Layer 2 (`src/layer2/`) implemented
 **Package:** `src/layer3/`
 
-**Start here if RL is new:** [`src/layer3/README.md`](src/layer3/README.md) (plain English).  
+**Start here if RL is new:** [`src/layer3/README.md`](src/layer3/README.md) (plain English).
 Skim “Locked decisions” and “Build order” if you just want to implement.
 
 ---
@@ -69,16 +69,16 @@ Env2 + Sim2 (port 4569) ─┘
 | Policy | **`MultiInputPolicy`** + custom `LidarStateExtractor` |
 | Extractor | 1D-CNN on `lidar` + MLP on `state` → fuse |
 | Train / play modules | **`src/layer3/train.py`** and **`play.py`** (logic); `scripts/demo.py` thin CLI only |
-| Parallelism | **Plan includes `SubprocVecEnv` + N sims** (see §5). Smoke first with `n_envs=1`, then scale. |
+| Parallelism | `SubprocVecEnv` with N simulator sessions; `DummyVecEnv` for one environment (see §5). |
 | `n_envs` default (real train) | **2** to start; CLI `--n-envs`; raise toward 4 if VRAM/CPU allow |
 | Ports | Backend assigns one internal bridge port per environment (4567–4582); no Train port setting |
-| Sim launch (host v1) | Each worker **`auto_launch=True`** headless Unity (N processes on one machine) |
-| Sim launch (Docker later) | Optional: sims already up → `auto_launch=False`, connect by port |
+| Sim launch (host) | Each worker can launch a headless Unity simulator with `auto_launch=True` |
+| Sim launch (Docker) | Compose provides simulator containers; workers connect to assigned ports with `auto_launch=False` |
 | Play | **Always 1 env** (no VecEnv needed to evaluate) |
 | Device | CUDA if available, else CPU |
 | Artifacts | `logs/rl/<run_id>/` — ckpt, tb, `final_model.zip`, `config.json` |
 | Env knobs | Layer 2 defaults unless CLI overrides |
-| Out of scope | UI · waypoint rewards · custom PPO · Docker A/B *implementation* (design must stay compatible) |
+| Layer 3 boundaries | UI and map authoring live in Layer 4; route progress and lap rewards live in Layer 2; PPO optimization remains in Stable-Baselines3 |
 
 ---
 
@@ -101,7 +101,7 @@ logs/rl/<run>/         # gitignored contents
 
 ---
 
-## 5. SubprocVecEnv + N sims (planned implementation)
+## 5. SubprocVecEnv + N sims
 
 ### What we implement
 
@@ -150,7 +150,7 @@ model.save(out / "final_model")
 vec_env.close()
 ```
 
-### Host constraints (document in README when shipping)
+### Host constraints
 
 | Constraint | Mitigation |
 |------------|------------|
@@ -164,8 +164,8 @@ vec_env.close()
 
 | Mode | Who starts Unity |
 |------|------------------|
-| **Host / early Docker (combined)** | Each Subproc worker: `AutoDriveEnv(auto_launch=True)` |
-| **Later: A×N + B** | Compose starts N sim containers; workers use `auto_launch=False` and connect to assigned ports |
+| **Host** | Each Subproc worker can use `AutoDriveEnv(auto_launch=True)` |
+| **Docker A×N + B** | Compose starts sim containers; workers use `auto_launch=False` and connect to assigned ports |
 
 **SubprocVecEnv code stays in Layer 3 either way.** Docker only changes *how* sims appear on those ports — not the VecEnv API.
 
@@ -214,7 +214,7 @@ demo.py play  → src.layer3.play.main
 
 ---
 
-## 7. Build order (checklist)
+## 7. Original build order (completed)
 
 ### Phase A — Single-env smoke (prove learning stack)
 
@@ -226,33 +226,32 @@ demo.py play  → src.layer3.play.main
 
 **Exit:** extractor test + train/play smoke pass.
 
-### Phase B — SubprocVecEnv + N sims (planned; do this as part of Layer 3)
+### Phase B — SubprocVecEnv + N sims
 
-1. [ ] Implement `SubprocVecEnv` path in `envs.py` for `n_envs >= 2`
-2. [ ] Verify picklable env factory on **Windows**
-3. [ ] `train --n-envs 2` — Mission Control starts two headless simulators, one policy
-4. [ ] Confirm `vec_env.close()` kills both sims
-5. [ ] Document VRAM guidance; optional `--n-envs 4` trial
-6. [ ] Write `n_envs` / ports into `config.json`
+1. [x] Implement `SubprocVecEnv` path in `envs.py` for `n_envs >= 2`
+2. [x] Use importable env factories for spawned workers
+3. [x] Connect Mission Control workers to dedicated simulator sessions
+4. [x] Close vector environments and their simulator processes on shutdown
+5. [x] Expose environment count and device controls in training settings
+6. [x] Record run configuration under `logs/rl/<run_id>/config.json`
 
 **Exit:** stable multi-env train for ≥ tens of thousands of steps without port/zombie leaks.
 
 ### Phase C — Polish
 
-1. [ ] Resume-from-checkpoint  
-2. [ ] Reward / stagnation CLI pass-through  
-3. [ ] Failure-mode notes (disconnect, NaNs)  
+1. [ ] Resume-from-checkpoint
+2. [ ] Reward / stagnation CLI pass-through
+3. [ ] Failure-mode notes (disconnect, NaNs)
 4. [ ] Hook for Docker `auto_launch=False` + external sims (no full Docker rewrite required yet)
 
 ---
 
-## 8. Roadmap fit
+## 8. Runtime layout
 
 ```text
-Layer 3 Phase A     → 1 env train/play on host
-Layer 3 Phase B     → SubprocVecEnv + N local sims   ← planned in this doc
-Docker A×N + B      → same train.py; sims provided by compose
-UI                  → monitor/launch; not required to train
+Layer 3 train/play  → one or more Gym environments
+Docker A×N + B      → compose supplies simulator sessions to the workers
+Mission Control     → configures runs, watches telemetry, and manages sessions
 ```
 
 If learning stalls, tune Layer 2 rewards / truncation before rewriting VecEnv.
@@ -279,15 +278,15 @@ If learning stalls, tune Layer 2 rewards / truncation before rewriting VecEnv.
 
 ## 11. Open / fuzzy
 
-1. Staggered Unity launch if N≥4 thrashes the GPU at startup.  
-2. Exact Conv channel sizes (start 32→64).  
-3. State normalization — still default **off**.  
+1. Staggered Unity launch if N≥4 thrashes the GPU at startup.
+2. Exact Conv channel sizes (start 32→64).
+3. State normalization — still default **off**.
 4. Whether `n_envs=1` uses Dummy only or always Subproc — **Dummy for 1, Subproc for ≥2**.
 
 ---
 
 ## Related docs
 
-- [`src/layer3/README.md`](src/layer3/README.md) — plain English  
-- [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md)  
+- [`src/layer3/README.md`](src/layer3/README.md) — plain English
+- [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md)
 - [`PLAN.md`](PLAN.md) · [`UI.md`](UI.md) · [`README.md`](README.md)

@@ -17,6 +17,8 @@ namespace AiCar
 {
     public class TrackLoader : MonoBehaviour
     {
+        public static bool IsReady { get; private set; }
+
         [Tooltip("Override maps root; empty → sibling of player Data folder: ../maps")]
         public string mapsRootOverride = "";
 
@@ -59,8 +61,13 @@ namespace AiCar
             if (string.IsNullOrEmpty(mapId))
             {
                 Debug.Log("[AiCar.TrackLoader] no map id — keeping builtin track");
+                int resetManagers = EnsureBridgeResetManagers(null, null);
+                if (resetManagers == 0)
+                    Debug.LogError("[AiCar.TrackLoader] Bridge reset wiring was not installed for the builtin map");
+                Debug.Log($"[AiCar.TrackLoader] builtin reset managers installed={resetManagers}");
                 SilenceBrokenLapTimers();
                 _loaded = true;
+                IsReady = true;
                 return;
             }
 
@@ -72,8 +79,12 @@ namespace AiCar
             if (!File.Exists(visualPath) && !File.Exists(colliderPath))
             {
                 Debug.LogError($"[AiCar.TrackLoader] no OBJ under {meshDir}");
+                int resetManagers = EnsureBridgeResetManagers(null, null);
+                if (resetManagers == 0)
+                    Debug.LogError("[AiCar.TrackLoader] Bridge reset wiring was not installed for the scene spawn");
                 SilenceBrokenLapTimers();
                 _loaded = true;
+                IsReady = true;
                 return;
             }
 
@@ -106,6 +117,7 @@ namespace AiCar
 
             TryApplySpawn(mapsRoot, mapId);
             _loaded = true;
+            IsReady = true;
             _suppressUntil = Time.unscaledTime + SuppressSeconds;
 
             var wb = mr.bounds;
@@ -766,8 +778,12 @@ namespace AiCar
 
             int movedSpawns = MoveSpawnTransforms(worldPos, worldRot);
             int movedVehicles = TeleportVehicles(worldPos, worldRot);
+            int resetManagers = EnsureBridgeResetManagers(worldPos, worldRot);
+            if (resetManagers == 0)
+                Debug.LogError($"[AiCar.TrackLoader] Bridge reset wiring was not installed for map={mapId}");
 
-            // Keep re-applying briefly: Bridge V1 Reset copies Spawn transforms, and
+            // Keep re-applying briefly: ResetManager.Start can run after this
+            // loader and overwrite the initial pose cached by TeleportVehicles.
             // physics may settle the car for a few FixedUpdates after teleport.
             var keeper = gameObject.GetComponent<SpawnKeeper>();
             if (keeper == null)
@@ -779,7 +795,8 @@ namespace AiCar
 
             Debug.Log(
                 $"[AiCar.TrackLoader] spawn map={mapId} local={localPos} yawRad={yawRad:F3} " +
-                $"world={worldPos} spawnsMoved={movedSpawns} vehiclesMoved={movedVehicles}");
+                $"world={worldPos} spawnsMoved={movedSpawns} vehiclesMoved={movedVehicles} " +
+                $"resetManagersInstalled={resetManagers}");
         }
 
         static bool TryReadSpawn(string mapsRoot, string mapId, out Vector3 localPos, out float yawRad)
@@ -963,9 +980,193 @@ namespace AiCar
             return n;
         }
 
-        static int PatchResetManagers(Vector3 worldPos, Quaternion worldRot, HashSet<int> seen)
+        static int EnsureBridgeResetManagers(Vector3? spawnPosition, Quaternion? spawnRotation)
+        {
+            int installed = 0;
+            var flags = System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic;
+
+            foreach (var socket in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+            {
+                if (socket == null || !InLoadedScene(socket.gameObject) ||
+                    socket.GetType().Name != "Socket")
+                    continue;
+
+                var controllersField = socket.GetType().GetField("VehicleControllers", flags);
+                var controllers = controllersField != null
+                    ? controllersField.GetValue(socket) as Array
+                    : null;
+                if (controllers == null || controllers.Length == 0)
+                {
+                    controllersField = socket.GetType().GetField("AutomobileControllers", flags);
+                    controllers = controllersField != null
+                        ? controllersField.GetValue(socket) as Array
+                        : null;
+                }
+                if (controllers == null || controllers.Length == 0)
+                    continue;
+
+                Type resetType = socket.GetType().Assembly.GetType("ResetManager");
+                Type coSimType = socket.GetType().Assembly.GetType("CoSimManager");
+                Type wheelType = socket.GetType().Assembly.GetType("WheelEncoder");
+                Type lapType = socket.GetType().Assembly.GetType("LapTimer");
+                if (resetType == null || coSimType == null || wheelType == null || lapType == null)
+                {
+                    Debug.LogError(
+                        "[AiCar.TrackLoader] bridge reset types are missing from the simulator assembly");
+                    continue;
+                }
+
+                var vehicles = Array.CreateInstance(typeof(Transform), controllers.Length);
+                var rigidBodies = Array.CreateInstance(typeof(Rigidbody), controllers.Length);
+                var coSimManagers = Array.CreateInstance(coSimType, controllers.Length);
+                var leftEncoders = Array.CreateInstance(wheelType, controllers.Length);
+                var rightEncoders = Array.CreateInstance(wheelType, controllers.Length);
+                var leftSource = GetSocketArray(socket, "LeftWheelEncoders", flags);
+                var rightSource = GetSocketArray(socket, "RightWheelEncoders", flags);
+                var lapSource = GetSocketArray(socket, "LapTimers", flags);
+                bool valid = leftSource != null && rightSource != null &&
+                             leftSource.Length >= controllers.Length &&
+                             rightSource.Length >= controllers.Length;
+
+                for (int i = 0; i < controllers.Length && valid; i++)
+                {
+                    object controller = controllers.GetValue(i);
+                    if (controller == null)
+                    {
+                        valid = false;
+                        break;
+                    }
+
+                    Type controllerType = controller.GetType();
+                    var vehicleField = controllerType.GetField("Vehicle", flags);
+                    var rbField = controllerType.GetField("VehicleRigidBody", flags);
+                    var vehicleObject = vehicleField != null
+                        ? vehicleField.GetValue(controller) as GameObject
+                        : null;
+                    var rb = rbField != null ? rbField.GetValue(controller) as Rigidbody : null;
+                    if (rb == null && vehicleObject != null)
+                        rb = vehicleObject.GetComponent<Rigidbody>();
+                    if (vehicleObject == null && rb != null)
+                        vehicleObject = rb.gameObject;
+                    if (vehicleObject == null || rb == null)
+                    {
+                        valid = false;
+                        break;
+                    }
+
+                    Vector3 targetPosition = spawnPosition ?? rb.position;
+                    Quaternion targetRotation = spawnRotation ?? rb.rotation;
+                    vehicles.SetValue(vehicleObject.transform, i);
+                    rigidBodies.SetValue(rb, i);
+                    leftEncoders.SetValue(leftSource.GetValue(i), i);
+                    rightEncoders.SetValue(rightSource.GetValue(i), i);
+
+                    var coSimSource = GetSocketArray(socket, "CoSimManagers", flags);
+                    object coSim = coSimSource != null && i < coSimSource.Length
+                        ? coSimSource.GetValue(i)
+                        : null;
+                    if (coSim == null)
+                    {
+                        // ResetManager expects one CoSimManager slot per car even
+                        // when the scene does not enable co-simulation. Keep a
+                        // disabled placeholder on an inactive object for that slot.
+                        var placeholder = new GameObject($"AiCar Reset CoSim Slot {i + 1}");
+                        placeholder.SetActive(false);
+                        coSim = placeholder.AddComponent(coSimType);
+                    }
+                    coSimManagers.SetValue(coSim, i);
+
+                    if (spawnPosition.HasValue)
+                        TeleportRigidbody(rb.gameObject, targetPosition, targetRotation);
+                }
+
+                if (!valid)
+                {
+                    Debug.LogError(
+                        "[AiCar.TrackLoader] cannot install bridge reset manager: " +
+                        "vehicle rigid bodies or wheel encoders are missing");
+                    continue;
+                }
+
+                var resetManagers = Array.CreateInstance(resetType, controllers.Length);
+                for (int i = 0; i < controllers.Length; i++)
+                {
+                    // AutoDRIVE's Socket expects one ResetManager per vehicle;
+                    // keep each collision reset isolated to its own car.
+                    var managerObject = new GameObject($"AiCar Bridge Reset Manager {i + 1}");
+                    // Keep it inactive until its vehicle references and target
+                    // pose are configured, so lifecycle methods see valid state.
+                    managerObject.SetActive(false);
+                    var manager = managerObject.AddComponent(resetType);
+                    SetResetManagerField(
+                        manager, "Vehicles", SingleItemArray(typeof(Transform), vehicles.GetValue(i)), flags);
+                    SetResetManagerField(
+                        manager, "VehicleRigidBodies", SingleItemArray(typeof(Rigidbody), rigidBodies.GetValue(i)), flags);
+                    SetResetManagerField(
+                        manager, "CoSimManagers", SingleItemArray(coSimType, coSimManagers.GetValue(i)), flags);
+                    SetResetManagerField(
+                        manager, "LeftWheelEncoders", SingleItemArray(wheelType, leftEncoders.GetValue(i)), flags);
+                    SetResetManagerField(
+                        manager, "RightWheelEncoders", SingleItemArray(wheelType, rightEncoders.GetValue(i)), flags);
+                    var lapTimers = Array.CreateInstance(
+                        lapType, lapSource != null && i < lapSource.Length ? 1 : 0);
+                    if (lapTimers.Length > 0)
+                        lapTimers.SetValue(lapSource.GetValue(i), 0);
+                    SetResetManagerField(manager, "LapTimers", lapTimers, flags);
+
+                    resetManagers.SetValue(manager, i);
+                    managerObject.SetActive(true);
+                }
+                var socketResetField = socket.GetType().GetField("ResetManagers", flags);
+                if (socketResetField == null)
+                {
+                    Debug.LogError("[AiCar.TrackLoader] Socket.ResetManagers field is missing");
+                    continue;
+                }
+                socketResetField.SetValue(socket, resetManagers);
+                installed += controllers.Length;
+                Debug.Log(
+                    $"[AiCar.TrackLoader] installed Bridge reset manager for {controllers.Length} vehicle(s); " +
+                    "reset targets are captured from the applied map spawn");
+            }
+            return installed;
+        }
+
+        static Array SingleItemArray(Type elementType, object value)
+        {
+            var result = Array.CreateInstance(elementType, 1);
+            result.SetValue(value, 0);
+            return result;
+        }
+
+        static Array GetSocketArray(object socket, string fieldName,
+            System.Reflection.BindingFlags flags)
+        {
+            var field = socket.GetType().GetField(fieldName, flags);
+            return field != null ? field.GetValue(socket) as Array : null;
+        }
+
+        static void SetResetManagerField(object manager, string fieldName, object value,
+            System.Reflection.BindingFlags flags)
+        {
+            var field = manager.GetType().GetField(fieldName, flags);
+            if (field == null)
+                throw new InvalidOperationException(
+                    $"ResetManager.{fieldName} is missing from the simulator build");
+            field.SetValue(manager, value);
+        }
+
+        static int PatchResetManagers(
+            Vector3 worldPos,
+            Quaternion worldRot,
+            HashSet<int> seen,
+            bool teleportVehicles = true,
+            bool log = true)
         {
             int n = 0;
+            int managersPatched = 0;
             var flags = System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.Public |
                         System.Reflection.BindingFlags.NonPublic;
@@ -1000,6 +1201,7 @@ namespace AiCar
                     if (fiInitRot != null) fiInitRot.SetValue(mb, initRot);
                 }
 
+                managersPatched++;
                 for (int i = 0; i < count; i++)
                 {
                     Vector3 offset = worldPos;
@@ -1007,6 +1209,9 @@ namespace AiCar
                         offset += (worldRot * Vector3.right) * (i * 0.35f);
                     initPos[i] = offset;
                     initRot[i] = worldRot;
+
+                    if (!teleportVehicles)
+                        continue;
 
                     if (vehicles != null && i < vehicles.Length && vehicles[i] != null)
                     {
@@ -1028,10 +1233,11 @@ namespace AiCar
                             n++;
                     }
                 }
-                Debug.Log(
-                    $"[AiCar.TrackLoader] patched ResetManager '{GetPath(mb.transform)}' vehicles={count}");
+                if (log)
+                    Debug.Log(
+                        $"[AiCar.TrackLoader] patched ResetManager '{GetPath(mb.transform)}' vehicles={count}");
             }
-            return n;
+            return teleportVehicles ? n : managersPatched;
         }
 
         static void TeleportRigidbody(GameObject go, Vector3 worldPos, Quaternion worldRot)

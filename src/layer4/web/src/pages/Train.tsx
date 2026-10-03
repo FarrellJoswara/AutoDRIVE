@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import {
   Settings,
   fetchMaps,
@@ -12,9 +12,13 @@ import { useHubStore } from "../store";
 
 const empty: Settings = {
   n_envs: 1,
-  timesteps: 50000,
+  timesteps: 0,
   max_duration_seconds: 0,
   stop_after_laps: 0,
+  plateau_min_timesteps: 100000,
+  plateau_window_timesteps: 25000,
+  plateau_patience: 5,
+  plateau_min_improvement_pct: 1,
   out: null,
   run_name: null,
   seed: 0,
@@ -24,16 +28,18 @@ const empty: Settings = {
   auto_launch: true,
   connect_timeout: 90,
   frame_skip: 4,
-  max_episode_steps: 1000,
+  max_episode_steps: 0,
   stagnation_speed_threshold: 0.15,
   stagnation_steps: 50,
   frontier_stagnation_seconds: 5,
-  terminate_on_collision: false,
-  forward_scale: 1,
+  terminate_on_collision: true,
+  forward_scale: 0,
+  backward_speed_penalty_scale: 1,
   route_progress_scale: 10,
-  collision_penalty: -5,
+  collision_penalty: -100,
   slip_penalty: 0.2,
   steer_jerk_penalty: 0.05,
+  lap_time_reward_scale: 1000,
   telemetry_every_n: 200,
   fleet_hz: 15,
   lidar_display_beams: 120,
@@ -42,6 +48,7 @@ const empty: Settings = {
   stop_sims_on_train_exit: true,
   stop_stack_on_train_exit: false,
   map_id: "none",
+  laps_per_episode: 10,
 };
 
 type NumKey = {
@@ -65,7 +72,20 @@ function runnableMaps(list: MapCatalogEntry[]): MapCatalogEntry[] {
   return [builtin, ...ready];
 }
 
-export function TrainPage() {
+export interface TrainPageHandle {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+interface TrainPageProps {
+  onBusyChange?: (busy: boolean) => void;
+  onReadyChange?: (ready: boolean) => void;
+}
+
+export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function TrainPage(
+  { onBusyChange, onReadyChange },
+  ref
+) {
   const { status } = useHubStore();
   const [form, setForm] = useState<Settings>(empty);
   const [mapChoices, setMapChoices] = useState<MapCatalogEntry[]>([]);
@@ -77,8 +97,6 @@ export function TrainPage() {
   const state = status?.state ?? "idle";
   const running =
     state === "running" || state === "starting" || state === "stopping";
-  const stoppedSims =
-    !!status?.stopped_containers && status.stopped_containers.length > 0;
   const selectedTrainMap =
     mapChoices.find((m) => m.id === form.map_id) ?? null;
 
@@ -93,6 +111,7 @@ export function TrainPage() {
         if (!choices.some((m) => m.id === merged.map_id)) {
           merged.map_id = "none";
         }
+        if (merged.map_id === "none") merged.laps_per_episode = 0;
         setForm(merged);
       })
       .catch((e: Error) => {
@@ -105,6 +124,10 @@ export function TrainPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!loading) onReadyChange?.(true);
+  }, [loading, onReadyChange]);
 
   function num(key: NumKey, v: string) {
     const n = Number(v);
@@ -142,6 +165,7 @@ export function TrainPage() {
     setErr(null);
     setMsg(null);
     setBusy(true);
+    onBusyChange?.(true);
     try {
       const res = await putSettings(form);
       const saved = { ...empty, ...res.settings };
@@ -152,20 +176,25 @@ export function TrainPage() {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
     }
   }
 
   async function onStop() {
     setErr(null);
     setBusy(true);
+    onBusyChange?.(true);
     try {
       await stopTrain();
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
     }
   }
+
+  useImperativeHandle(ref, () => ({ start: onStart, stop: onStop }), [form, onBusyChange, busy]);
 
   if (loading) {
     return (
@@ -189,52 +218,12 @@ export function TrainPage() {
             {running ? " (locked for this run)" : ""}
           </span>
         </div>
-        <div className="actions" style={{ marginTop: 0 }}>
-          <button
-            type="button"
-            className="primary"
-            disabled={busy || running}
-            onClick={() => void onStart()}
-          >
-            Start
-          </button>
-          <button
-            type="button"
-            className="danger"
-            disabled={busy || !running || state === "stopping"}
-            onClick={() => void onStop()}
-          >
-            Stop
-          </button>
-        </div>
       </div>
 
       <p className="lede">
         Start locks in the map below (activates physics if needed), then runs{" "}
         <code>python -m src.layer3.train</code>. Prep meshes on the Maps tab.
       </p>
-
-      {state === "exited" && stoppedSims && (
-        <p className="msg err">
-          Last run stopped compose sims ({status?.stopped_containers?.join(", ")}
-          ). Hit Start again — the hub will restart them before training.
-        </p>
-      )}
-      {state === "exited" && status?.exit_code != null && status.exit_code !== 0 && (
-        <p className="msg err">
-          Train exited with code {status.exit_code}
-          {status.log_path ? ` — see ${status.log_path}` : ""}.
-        </p>
-      )}
-      {state === "exited" && status?.stop_reason && (
-        <p className="msg">
-          Training finished: {status.stop_reason === "lap_target"
-            ? "a car reached the lap target"
-            : status.stop_reason === "max_duration"
-              ? "the run duration limit was reached"
-              : "the timestep limit was reached"}.
-        </p>
-      )}
 
       <div className="meta" style={{ marginBottom: "1rem" }}>
         <div>
@@ -267,7 +256,13 @@ export function TrainPage() {
                 onChange={(e) => {
                   const map_id = e.target.value;
                   setForm((f) => {
-                    const next = { ...f, map_id };
+                    const next = {
+                      ...f,
+                      map_id,
+                      laps_per_episode: map_id === "none"
+                        ? 0
+                        : (f.laps_per_episode || 10),
+                    };
                     // Persist immediately so Watch underlay follows without waiting for Start.
                     void putSettings(next)
                       .then((res) => {
@@ -327,14 +322,19 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            Maximum training timesteps
+            Maximum training timesteps (0 = no limit)
             <input
               type="number"
-              min={1}
+              min={0}
               value={form.timesteps}
               onChange={(e) => num("timesteps", e.target.value)}
             />
           </label>
+          <p className="meta run-stop-help">
+            With no timestep limit, training stops after the measured improvement rate
+            plateaus. Route maps use frontier meters per environment step; builtin maps
+            use reward per environment step.
+          </p>
           <label className="field">
             run_name (→ out stamp)
             <input
@@ -452,6 +452,17 @@ export function TrainPage() {
               onChange={(e) => num("stagnation_steps", e.target.value)}
             />
           </label>
+          <label className="field">
+            Laps to complete a car’s life (0 disables; success after target)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              disabled={form.map_id === "none"}
+              value={form.laps_per_episode}
+              onChange={(e) => num("laps_per_episode", e.target.value)}
+            />
+          </label>
           <div className="section-title">Run stopping (0 disables optional limits)</div>
           <label className="field">
             Maximum training duration (seconds)
@@ -464,7 +475,7 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            Stop when any car completes this many laps (total)
+            Stop the entire training run at this cumulative lap count (optional)
             <input
               type="number"
               min={0}
@@ -473,10 +484,47 @@ export function TrainPage() {
               onChange={(e) => num("stop_after_laps", e.target.value)}
             />
           </label>
+          <label className="field">
+            Minimum training steps before plateau can stop
+            <input
+              type="number"
+              min={0}
+              value={form.plateau_min_timesteps}
+              onChange={(e) => num("plateau_min_timesteps", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Steps per improvement measurement window
+            <input
+              type="number"
+              min={1}
+              value={form.plateau_window_timesteps}
+              onChange={(e) => num("plateau_window_timesteps", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Consecutive windows without improvement before stopping
+            <input
+              type="number"
+              min={1}
+              value={form.plateau_patience}
+              onChange={(e) => num("plateau_patience", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Minimum improvement to reset patience (%)
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.plateau_min_improvement_pct}
+              onChange={(e) => num("plateau_min_improvement_pct", e.target.value)}
+            />
+          </label>
           <p className="meta run-stop-help">
-            The timestep limit is always the safety cap. Lap stopping needs a supported
-            centerline and ends the whole run when the first car reaches the target, even across episodes.
-            Collision and no-progress rules reset only the affected car’s episode.
+            Plateau stopping compares the best measured progress rate against each new
+            window. Lap stopping needs a supported centerline; collision and frontier
+            stagnation reset only the affected car’s episode.
           </p>
           <label className="field">
             End episode after no frontier progress (centerline maps; 0 disables)
@@ -499,7 +547,7 @@ export function TrainPage() {
             End that car’s episode on collision
           </label>
           <label className="field">
-            forward_scale
+            Raw forward-speed reward (mapped tracks use frontier progress)
             <input
               type="number"
               step="any"
@@ -508,7 +556,7 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            route_progress_scale
+            Signed route-progress reward per meter
             <input
               type="number"
               min={0}
@@ -518,7 +566,27 @@ export function TrainPage() {
             />
           </label>
           <label className="field">
-            collision_penalty
+            Secondary body-relative reverse penalty per meter
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.backward_speed_penalty_scale}
+              onChange={(e) => num("backward_speed_penalty_scale", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Clean target-lap bonus (scale × average frontier speed across all target laps)
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.lap_time_reward_scale}
+              onChange={(e) => num("lap_time_reward_scale", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Collision penalty (applied when a collision is detected)
             <input
               type="number"
               step="any"
@@ -526,6 +594,12 @@ export function TrainPage() {
               onChange={(e) => num("collision_penalty", e.target.value)}
             />
           </label>
+          <p className="meta run-stop-help">
+            Route progress rewards forward movement and penalizes backward movement
+            each step; centerline distance is not rewarded. The frontier remains a
+            best-progress marker. Pace is telemetry during the run. The bonus is awarded once, only when
+            the car completes its lap target without colliding on that finish.
+          </p>
           <label className="field">
             slip_penalty
             <input
@@ -637,4 +711,4 @@ export function TrainPage() {
       {err && <p className="msg err">{err}</p>}
     </section>
   );
-}
+});

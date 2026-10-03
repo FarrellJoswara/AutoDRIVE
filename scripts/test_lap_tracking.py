@@ -19,6 +19,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class LapTrackerTests(unittest.TestCase):
+    def test_reversing_back_and_forth_across_finish_gate_does_not_add_laps(self) -> None:
+        route = RouteProgressTracker(
+            np.asarray([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], dtype=float)
+        )
+        start = route.reset(0.0, 0.0, now=0.0)
+        laps = LapTracker(route)
+        laps.reset(start, now=0.0)
+
+        def pose_at(distance: float) -> tuple[float, float]:
+            local = distance % route.length_m
+            segment = min(
+                max(int(np.searchsorted(route._cum, local, side="right") - 1), 0),
+                len(route._lengths) - 1,
+            )
+            alpha = (local - route._cum[segment]) / max(route._lengths[segment], 1e-9)
+            point = route.points[segment] + alpha * route._seg[segment]
+            return float(point[0]), float(point[1])
+
+        now = 0.0
+        for distance in np.arange(0.5, route.length_m + 0.1, 0.5):
+            now += 0.1
+            x, z = pose_at(float(distance))
+            progress = route.update(x, z, now=now)
+            sample = laps.update(progress["progress_m"], now=now)
+        self.assertEqual(sample["lap_count"], 1)
+
+        # Repeatedly reverse over the physical gate and drive forward across it.
+        # The route frontier stays near one lap; it must not count lap two.
+        for _ in range(10):
+            for distance in (route.length_m - 0.5, route.length_m + 0.5):
+                now += 0.1
+                x, z = pose_at(distance)
+                progress = route.update(x, z, now=now)
+                sample = laps.update(progress["progress_m"], now=now)
+        self.assertEqual(sample["lap_count"], 1)
+        self.assertLess(progress["progress_m"], 2 * route.length_m)
+
     def test_lap_is_counted_once_at_full_route_distance_with_interpolated_time(self) -> None:
         route = RouteProgressTracker(
             np.asarray([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], dtype=float)
@@ -33,11 +70,22 @@ class LapTrackerTests(unittest.TestCase):
         self.assertEqual(sample["lap_count"], 1)
         self.assertAlmostEqual(sample["last_lap_time_s"], 40.0, places=6)
         self.assertAlmostEqual(sample["best_lap_time_s"], 40.0, places=6)
+        self.assertAlmostEqual(
+            sample["completed_lap_frontier_speed_mps"], 1.0, places=6
+        )
+        self.assertAlmostEqual(sample["completed_attempt_elapsed_s"], 40.0, places=6)
+        self.assertAlmostEqual(
+            sample["completed_attempt_average_frontier_speed_mps"], 1.0, places=6
+        )
         self.assertEqual(len(sample["lap_gate"]), 2)
 
         sample = tracker.update(2 * route.length_m + 0.2, now=180.2)
         self.assertEqual(sample["lap_count"], 2)
         self.assertAlmostEqual(sample["best_lap_time_s"], 40.0, places=6)
+        self.assertAlmostEqual(sample["completed_attempt_elapsed_s"], 80.0, places=6)
+        self.assertAlmostEqual(
+            sample["completed_attempt_average_frontier_speed_mps"], 1.0, places=6
+        )
 
     def test_open_centerline_does_not_publish_a_finish_gate_or_lap(self) -> None:
         route = RouteProgressTracker(np.asarray([[0, 0], [5, 0], [10, 0]], dtype=float))

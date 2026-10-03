@@ -21,6 +21,8 @@ import { mapWorldBounds } from "./mapLoader";
 export interface ViewState {
   showMap: boolean;
   showFleet: boolean;
+  showFrontier: boolean;
+  showCurrentProgress: boolean;
   showLidar: boolean;
   selectedEnvId: number;
   /** Grow-only pose bounds when no occupancy map */
@@ -33,7 +35,7 @@ export interface ViewState {
 export interface DrawFrameOpts {
   map: LoadedMap | null;
   fleet: FleetTelemetry | null;
-  stale: boolean;
+  staleLabel: string | null;
   view: ViewState;
   cssW: number;
   cssH: number;
@@ -42,9 +44,9 @@ export interface DrawFrameOpts {
 
 const PAD = 24;
 /** Half-length of the car glyph in metres (F1TENTH / RoboRacer ≈ 0.5 m long). */
-const CAR_HALF_LEN_M = 0.16;
-const CAR_R_PX_MIN = 3;
-const CAR_R_PX_MAX = 7;
+const CAR_HALF_LEN_M = 0.22;
+const CAR_R_PX_MIN = 5;
+const CAR_R_PX_MAX = 10;
 
 function expandFit(view: ViewState, cars: FleetCar[]): void {
   for (const c of cars) {
@@ -153,7 +155,7 @@ export function drawDynamic(
   /** Must match the bounds passed to drawStaticMap in the same frame. */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
 ): void {
-  const { fleet, stale, view, cssW, cssH, dpr } = opts;
+  const { fleet, staleLabel, view, cssW, cssH, dpr } = opts;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
@@ -191,7 +193,7 @@ export function drawDynamic(
   }
 
   // The backend owns route projection and frontier geometry; canvas only draws it.
-  if (view.showFleet) {
+  if (view.showFrontier) {
     for (const car of fleet.cars) {
       const line = car.frontier_line;
       if (car.reset || !line || line.length !== 2) continue;
@@ -208,10 +210,29 @@ export function drawDynamic(
       ctx.setLineDash([]);
     }
   }
+  // Current position bar follows the car's signed route position; unlike the
+  // best-so-far frontier it moves backward when the car retreats.
+  if (view.showCurrentProgress) {
+    for (const car of fleet.cars) {
+      const line = car.current_progress_line;
+      if (car.reset || !line || line.length !== 2) continue;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.strokeStyle = car.env_id === view.selectedEnvId
+        ? "rgba(62, 207, 142, 0.98)"
+        : "rgba(62, 207, 142, 0.68)";
+      ctx.lineWidth = car.env_id === view.selectedEnvId ? 3 : 2;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(ox + line[0][0] * scale, oy - line[0][1] * scale);
+      ctx.lineTo(ox + line[1][0] * scale, oy - line[1][1] * scale);
+      ctx.stroke();
+    }
+  }
   // Draw the ranges published by telemetry directly from the published pose.
   if (view.showLidar) {
-    const car =
-      fleet.cars.find((c) => c.env_id === view.selectedEnvId) ?? fleet.cars[0];
+    const car = view.selectedEnvId < 0
+      ? undefined
+      : fleet.cars.find((c) => c.env_id === view.selectedEnvId);
     if (
       car &&
       !car.reset &&
@@ -231,11 +252,13 @@ export function drawDynamic(
     }
   }
 
-  if (stale) {
+  if (staleLabel) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "rgba(230, 184, 77, 0.95)";
+    ctx.fillStyle = staleLabel.startsWith("PPO updating")
+      ? "rgba(116, 218, 255, 0.98)"
+      : "rgba(230, 184, 77, 0.95)";
     ctx.font = "11px Cascadia Code, Consolas, monospace";
-    ctx.fillText("stale (PPO gap / no recent sample)", 12, 18);
+    ctx.fillText(staleLabel, 12, 18);
   }
 }
 
@@ -311,29 +334,19 @@ function drawCar(
   // Unity yaw=0 → +Z; screen angle of forward = atan2(-cos(yaw), sin(yaw))
   ctx.rotate(Math.atan2(-Math.cos(yaw), Math.sin(yaw)));
 
-  if (car.collision) {
-    ctx.strokeStyle = "#e85d5d";
-    ctx.lineWidth = selected ? 2.5 : 2;
-    ctx.beginPath();
-    ctx.moveTo(-r, -r);
-    ctx.lineTo(r, r);
-    ctx.moveTo(r, -r);
-    ctx.lineTo(-r, r);
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = selected ? "#3ecf8e" : "#8aa396";
-    ctx.strokeStyle = selected ? "#e6f0ea" : "#2a3d34";
-    ctx.lineWidth = 1.5;
-    // Chevron pointing +x in local frame (= world forward after rotate)
-    ctx.beginPath();
-    ctx.moveTo(r + 1, 0);
-    ctx.lineTo(-r, r * 0.85);
-    ctx.lineTo(-r * 0.4, 0);
-    ctx.lineTo(-r, -r * 0.85);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  }
+  ctx.fillStyle = car.collision ? "#e85d5d" : carColor(car.env_id);
+  ctx.strokeStyle = "#0b100e";
+  ctx.lineWidth = 1.5;
+  // Keep the outline stable as focus/collision state changes. Env IDs own the
+  // normal fill color; red fill marks a collision event.
+  ctx.beginPath();
+  ctx.moveTo(r + 1, 0);
+  ctx.lineTo(-r, r * 0.85);
+  ctx.lineTo(-r * 0.4, 0);
+  ctx.lineTo(-r, -r * 0.85);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "rgba(230, 240, 234, 0.75)";
@@ -345,6 +358,11 @@ function drawCar(
   }
 }
 
+function carColor(envId: number): string {
+  const hue = ((envId * 137.508 + 165) % 360 + 360) % 360;
+  return `hsl(${hue.toFixed(1)} 58% 55%)`;
+}
+
 export function resolveBounds(
   map: LoadedMap | null,
   view: ViewState,
@@ -353,37 +371,14 @@ export function resolveBounds(
   const pad = 2;
 
   if (map) {
-    // Use the same published map-frame coordinates for the map and cars.
+    // Keep the camera fixed to the loaded map. Including live car poses here
+    // makes the underlay pan and zoom as vehicles move near its edges.
     const mb = mapWorldBounds(map);
-    let minX = mb.minX;
-    let maxX = mb.maxX;
-    let minZ = mb.minZ;
-    let maxZ = mb.maxZ;
-    const span = Math.max(mb.maxX - mb.minX, mb.maxZ - mb.minZ, 1);
-    const near = span * 0.35;
-    if (fleet) {
-      for (const c of fleet.cars) {
-        if (!c.pose || c.reset) continue;
-        const [x, z] = c.pose;
-        if (
-          x < mb.minX - near ||
-          x > mb.maxX + near ||
-          z < mb.minZ - near ||
-          z > mb.maxZ + near
-        ) {
-          continue;
-        }
-        minX = Math.min(minX, x - 2);
-        maxX = Math.max(maxX, x + 2);
-        minZ = Math.min(minZ, z - 2);
-        maxZ = Math.max(maxZ, z + 2);
-      }
-    }
     return {
-      minX: minX - pad,
-      maxX: maxX + pad,
-      minZ: minZ - pad,
-      maxZ: maxZ + pad,
+      minX: mb.minX - pad,
+      maxX: mb.maxX + pad,
+      minZ: mb.minZ - pad,
+      maxZ: mb.maxZ + pad,
     };
   }
 
@@ -409,6 +404,8 @@ export function initialViewState(): ViewState {
   return {
     showMap: true,
     showFleet: true,
+    showFrontier: true,
+    showCurrentProgress: true,
     showLidar: true,
     selectedEnvId: 0,
     fitMinX: Infinity,

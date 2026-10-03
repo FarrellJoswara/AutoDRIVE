@@ -26,6 +26,13 @@ namespace AiCar
                 goFc.AddComponent<ForceConnect>();
             }
 
+            if (Object.FindObjectOfType<AiCarSimulationGate>() == null)
+            {
+                var goGate = new GameObject("AiCarSimulationGate");
+                Object.DontDestroyOnLoad(goGate);
+                goGate.AddComponent<AiCarSimulationGate>();
+            }
+
             if (Object.FindObjectOfType<TrackLoader>() != null)
                 return;
 

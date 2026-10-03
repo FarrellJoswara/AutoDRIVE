@@ -95,6 +95,7 @@ class Racer:
         self._cmd_throttle: float = 0.0
         self._cmd_steering: float = 0.0
         self._reset_requested: bool = False
+        self._reset_command_step: Optional[int] = None
 
         # Profiler Metrics
         self.step_counter: int = 0
@@ -105,7 +106,14 @@ class Racer:
 
         # Synchronization Primitives
         self._step_event = threading.Event()
+        self._reset_sent_event = threading.Event()
         self._reset_event = threading.Event()
+        self._simulation_pause_ack = threading.Event()
+        self._simulation_resume_ack = threading.Event()
+        self._simulation_pause_lock = threading.Lock()
+        self._simulation_paused = False
+        self._simulation_pause_started_at: Optional[float] = None
+        self._simulation_paused_total_s = 0.0
         self._connected = False
         self._is_alive = True
         self.client_sid: Optional[str] = None
@@ -181,7 +189,14 @@ class Racer:
             reset_flag = self._reset_requested
             if self._reset_requested:
                 self._reset_requested = False
-                self._reset_event.set()
+                # This Bridge reply is the reset command, not an acknowledgment
+                # that Unity has applied it. Wait for a later telemetry frame.
+                self._reset_command_step = self.step_counter
+                self._reset_sent_event.set()
+            elif self._reset_command_step is not None:
+                if self.step_counter > self._reset_command_step:
+                    self._reset_command_step = None
+                    self._reset_event.set()
 
             # Snapshot current commands before waking up caller in step()
             cmd_th = float(self._cmd_throttle)
@@ -203,6 +218,16 @@ class Racer:
                 )
             except Exception as exc:
                 logger.warning(f"[Racer {self.racer_id}] Failed to emit Bridge commands: {exc}")
+
+        @self.sio.on("AICAR_SIMULATION_PAUSE_ACK")
+        def on_simulation_pause_ack(sid, data=None):
+            self._mark_simulation_paused()
+            self._simulation_pause_ack.set()
+
+        @self.sio.on("AICAR_SIMULATION_RESUME_ACK")
+        def on_simulation_resume_ack(sid, data=None):
+            self._mark_simulation_resumed()
+            self._simulation_resume_ack.set()
 
     def _serve_forever(self) -> None:
         """Create and run the gevent WSGI server inside this thread's hub.
@@ -346,16 +371,80 @@ class Racer:
         if not self._is_alive:
             raise RuntimeError(f"[Racer {self.racer_id}] Cannot reset a killed/closed racer.")
 
+        # The Bridge reply that carries V1 Reset also carries actuator commands.
+        # Clear them first so the previous episode cannot keep driving during reset.
+        self._cmd_throttle = 0.0
+        self._cmd_steering = 0.0
+        self._reset_sent_event.clear()
         self._reset_event.clear()
+        self._reset_command_step = None
         self._reset_requested = True
 
-        # Wait for reset frame to be acknowledged by Unity
-        signaled = self._reset_event.wait(timeout=self.step_timeout)
-        if not signaled:
-            logger.warning(f"[Racer {self.racer_id}] Timeout waiting for simulator reset acknowledgment.")
-
-        time.sleep(0.05)
+        if not self._reset_sent_event.wait(timeout=self.step_timeout):
+            raise TimeoutError(
+                f"[Racer {self.racer_id}] No Bridge frame arrived to send reset "
+                f"on port {self.port} within {self.step_timeout:.1f}s"
+            )
+        if not self._reset_event.wait(timeout=self.step_timeout):
+            raise TimeoutError(
+                f"[Racer {self.racer_id}] Unity did not return a post-reset Bridge "
+                f"frame on port {self.port} within {self.step_timeout:.1f}s"
+            )
         return self.telemetry
+
+    def set_simulation_paused(self, paused: bool) -> None:
+        """Hold/resume Unity physics during PPO optimization updates."""
+        paused = bool(paused)
+        with self._simulation_pause_lock:
+            if paused == self._simulation_paused:
+                return
+            if not self._connected or not self.client_sid:
+                raise RuntimeError(
+                    f"[Racer {self.racer_id}] Cannot change simulation pause state "
+                    "before the Unity Bridge is connected."
+                )
+
+            ack = (
+                self._simulation_pause_ack
+                if paused
+                else self._simulation_resume_ack
+            )
+            ack.clear()
+            event = (
+                "AICAR_SIMULATION_PAUSE"
+                if paused
+                else "AICAR_SIMULATION_RESUME"
+            )
+            self.sio.emit(event, to=self.client_sid)
+            if not ack.wait(timeout=self.step_timeout):
+                raise TimeoutError(
+                    f"[Racer {self.racer_id}] Unity did not acknowledge "
+                    f"simulation {'pause' if paused else 'resume'} within "
+                    f"{self.step_timeout:.1f}s. Rebuild the simulator with "
+                    "AiCarSimulationGate enabled."
+                )
+            self._simulation_paused = paused
+
+    def _mark_simulation_paused(self) -> None:
+        """Start excluding wall time once Unity confirms physics is held."""
+        if self._simulation_pause_started_at is None:
+            self._simulation_pause_started_at = time.monotonic()
+
+    def _mark_simulation_resumed(self) -> None:
+        """Close the held interval when Unity confirms physics has resumed."""
+        started_at = self._simulation_pause_started_at
+        if started_at is not None:
+            self._simulation_paused_total_s += max(0.0, time.monotonic() - started_at)
+            self._simulation_pause_started_at = None
+
+    def simulation_time(self) -> float:
+        """Return elapsed training time with PPO update pauses removed."""
+        now = time.monotonic()
+        paused_now = (
+            max(0.0, now - self._simulation_pause_started_at)
+            if self._simulation_pause_started_at is not None else 0.0
+        )
+        return now - self._simulation_paused_total_s - paused_now
 
     def kill(self) -> None:
         """Terminate the Unity child simulator OS process and shut down gevent server."""
@@ -395,6 +484,7 @@ class Racer:
 
         # Release any threads waiting on events
         self._step_event.set()
+        self._reset_sent_event.set()
         self._reset_event.set()
         logger.info(f"[Racer {self.racer_id}] Process terminated and port {self.port} released.")
 

@@ -2,6 +2,12 @@
 
 Split layout:
 
+For the usual host workflow, start with `python main.py` from the repository
+root. It reuses locally cached images and builds only missing images. Use
+`python main.py --build` when you intentionally want to rebuild them. The
+direct `docker compose up --build` command below is for manual Compose use and
+always requests a build.
+
 | Role | Service | Image | GPU |
 | :--- | :--- | :--- | :--- |
 | **A — sim** | `sim` | `docker/Dockerfile.sim` | Off by default; optional via `docker-compose.sim-gpu.yml` |

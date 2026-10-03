@@ -209,3 +209,79 @@ def restart_compose_sims(*, timeout_s: int = 20) -> List[str]:
         )
         restarted.append(name)
     return restarted
+
+
+def create_replay_sim(map_id: str, *, port: int = 4583) -> str:
+    """Start an isolated simulator container for the Layer 3 replay process."""
+    templates = _list_compose_containers(service="sim", all_containers=True)
+    if not templates:
+        raise RuntimeError("no Compose simulator exists to use as a replay template")
+    name = f"{COMPOSE_PROJECT}-replay-sim"
+    for old in _list_compose_containers(service="replay", all_containers=True):
+        old_id = str(old["Id"])
+        if (old.get("State") or "").lower() == "running":
+            _request("POST", f"/containers/{old_id}/stop?t=5")
+        _request("DELETE", f"/containers/{old_id}?force=1&v=1")
+
+    template = _request("GET", f"/containers/{templates[0]['Id']}/json")
+    config = template["Config"]
+    env = [
+        item for item in config.get("Env", [])
+        if not item.startswith(("AICAR_EXPECTED_SIMS=", "PORT=", "BASE_PORT=", "AICAR_MAP_ID="))
+    ]
+    env.extend((
+        "AICAR_EXPECTED_SIMS=1",
+        f"PORT={int(port)}",
+        f"BASE_PORT={int(port)}",
+        "BRAIN_HOST=brain",
+        f"AICAR_MAP_ID={map_id}",
+    ))
+    labels = dict(config.get("Labels") or {})
+    labels["com.docker.compose.service"] = "replay"
+    labels.pop("com.docker.compose.container-number", None)
+    labels["aicar.role"] = "replay"
+    image_config = {
+        key: config[key]
+        for key in (
+            "Image", "Env", "Cmd", "Entrypoint", "WorkingDir", "User",
+            "Tty", "OpenStdin", "AttachStdin", "AttachStdout", "AttachStderr",
+        )
+        if key in config
+    }
+    image_config["Env"] = env
+    image_config["Labels"] = labels
+    image_config["Hostname"] = name
+    host = template.get("HostConfig") or {}
+    host_config = {
+        key: host[key]
+        for key in ("Binds", "NetworkMode", "RestartPolicy", "ShmSize")
+        if key in host
+    }
+    networks = template.get("NetworkSettings", {}).get("Networks", {})
+    endpoints = {
+        network: {"Aliases": [name, "replay"]}
+        for network in networks
+    }
+    response = _request(
+        "POST", f"/containers/create?name={quote(name, safe='')}",
+        body={
+            **image_config,
+            "HostConfig": host_config,
+            "NetworkingConfig": {"EndpointsConfig": endpoints},
+        },
+    )
+    container_id = str(response["Id"])
+    _request("POST", f"/containers/{container_id}/start")
+    return name
+
+
+def remove_replay_sim() -> Optional[str]:
+    """Stop and remove the dedicated replay simulator, if it exists."""
+    removed = None
+    for container in _list_compose_containers(service="replay", all_containers=True):
+        container_id = str(container["Id"])
+        removed = _container_name(container)
+        if (container.get("State") or "").lower() == "running":
+            _request("POST", f"/containers/{container_id}/stop?t=5")
+        _request("DELETE", f"/containers/{container_id}?force=1&v=1")
+    return removed

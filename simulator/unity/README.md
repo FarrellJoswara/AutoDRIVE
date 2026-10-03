@@ -8,6 +8,7 @@ cloned locally to `simulator/unity/AutoDRIVE/` (gitignored).
 | File | Role |
 | :--- | :--- |
 | `TrackLoaderBootstrap.cs` | Injects TrackLoader + ForceConnect at boot |
+| `AiCarSimulationGate.cs` | Holds simulator physics during PPO policy updates |
 | `TrackLoader.cs` | Load `maps/<id>/mesh/*.obj` + MeshCollider (ROS metres, identity XZ) |
 | `ForceConnect.cs` | Auto-activate Socket.IO when `-ip`/`-port` or batchmode |
 | `MapConfig.cs` | `-map-id` / `AICAR_MAP_ID` / `.active_map.json` |
@@ -59,13 +60,19 @@ bash simulator/unity/AutoDRIVE/Tools/unzip-and-clean.sh
 ```
 
 Windows-only / Linux-only: `BuildWindowsOnly` / `BuildLinuxOnly`.
+For a Linux player build that stays in `simulator/_build/linux/` without
+replacing the currently running Docker simulator, use
+`BuildLinuxStagingOnly`.
 
 Outputs: `simulator/windows/` (Mono), Linux `.x86_64` + `Data/` (IL2CPP),
 and `simulator/.aicar_trackloader`.
 
 **Docker Linux and Windows players both need a rebuild** to pick up
-`ForceConnect` (and LapTimer batchmode silencing). IL2CPP Linux cannot load a
-drop-in Managed DLL.
+`ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
+training process uses the gate to stop cached controls from moving cars while
+PPO updates its policy; the Socket.IO loop stays responsive so training can
+resume without resetting the cars. IL2CPP Linux cannot load a drop-in Managed
+DLL.
 
 ## Windows Mono hotfix (optional, no full rebuild)
 

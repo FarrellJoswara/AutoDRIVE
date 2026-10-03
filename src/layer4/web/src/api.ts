@@ -20,6 +20,15 @@ export interface TrainStatus {
   stopped_containers: string[];
   last_telemetry?: MetricsTelemetry | null;
   last_fleet?: FleetTelemetry | null;
+  last_train_phase?: TrainingPhaseTelemetry | null;
+}
+
+export interface TrainingPhaseTelemetry {
+  kind: "phase";
+  phase: "rollout" | "ppo_update" | "stopped";
+  step: number;
+  run_id: string;
+  ts: string;
 }
 
 export interface Settings {
@@ -27,6 +36,10 @@ export interface Settings {
   timesteps: number;
   max_duration_seconds: number;
   stop_after_laps: number;
+  plateau_min_timesteps: number;
+  plateau_window_timesteps: number;
+  plateau_patience: number;
+  plateau_min_improvement_pct: number;
   out: string | null;
   run_name: string | null;
   seed: number;
@@ -42,10 +55,12 @@ export interface Settings {
   frontier_stagnation_seconds: number;
   terminate_on_collision: boolean;
   forward_scale: number;
+  backward_speed_penalty_scale: number;
   route_progress_scale: number;
   collision_penalty: number;
   slip_penalty: number;
   steer_jerk_penalty: number;
+  lap_time_reward_scale: number;
   telemetry_every_n: number;
   fleet_hz: number;
   lidar_display_beams: number;
@@ -55,6 +70,28 @@ export interface Settings {
   stop_stack_on_train_exit: boolean;
   /** Train-selected map id; locked in on Start. "none" = builtin. */
   map_id: string;
+  laps_per_episode: number;
+}
+
+export interface ReplayStatus {
+  state: TrainState;
+  pid: number | null;
+  started_at: string | null;
+  argv: string[];
+  exit_code: number | null;
+  error: string | null;
+  log_path: string | null;
+  model: string | null;
+  map_id: string | null;
+  seed: number | null;
+  run_id: string | null;
+  last_fleet?: FleetTelemetry | null;
+}
+
+export interface ModelCheckpoint {
+  id: string;
+  label: string;
+  modified: number;
 }
 
 export interface MetricsTelemetry {
@@ -72,14 +109,36 @@ export interface FleetCar {
   env_id: number;
   pose: [number, number] | null;
   yaw: number | null;
+  /** True only for the sampled collision event, not for the whole episode. */
   collision: boolean;
   /** Contacts counted since this environment's current episode began. */
   collision_count?: number;
   speed: number | null;
+  /** Signed velocity along the vehicle's forward axis; negative means reversing. */
+  v_long?: number | null;
+  /** Applied continuous action sent to the simulator, each in [-1, 1]. */
+  throttle_command?: number | null;
+  steering_command?: number | null;
   episode_return: number | null;
   /** Backend-computed across-track frontier segment in world (x,z) coordinates. */
   frontier_line?: [[number, number], [number, number]] | null;
   frontier_progress_m?: number | null;
+  /** Full-width cross-section at the car's current projected route position. */
+  current_progress_line?: [[number, number], [number, number]] | null;
+  current_progress_m?: number | null;
+  signed_route_delta_m?: number | null;
+  current_route_speed_mps?: number | null;
+  route_projection_valid?: boolean;
+  reward_components?: {
+    route_progress?: number;
+    backward_motion?: number;
+    collision?: number;
+    lap_bonus?: number;
+    slip?: number;
+    steering_change?: number;
+    raw_forward_velocity?: number;
+    total?: number;
+  } | null;
   time_since_frontier_push_s?: number | null;
   frontier_speed_mps?: number | null;
   lap_supported?: boolean;
@@ -168,6 +227,26 @@ export interface MapCatalogEntry {
   centerline_url?: string | null;
   centerline_status?: string;
   mesh_preview_url?: string | null;
+}
+
+export function getReplayStatus(): Promise<ReplayStatus> {
+  return jsonFetch("/api/replay/status");
+}
+
+export function fetchReplayModels(): Promise<ModelCheckpoint[]> {
+  return jsonFetch("/api/replay/models");
+}
+
+export function startReplay(settings: { model_id: string; map_id: string; seed: number; device: string }): Promise<ReplayStatus> {
+  return jsonFetch("/api/replay/start", { method: "POST", body: JSON.stringify(settings) });
+}
+
+export function stopReplay(): Promise<ReplayStatus> {
+  return jsonFetch("/api/replay/stop", { method: "POST" });
+}
+
+export function resetReplay(): Promise<ReplayStatus> {
+  return jsonFetch("/api/replay/reset", { method: "POST" });
 }
 
 export interface MapLapGate {

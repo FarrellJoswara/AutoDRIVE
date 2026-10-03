@@ -31,6 +31,63 @@ class RouteProgressTests(unittest.TestCase):
         self.assertAlmostEqual(backed_up["time_since_push_s"], 1.0, places=6)
         self.assertEqual(backed_up["speed_mps"], 0.0)
 
+    def test_small_reverse_motion_within_projection_tolerance_keeps_frontier(self) -> None:
+        points = np.column_stack((np.linspace(0.0, 10.0, 101), np.zeros(101)))
+        tracker = RouteProgressTracker(points, backward_tolerance_m=0.5)
+        tracker.reset(2.0, 0.0, now=1.0)
+        tracker.update(3.0, 0.0, now=2.0)
+
+        backed_up = tracker.update(2.8, 0.0, now=3.0)
+
+        self.assertAlmostEqual(backed_up["progress_m"], 3.0, places=3)
+        self.assertEqual(backed_up["advanced_m"], 0.0)
+
+    def test_episode_reset_restarts_only_that_cars_frontier(self) -> None:
+        points = np.column_stack((np.linspace(0.0, 10.0, 101), np.zeros(101)))
+        car_a = RouteProgressTracker(points)
+        car_b = RouteProgressTracker(points)
+        car_a.reset(1.0, 0.0, now=1.0)
+        car_b.reset(1.0, 0.0, now=1.0)
+        car_a.update(3.0, 0.0, now=2.0)
+        car_b.update(2.0, 0.0, now=2.0)
+
+        restarted = car_a.reset(0.5, 0.0, now=3.0)
+
+        self.assertAlmostEqual(restarted["progress_m"], 0.5, places=3)
+        self.assertEqual(restarted["speed_mps"], 0.0)
+        self.assertEqual(restarted["time_since_push_s"], 0.0)
+        self.assertAlmostEqual(car_b.sample(now=3.0)["progress_m"], 2.0, places=3)
+
+    def test_current_route_delta_is_signed_while_frontier_stays_monotonic(self) -> None:
+        points = np.column_stack((np.linspace(0.0, 10.0, 101), np.zeros(101)))
+        tracker = RouteProgressTracker(points)
+        tracker.reset(2.0, 0.0, now=1.0)
+        pushed = tracker.update(3.0, 0.0, now=2.0)
+        backed_up = tracker.update(2.8, 0.0, now=3.0)
+        recovered = tracker.update(2.9, 0.0, now=4.0)
+
+        self.assertAlmostEqual(pushed["current_delta_m"], 1.0, places=3)
+        self.assertAlmostEqual(backed_up["current_delta_m"], -0.2, places=3)
+        self.assertAlmostEqual(recovered["current_delta_m"], 0.1, places=3)
+        self.assertAlmostEqual(backed_up["progress_m"], 3.0, places=3)
+        self.assertAlmostEqual(recovered["progress_m"], 3.0, places=3)
+        self.assertEqual(recovered["advanced_m"], 0.0)
+        self.assertAlmostEqual(recovered["current_progress_m"], 2.9, places=3)
+
+    def test_current_route_delta_unwraps_forward_across_lap_start(self) -> None:
+        points = np.asarray([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], dtype=float)
+        tracker = RouteProgressTracker(points)
+        length = tracker.length_m
+        tracker.reset(0.0, 0.1, now=1.0)
+        tracker.current_s = length - 0.1
+        tracker.frontier_s = length - 0.1
+
+        crossed = tracker.update(0.1, 0.0, now=2.0)
+
+        self.assertGreater(crossed["current_delta_m"], 0.0)
+        self.assertAlmostEqual(crossed["current_delta_m"], 0.2, places=3)
+        self.assertGreater(crossed["progress_m"], length)
+
     def test_projection_window_rejects_large_shortcut_jump(self) -> None:
         points = np.column_stack((np.linspace(0.0, 20.0, 201), np.zeros(201)))
         tracker = RouteProgressTracker(points, max_forward_m=1.5)
@@ -60,7 +117,7 @@ class RouteProgressTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.linalg.norm(b - a)), 3.0, places=5)
         self.assertAlmostEqual(float(a[0]), float(b[0]), places=5)
 
-    def test_route_reward_uses_frontier_delta_instead_of_raw_speed(self) -> None:
+    def test_route_reward_uses_signed_route_delta_instead_of_raw_speed(self) -> None:
         cfg = RewardConfig(forward_scale=1.0, route_progress_scale=10.0)
         no_progress = compute_reward(
             v_long=8.0,
@@ -82,6 +139,70 @@ class RouteProgressTests(unittest.TestCase):
         )
         self.assertEqual(no_progress, 0.0)
         self.assertAlmostEqual(actual_progress, 2.0)
+
+    def test_backward_motion_penalty_scales_with_reverse_distance(self) -> None:
+        cfg = RewardConfig(backward_speed_penalty_scale=2.0)
+        reward = compute_reward(
+            v_long=-1.0,
+            step_duration_s=0.5,
+            route_progress_delta_m=0.0,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=cfg,
+        )
+        self.assertAlmostEqual(reward, -0.9)
+
+    def test_backward_deadband_and_forward_motion_are_unpenalized(self) -> None:
+        cfg = RewardConfig(backward_speed_penalty_scale=2.0)
+        common = dict(
+            step_duration_s=0.5,
+            route_progress_delta_m=0.0,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=cfg,
+        )
+        self.assertEqual(compute_reward(v_long=-0.05, **common), 0.0)
+        self.assertEqual(compute_reward(v_long=1.0, **common), 0.0)
+
+    def test_signed_route_reward_pays_forward_and_penalizes_reverse(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        cfg = RewardConfig(route_progress_scale=10.0, backward_speed_penalty_scale=1.0)
+        common = dict(
+            v_long=0.0,
+            step_duration_s=0.025,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=cfg,
+        )
+        forward = compute_reward_components(route_progress_delta_m=0.02, **common)
+        reverse = compute_reward_components(route_progress_delta_m=-0.02, **common)
+
+        self.assertAlmostEqual(forward["route_progress"], 0.2)
+        self.assertAlmostEqual(forward["total"], 0.2)
+        self.assertAlmostEqual(reverse["route_progress"], -0.2)
+        self.assertAlmostEqual(reverse["total"], -0.2)
+
+    def test_reward_breakdown_collision_default_is_minus_one_hundred(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=0.0,
+            route_progress_delta_m=0.0,
+            collision_event=True,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(),
+        )
+        self.assertEqual(components["collision"], -100.0)
+        self.assertEqual(components["total"], -100.0)
 
     def test_closed_route_wrap_increases_global_frontier(self) -> None:
         points = np.asarray([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], dtype=float)

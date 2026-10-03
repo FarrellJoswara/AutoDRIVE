@@ -124,7 +124,8 @@ class _Publisher:
             if now < self._backoff_until:
                 continue
             try:
-                session.post(self.url, json=item, timeout=(0.5, 1.0))
+                target_url = item.pop("_endpoint", self.url)
+                session.post(target_url, json=item, timeout=(0.5, 1.0))
                 self._failures = 0
             except Exception:
                 self._failures += 1
@@ -179,6 +180,24 @@ class HubTelemetryCallback(BaseCallback):
         self._last_yaw = {}
         self._last_collision_counts = {}
         self._episode_collision_counts = {}
+        self._publish_phase("rollout")
+
+    def _publish_phase(self, phase: str) -> None:
+        if self._pub is not None:
+            self._pub.enqueue({
+                "kind": "phase",
+                "phase": phase,
+                "step": int(self.num_timesteps),
+                "run_id": self.run_id,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "_endpoint": self.hub_url.rstrip("/") + "/api/train/phase",
+            })
+
+    def _on_rollout_end(self) -> None:
+        self._publish_phase("ppo_update")
+
+    def _on_rollout_start(self) -> None:
+        self._publish_phase("rollout")
 
     def _on_step(self) -> bool:
         if self._pub is None:
@@ -330,11 +349,20 @@ class HubTelemetryCallback(BaseCallback):
                         "episode_return": None,
                         "frontier_line": None,
                         "frontier_progress_m": None,
+                        "current_progress_line": None,
+                        "current_progress_m": None,
+                        "signed_route_delta_m": None,
+                        "current_route_speed_mps": None,
+                        "route_projection_valid": False,
+                        "reward_components": None,
                         "time_since_frontier_push_s": None,
                         "frontier_speed_mps": None,
                         **_lap_fields(info),
                         "lidar": [],
                         "reset": True,
+                        "reset_reason": info.get("termination_reason")
+                        or info.get("truncate_reason")
+                        or "episode_end",
                     }
                 )
                 continue
@@ -366,13 +394,16 @@ class HubTelemetryCallback(BaseCallback):
                 "env_id": i,
                 "pose": pose,
                 "yaw": yaw,
-                "collision": episode_collision_counts[i] > 0
-                if i < len(episode_collision_counts)
-                else False,
+                # This is a per-step event flash. Keep the accumulated episode
+                # contact count separate so old hits do not mark a respawned car.
+                "collision": bool(info.get("collision_event", False)),
                 "collision_count": episode_collision_counts[i]
                 if i < len(episode_collision_counts)
                 else 0,
                 "speed": speed,
+                "v_long": info.get("v_long"),
+                "throttle_command": info.get("throttle_command"),
+                "steering_command": info.get("steering_command"),
                 "episode_return": (
                     float(self._ep_returns[i])
                     if self._ep_returns is not None and i < len(self._ep_returns)
@@ -381,6 +412,12 @@ class HubTelemetryCallback(BaseCallback):
                 "reset": False,
                 "frontier_line": info.get("frontier_line"),
                 "frontier_progress_m": info.get("frontier_progress_m"),
+                "current_progress_line": info.get("current_progress_line"),
+                "current_progress_m": info.get("current_progress_m"),
+                "signed_route_delta_m": info.get("signed_route_delta_m"),
+                "current_route_speed_mps": info.get("current_route_speed_mps"),
+                "route_projection_valid": bool(info.get("route_projection_valid", False)),
+                "reward_components": info.get("reward_components"),
                 "time_since_frontier_push_s": info.get("time_since_frontier_push_s"),
                 "frontier_speed_mps": info.get("frontier_speed_mps"),
                 **_lap_fields(info),
@@ -413,6 +450,7 @@ class HubTelemetryCallback(BaseCallback):
 
     def _on_training_end(self) -> None:
         if self._pub is not None:
+            self._publish_phase("stopped")
             self._pub.stop(join_timeout=2.0)
             self._pub = None
 

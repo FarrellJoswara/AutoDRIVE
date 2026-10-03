@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from os import scandir
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.layer4.hub.map_activate import activate_map
 from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
+from src.layer4.hub.replay_job import ReplayJob
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
 from src.layer4.hub.train_job import TrainJob
 from src.layer4.settings import ROOT, Settings, load_settings, save_settings
@@ -41,6 +43,7 @@ HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
 job = TrainJob(hub_url=HUB_PUBLIC_URL, on_status=lambda s: bus.publish_status(s))
+replay_job = ReplayJob(hub_url=HUB_PUBLIC_URL, on_status=lambda s: bus.publish_replay_status(s))
 _settings: Settings = load_settings()
 
 
@@ -49,7 +52,30 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     bus.bind_loop(asyncio.get_running_loop())
-    yield
+    # A hard hub restart can leave the standalone replay simulator behind.
+    # It is safe to remove at startup because no ReplayJob process survives
+    # the previous hub process.
+    try:
+        from src.layer4.hub.docker_control import remove_replay_sim
+
+        await asyncio.to_thread(remove_replay_sim)
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        # Stop the Layer 3 process first; its exit watcher also removes Docker.
+        # Then remove unconditionally to cover an already-exited process.
+        try:
+            await asyncio.to_thread(replay_job.stop)
+        except Exception:
+            pass
+        try:
+            from src.layer4.hub.docker_control import remove_replay_sim
+
+            await asyncio.to_thread(remove_replay_sim)
+        except Exception:
+            pass
 
 
 app = FastAPI(title="AiCar Mission Control", version="0.1.0", lifespan=lifespan)
@@ -85,6 +111,17 @@ async def api_shutdown(request: Request) -> Dict[str, Any]:
         train_status = await asyncio.to_thread(job.stop)
     except Exception:
         train_status = None
+
+    try:
+        await asyncio.to_thread(replay_job.stop)
+    except Exception:
+        pass
+    try:
+        from src.layer4.hub.docker_control import remove_replay_sim
+
+        await asyncio.to_thread(remove_replay_sim)
+    except Exception:
+        pass
 
     if stop_stack:
         try:
@@ -425,6 +462,7 @@ async def train_status() -> Dict[str, Any]:
     st = job.status()
     st["last_telemetry"] = bus.last_metrics
     st["last_fleet"] = bus.last_fleet
+    st["last_train_phase"] = bus.last_train_phase
     return st
 
 
@@ -445,11 +483,11 @@ async def train_start(request: Request) -> Dict[str, Any]:
             settings = Settings.model_validate(raw)
     except Exception:
         pass
-    if settings.stop_after_laps > 0:
+    if settings.stop_after_laps > 0 or settings.laps_per_episode > 0:
         if settings.map_id == "none":
             raise HTTPException(
                 status_code=400,
-                detail="lap-based stopping requires a map with a supported centerline",
+                detail="lap goals require a map with a supported closed centerline",
             )
         from src.layer2.lap_tracker import map_lap_gate_config
 
@@ -460,7 +498,7 @@ async def train_start(request: Request) -> Dict[str, Any]:
         if not gate.get("supported"):
             raise HTTPException(
                 status_code=400,
-                detail=f"lap-based stopping is unavailable: {gate.get('reason', 'unsupported map')}",
+                detail=f"lap goals are unavailable: {gate.get('reason', 'unsupported map')}",
             )
     _settings = settings
     try:
@@ -506,6 +544,8 @@ async def train_start(request: Request) -> Dict[str, Any]:
 
     try:
         # Popen can stall briefly on Windows; never block the event loop.
+        if job.status().get("state") not in {"starting", "running", "stopping"}:
+            bus.clear_train_phase()
         return await asyncio.to_thread(job.start, settings)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -518,6 +558,119 @@ async def train_stop() -> Dict[str, Any]:
     import asyncio
 
     return await asyncio.to_thread(job.stop)
+
+
+@app.get("/api/replay/models")
+async def replay_models() -> list[Dict[str, Any]]:
+    import asyncio
+
+    models_root = (ROOT / "logs" / "rl").resolve()
+    if not models_root.is_dir():
+        return []
+
+    def scan() -> list[Dict[str, Any]]:
+        models: list[Dict[str, Any]] = []
+        try:
+            runs = list(scandir(models_root))
+        except OSError:
+            return []
+        for run in runs:
+            if not run.is_dir(follow_symlinks=False):
+                continue
+            candidates: list[Path] = []
+            try:
+                with scandir(run.path) as entries:
+                    candidates.extend(
+                        Path(entry.path) for entry in entries
+                        if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".zip")
+                    )
+                checkpoint_dir = Path(run.path) / "ckpt"
+                if checkpoint_dir.is_dir():
+                    with scandir(checkpoint_dir) as entries:
+                        checkpoints = [
+                            (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
+                            for entry in entries
+                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".zip")
+                        ]
+                    candidates.extend(path for _, path in sorted(checkpoints, reverse=True)[:5])
+            except OSError:
+                continue
+            for path in candidates:
+                try:
+                    stat = path.stat()
+                    relative = path.relative_to(models_root).as_posix()
+                except OSError:
+                    continue
+                models.append({
+                    "id": relative,
+                    "label": f"{run.name}/{path.name}",
+                    "modified": stat.st_mtime,
+                })
+        return sorted(models, key=lambda model: model["modified"], reverse=True)[:200]
+
+    return await asyncio.to_thread(scan)
+
+
+@app.get("/api/replay/status")
+async def replay_status() -> Dict[str, Any]:
+    result = replay_job.status()
+    result["last_fleet"] = bus.last_replay_fleet
+    return result
+
+
+@app.post("/api/replay/start")
+async def replay_start(request: Request) -> Dict[str, Any]:
+    import asyncio
+
+    try:
+        body = await request.json()
+        model_id = str(body.get("model_id", "")).strip()
+        map_id = str(body.get("map_id", "none")).strip() or "none"
+        seed = int(body.get("seed", 0))
+        device = str(body.get("device", "auto"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid replay settings") from exc
+    if device not in {"auto", "cpu", "cuda"}:
+        raise HTTPException(status_code=400, detail="device must be auto, cpu, or cuda")
+    models_root = (ROOT / "logs" / "rl").resolve()
+    model_path = (models_root / model_id).resolve()
+    try:
+        model_path.relative_to(models_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid model selection") from exc
+    if not model_path.is_file() or model_path.suffix.lower() != ".zip":
+        raise HTTPException(status_code=404, detail="checkpoint not found")
+    if map_id != "none":
+        map_entry = next((m for m in list_maps_api(MAPS_DIR) if m.get("id") == map_id), None)
+        if map_entry is None:
+            raise HTTPException(status_code=404, detail=f"unknown map: {map_id}")
+        if map_entry.get("mesh_status") != "ready":
+            raise HTTPException(status_code=400, detail=f"map is not ready for replay: {map_id}")
+    try:
+        return await asyncio.to_thread(
+            replay_job.start, model_path=model_path, map_id=map_id, seed=seed, device=device
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/replay/stop")
+async def replay_stop() -> Dict[str, Any]:
+    import asyncio
+
+    return await asyncio.to_thread(replay_job.stop)
+
+
+@app.post("/api/replay/reset")
+async def replay_reset() -> Dict[str, Any]:
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(replay_job.reset)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/settings")
@@ -541,7 +694,21 @@ async def post_telemetry(request: Request) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="invalid JSON") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be object")
-    bus.publish("telemetry", payload)
+    bus.publish("replay_telemetry" if payload.get("channel") == "replay" else "telemetry", payload)
+    return {"ok": "1"}
+
+
+@app.post("/api/train/phase")
+async def post_train_phase(request: Request) -> Dict[str, str]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON") from exc
+    if not isinstance(payload, dict) or payload.get("kind") != "phase":
+        raise HTTPException(status_code=400, detail="invalid training phase payload")
+    if payload.get("phase") not in {"rollout", "ppo_update", "stopped"}:
+        raise HTTPException(status_code=400, detail="invalid training phase")
+    bus.publish_train_phase(payload)
     return {"ok": "1"}
 
 
@@ -553,6 +720,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     # Resync: push last known status + telemetry
     try:
         await ws.send_json({"type": "status", "payload": job.status()})
+        await ws.send_json({"type": "replay_status", "payload": replay_job.status()})
         for ev in bus.snapshot_for_client():
             await ws.send_json(ev)
     except Exception:

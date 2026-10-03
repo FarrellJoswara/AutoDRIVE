@@ -16,22 +16,29 @@ That is the easy start. It will:
 
 1. Check Docker Desktop is running  
 2. Download the AutoDRIVE simulator zip from GitHub Releases if `./simulator/` is missing  
-3. `docker compose up --build` (brain + initial sim; Train scales the pool)  
+3. Reuse cached brain/sim images; build only images that are missing
 4. Wait until Mission Control is healthy  
 5. Open **http://127.0.0.1:8090** in your browser  
+
+The web UI is bundled and served by the brain container; there is no separate
+web container. `main.py` rebuilds the small local web bundle only when its source
+is newer. It does not rebuild or pull the large CUDA brain image on normal starts.
 
 | Command | What it does |
 | :--- | :--- |
 | `python main.py` | Start everything + open UI |
 | `python main.py --sims 4` | Same, but 4 sim containers |
+| `python main.py --build` | Force rebuild both Docker images |
+| `python main.py --no-build` | Use cached images only; fail if either is missing |
 | `python main.py --stop` | Tear the stack down |
 
-**Requirements:** Docker Desktop running. First run builds images (can take a while).  
-**UI:** http://127.0.0.1:8090 — Settings · Train · Live · Fleet  
+**Requirements:** Docker Desktop running. The first run builds an image only if it is missing; this can take a while.
+**UI:** http://127.0.0.1:8090 — Train · Maps · Watch · Replay
 
-Simulator binaries stay gitignored; they live in the
-[`simulator-binaries`](https://github.com/FarrellJoswara/AutoDRIVE/releases/tag/simulator-binaries)
-release (`autodrive-simulator.zip`). `main.py` fetches that automatically.
+The Docker simulator player is included under `simulator/` for an out-of-box
+clone. If the Linux player is missing, `main.py` downloads the
+[`autodrive-simulator.zip` release](https://github.com/FarrellJoswara/AutoDRIVE/releases/tag/simulator-binaries)
+automatically.
 
 ---
 
@@ -42,35 +49,26 @@ release (`autodrive-simulator.zip`). `main.py` fetches that automatically.
 | **Layer 1** — `src/layer1/` | **Verified** (headed + headless, multi-instance, reset, kill) |
 | **Layer 2** — `src/layer2/` | **Implemented** |
 | **Layer 3** — PPO / 1D-CNN | **Implemented** (`src/layer3/`) — see [`LAYER3.md`](LAYER3.md) |
-| **Layer 4** — Mission Control | **Implemented** (hub + Settings/Train/Live/Fleet canvas) — see guide below + [`UI.md`](UI.md) |
+| **Layer 4** — Mission Control | **Implemented** (Train, Maps, Watch, Replay; training and replay use separate simulator sessions) — see [`UI.md`](UI.md) |
 | **Docker (A sim × N + B brain)** | **Working** — compose + hub on `:8090`; see [`docker/README.md`](docker/README.md) |
 
-Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · [`src/layer3/README.md`](src/layer3/README.md) · [`LAYER3.md`](LAYER3.md) · [`UI.md`](UI.md) · [`PLAN.md`](PLAN.md) · [`docker/README.md`](docker/README.md).
+Layer docs: [`src/layer1/README.md`](src/layer1/README.md) · [`src/layer2/README.md`](src/layer2/README.md) · [`src/layer3/README.md`](src/layer3/README.md) · [`LAYER3.md`](LAYER3.md) · [`UI.md`](UI.md) · [`docker/README.md`](docker/README.md). [`PLAN.md`](PLAN.md) records the original project plan.
 
 ---
 
-## TODO
+## What is included
 
-1. **Layer 3 — PPO training** — see **[`LAYER3.md`](LAYER3.md)**
-   - [x] `src/layer3/` — extractors, `envs.py`, `train.py`, `play.py`
-   - [x] Smoke: `train --n-envs 1` / `2`; checkpoints + TensorBoard under `logs/rl/`
-   - [x] `play` loads `.zip`; `SubprocVecEnv(..., start_method="spawn")` so gevent Socket.IO binds in Docker
+- **Training:** PPO with parallel simulator environments, checkpoints, run
+  duration limits, automatic simulator scaling, and automatic stop handling.
+- **Track progress:** route progress rewards, collision termination, lap gates,
+  and per-episode lap timing for supported closed tracks.
+- **Mission Control:** Train, Maps, Watch, and Replay pages. Replay runs in a
+  separate simulator session so it does not compete with active training.
+- **Map assets and tools:** map upload, validation, centerline generation, and
+  simulator mesh loading. See [`simulator/maps/README.md`](simulator/maps/README.md).
 
-2. **Docker — A (sim) / B (brain)**
-   - [x] `Dockerfile.sim` / `Dockerfile.brain` (CUDA torch cu124 pinned)
-   - [x] Compose: brain + scaled sims; ports `4567–4582`; Mission Control on `:8090`
-   - [x] End-to-end: 2 sims × 10k CUDA train via hub; fleet telemetry on canvas
-   - [ ] Harden sim connect / auto-stop / image rebuild ergonomics (still rough)
-
-3. **Mission Control — Layer 4**
-   - [x] FastAPI hub + Popen TrainJob + full Settings
-   - [x] Vite/React on brain B (static on `:8090`)
-   - [x] Live WS + Fleet canvas (map / cars / LiDAR / collision X)
-   - [ ] LiDAR angle calibration (defaults may be wrong); polish; Phase N+ hyperparams
-
-4. **Everything else**
-   - [ ] Reward Phase 2 (waypoints / lap progress)
-   - [ ] Competition packaging
+For the Layer 3 training model and commands, see [`LAYER3.md`](LAYER3.md).
+For the current UI and hub design, see [`UI.md`](UI.md).
 
 ---
 
@@ -152,7 +150,7 @@ Training PPO against Unity is awkward from a bare terminal:
 | :--- | :--- |
 | **Train child** | `env.step`, PPO `learn()`, Socket.IO servers on `base_port…` |
 | **Hub** | Start/stop child, Settings JSON, fan-out telemetry to browsers |
-| **Browser** | Forms, charts-ish live numbers, Fleet **canvas** (draw only) |
+| **Browser** | Training controls, maps, watch telemetry, and interactive replay |
 | **RaceTrack** | **Not** on the train path (fleet helper for demos only) |
 
 If two things call `step`, you get double-step bugs. The UI must **not** drive the car during train.
@@ -168,7 +166,7 @@ src/layer4/
 │   ├── telemetry.py     # in-process TelemetryBus + WS fan-out
 │   └── docker_control.py # stop sim (or full stack) via Docker socket when train ends
 └── web/                 # Vite + React + TypeScript
-    ├── src/pages/       # Settings, Train, Live, Fleet
+    ├── src/pages/       # Train, Maps, Watch, Replay
     └── src/fleet/       # Canvas 2D map / cars / LiDAR
 
 src/layer3/hub_callback.py   # SB3 callback: enqueue telemetry (never block learn)
@@ -257,7 +255,7 @@ Layers bottom → top:
 
 1. **Map** — occupancy under `simulator/maps/<id>/occupancy/` (auto-listed via `GET /api/maps`) or grid fallback. Metre scale from yaml `resolution` / `origin`. **Activate** writes `maps/.active_map.json` and restarts compose sims; TrackLoader (custom player) loads `mesh/*.obj` at boot — see `simulator/unity/README.md`.
 2. **Cars** — pose on Unity **X–Z** ground (Y is up).
-3. **LiDAR** — rays for selected car (angles are **calibrated defaults** in `lidarCalibration.ts` — may need a wall-tune later).
+3. **LiDAR** — rays for the selected car using the configured calibration in `lidarCalibration.ts`.
 4. **Collision** — crashed car drawn as **X**.
 
 Toggles: Map / Fleet / LiDAR / track select. Side panel: episode, steps, return, collision, speed, stale flag.
@@ -317,19 +315,21 @@ docker compose restart brain   # pick up bind-mounted dist
 
 | Symptom | Likely cause |
 | :--- | :--- |
-| Fleet still says “Canvas placeholder” | Browser/cache or hub serving old baked static — rebuild web + restart brain + hard-refresh |
+| A UI change does not appear | Rebuild the web bundle, restart the brain container, then hard-refresh the browser |
 | Train “running” but no progress; sims connection refused | Ports 4567+ not listening — check `spawn` fix; ensure train actually started listeners |
 | `vmmem` huge CPU/RAM | WSL2 VM holding Docker + Unity sims — stop sims / `docker compose stop` when done |
 | CUDA unavailable in brain | Wrong torch CUDA tag vs host driver — image pins **cu124** |
 | Hub frozen on Start/Stop | Fixed deadlock: don’t call status while holding the same lock; start/stop use `asyncio.to_thread` |
 | Child exits immediately locally | Venv missing train deps — install `requirements.txt` or use brain image |
 
-## What is still scuffed / next
+## Operational notes
 
-- LiDAR beam **angles** not measured from AutoDRIVE yet (defaults).
-- Auto-stop / docker.sock permissions / image bake vs bind-mount still need polish.
-- Hyperparameter surgery (live LR / net arch) is **not** day-1 — Settings = CLI flags only.
-- Redis is **not** used; in-process `TelemetryBus` is enough until multi-host fan-out.
+- The train page exposes the supported start-of-run settings. Live policy and
+  network changes are not supported during a run.
+- Fleet telemetry can become stale while PPO updates its policy. The Watch page
+  reports sample age rather than inventing car movement between samples.
+- The hub uses an in-process telemetry bus. Redis is not required for a
+  single-host deployment.
 
 For architecture decisions and phase checklist, read **[`UI.md`](UI.md)** next.
 

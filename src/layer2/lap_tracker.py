@@ -37,6 +37,8 @@ class LapTracker:
         self._start_progress: Optional[float] = None
         self._next_lap_progress: Optional[float] = None
         self._lap_started_at: Optional[float] = None
+        self._lap_frontier_start_m: Optional[float] = None
+        self._attempt_started_at: Optional[float] = None
         self._timing_started = False
         self._previous_progress: Optional[float] = None
         self._previous_time: Optional[float] = None
@@ -56,6 +58,8 @@ class LapTracker:
         if distance_to_gate <= 0.05:
             self._next_lap_progress = start_progress + self.length_m
             self._lap_started_at = float(now)
+            self._lap_frontier_start_m = start_progress
+            self._attempt_started_at = float(now)
             self._timing_started = True
         self._previous_progress = start_progress
         self._previous_time = float(now)
@@ -63,6 +67,9 @@ class LapTracker:
             self.lap_gate = self.route.gate_line_at(gate_s)
 
     def update(self, progress_m: Optional[float], now: float) -> Dict[str, Any]:
+        completed_frontier_speed = None
+        completed_attempt_elapsed_s = None
+        completed_attempt_average_frontier_speed_mps = None
         if self.supported and progress_m is not None and self._next_lap_progress is not None:
             progress = float(progress_m)
             stamp = float(now)
@@ -91,6 +98,8 @@ class LapTracker:
                     # crossing completes a full lap.
                     self._timing_started = True
                     self._lap_started_at = crossing_time
+                    self._lap_frontier_start_m = crossing_progress
+                    self._attempt_started_at = crossing_time
                 else:
                     lap_started_at = (
                         crossing_time
@@ -100,6 +109,25 @@ class LapTracker:
                     lap_time = max(0.0, crossing_time - lap_started_at)
                     self.lap_count += 1
                     self.last_lap_time_s = lap_time
+                    frontier_start = (
+                        crossing_progress - self.length_m
+                        if self._lap_frontier_start_m is None
+                        else self._lap_frontier_start_m
+                    )
+                    frontier_distance = max(0.0, crossing_progress - frontier_start)
+                    completed_frontier_speed = (
+                        frontier_distance / lap_time if lap_time > 0.0 else 0.0
+                    )
+                    self._lap_frontier_start_m = crossing_progress
+                    if self._attempt_started_at is not None:
+                        completed_attempt_elapsed_s = max(
+                            0.0, crossing_time - self._attempt_started_at
+                        )
+                        completed_distance = self.lap_count * self.length_m
+                        completed_attempt_average_frontier_speed_mps = (
+                            completed_distance / completed_attempt_elapsed_s
+                            if completed_attempt_elapsed_s > 0.0 else 0.0
+                        )
                     if self.best_lap_time_s is None or lap_time < self.best_lap_time_s:
                         self.best_lap_time_s = lap_time
                     self._lap_started_at = crossing_time
@@ -107,7 +135,13 @@ class LapTracker:
 
             self._previous_progress = progress
             self._previous_time = stamp
-        return self.sample(float(now))
+        result = self.sample(float(now))
+        result["completed_lap_frontier_speed_mps"] = completed_frontier_speed
+        result["completed_attempt_elapsed_s"] = completed_attempt_elapsed_s
+        result["completed_attempt_average_frontier_speed_mps"] = (
+            completed_attempt_average_frontier_speed_mps
+        )
+        return result
 
     def sample(self, now: float) -> Dict[str, Any]:
         elapsed = None
