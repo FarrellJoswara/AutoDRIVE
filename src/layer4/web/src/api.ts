@@ -40,6 +40,9 @@ export interface Settings {
   plateau_window_timesteps: number;
   plateau_patience: number;
   plateau_min_improvement_pct: number;
+  plateau_min_successful_laps: number;
+  expert_pretrain_steps: number;
+  curriculum_single_lap_successes: number;
   out: string | null;
   run_name: string | null;
   seed: number;
@@ -57,7 +60,9 @@ export interface Settings {
   forward_scale: number;
   backward_speed_penalty_scale: number;
   route_progress_scale: number;
+  time_penalty_per_second: number;
   collision_penalty: number;
+  episode_failure_penalty: number;
   slip_penalty: number;
   steer_jerk_penalty: number;
   lap_time_reward_scale: number;
@@ -100,6 +105,9 @@ export interface MetricsTelemetry {
   reward: number;
   episode: number;
   loss: number | null;
+  completed_laps?: number;
+  clean_episode_wins?: number;
+  best_lap_time_s?: number | null;
   checkpoint: string | null;
   run_id: string;
   ts: string;
@@ -131,12 +139,14 @@ export interface FleetCar {
   route_projection_valid?: boolean;
   reward_components?: {
     route_progress?: number;
+    reverse_direction_gate?: number;
     backward_motion?: number;
+    time_cost?: number;
     collision?: number;
+    episode_failure?: number;
     lap_bonus?: number;
     slip?: number;
     steering_change?: number;
-    raw_forward_velocity?: number;
     total?: number;
   } | null;
   time_since_frontier_push_s?: number | null;

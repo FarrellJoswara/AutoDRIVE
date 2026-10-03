@@ -438,20 +438,6 @@ class AutoDriveEnv(gym.Env):
             else None
         )
 
-        # Score this step (all reward math lives in rewards.py).
-        reward_components = compute_reward_components(
-            v_long=float(snap.v_long),
-            step_duration_s=self.frame_skip / SIMULATION_HZ,
-            route_progress_delta_m=(progress["current_delta_m"] if progress is not None else None),
-            clean_run_average_frontier_speed_mps=average_frontier_speed_mps,
-            collision_event=collision_event,
-            slip_angle=float(snap.slip_angle),
-            prev_steering=self._prev_steering,
-            steering=steering,
-            cfg=self.reward_config,
-        )
-        reward = reward_components["total"]
-
         # Bookkeeping for truncation rules.
         self._episode_steps += 1
         if abs(float(snap.v_long)) < self.stagnation_speed_threshold:
@@ -493,6 +479,27 @@ class AutoDriveEnv(gym.Env):
         truncated = bool(
             (hit_idle_stagnation or hit_max_steps) and not terminated
         )
+
+        # A failed terminal step receives one episode-level cost. A collision
+        # already has its own event penalty, so rewards.py avoids charging both.
+        episode_failure = bool((terminated or truncated) and not clean_episode_win)
+
+        # Reward only newly advanced frontier distance, plus time cost and
+        # failure costs. Current route movement is telemetry, never a second
+        # positive reward for recovering ground already pushed before.
+        reward_components = compute_reward_components(
+            v_long=float(snap.v_long),
+            step_duration_s=self.frame_skip / SIMULATION_HZ,
+            frontier_advanced_m=(progress["advanced_m"] if progress is not None else None),
+            clean_run_average_frontier_speed_mps=average_frontier_speed_mps,
+            collision_event=collision_event,
+            episode_failure=episode_failure,
+            slip_angle=float(snap.slip_angle),
+            prev_steering=self._prev_steering,
+            steering=steering,
+            cfg=self.reward_config,
+        )
+        reward = reward_components["total"]
 
         obs = snapshot_to_obs(
             snap,
@@ -611,3 +618,35 @@ class AutoDriveEnv(gym.Env):
     def set_simulation_paused(self, paused: bool) -> None:
         """Synchronize the simulator with PPO's rollout/update phases."""
         self.racer.set_simulation_paused(paused)
+
+    def resume_simulation(self) -> None:
+        """Resume the attached Unity player even if pause state predates this env."""
+        self.racer.resume_simulation()
+
+    def set_laps_per_episode(self, laps: int) -> None:
+        """Update the episode target for a Layer 3 curriculum transition."""
+        laps = int(laps)
+        if laps < 0:
+            raise ValueError("laps_per_episode must be >= 0")
+        self.laps_per_episode = laps
+
+    def get_current_info(self) -> Dict[str, Any]:
+        """Return current diagnostics for Layer 3's demonstration labeler.
+
+        This info remains outside the observation consumed by the learned
+        policy. In particular, map route progress is never copied into obs.
+        """
+        info = self._build_info(
+            self._last_snap,
+            reward=0.0,
+            collision_event=False,
+            throttle_command=self._prev_throttle,
+            steering_command=self._prev_steering,
+        )
+        if self.route_progress is not None:
+            progress = self.route_progress.sample(self._progress_time(self._last_snap))
+            info.update({
+                "current_progress_m": progress["current_progress_m"],
+                "frontier_progress_m": progress["progress_m"],
+            })
+        return info

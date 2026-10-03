@@ -117,7 +117,7 @@ class RouteProgressTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.linalg.norm(b - a)), 3.0, places=5)
         self.assertAlmostEqual(float(a[0]), float(b[0]), places=5)
 
-    def test_route_reward_uses_signed_route_delta_instead_of_raw_speed(self) -> None:
+    def test_only_new_frontier_progress_earns_reward(self) -> None:
         cfg = RewardConfig(forward_scale=1.0, route_progress_scale=10.0)
         no_progress = compute_reward(
             v_long=8.0,
@@ -131,6 +131,7 @@ class RouteProgressTests(unittest.TestCase):
         actual_progress = compute_reward(
             v_long=0.0,
             route_progress_delta_m=0.2,
+            frontier_advanced_m=0.2,
             collision_event=False,
             slip_angle=0.0,
             prev_steering=0.0,
@@ -140,8 +141,21 @@ class RouteProgressTests(unittest.TestCase):
         self.assertEqual(no_progress, 0.0)
         self.assertAlmostEqual(actual_progress, 2.0)
 
+        # Current route movement (including recovering previously visited
+        # ground) and raw speed are not paid without a new frontier push.
+        recovered_ground = compute_reward(
+            v_long=8.0,
+            route_progress_delta_m=0.2,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=cfg,
+        )
+        self.assertEqual(recovered_ground, 0.0)
+
     def test_backward_motion_penalty_scales_with_reverse_distance(self) -> None:
-        cfg = RewardConfig(backward_speed_penalty_scale=2.0)
+        cfg = RewardConfig(backward_speed_penalty_scale=2.0, time_penalty_per_second=0.0)
         reward = compute_reward(
             v_long=-1.0,
             step_duration_s=0.5,
@@ -155,7 +169,7 @@ class RouteProgressTests(unittest.TestCase):
         self.assertAlmostEqual(reward, -0.9)
 
     def test_backward_deadband_and_forward_motion_are_unpenalized(self) -> None:
-        cfg = RewardConfig(backward_speed_penalty_scale=2.0)
+        cfg = RewardConfig(backward_speed_penalty_scale=2.0, time_penalty_per_second=0.0)
         common = dict(
             step_duration_s=0.5,
             route_progress_delta_m=0.0,
@@ -168,10 +182,14 @@ class RouteProgressTests(unittest.TestCase):
         self.assertEqual(compute_reward(v_long=-0.05, **common), 0.0)
         self.assertEqual(compute_reward(v_long=1.0, **common), 0.0)
 
-    def test_signed_route_reward_pays_forward_and_penalizes_reverse(self) -> None:
+    def test_frontier_reward_requires_new_advance_and_not_body_reverse(self) -> None:
         from src.layer2.rewards import compute_reward_components
 
-        cfg = RewardConfig(route_progress_scale=10.0, backward_speed_penalty_scale=1.0)
+        cfg = RewardConfig(
+            route_progress_scale=10.0,
+            backward_speed_penalty_scale=1.0,
+            time_penalty_per_second=0.0,
+        )
         common = dict(
             v_long=0.0,
             step_duration_s=0.025,
@@ -181,13 +199,84 @@ class RouteProgressTests(unittest.TestCase):
             steering=0.0,
             cfg=cfg,
         )
-        forward = compute_reward_components(route_progress_delta_m=0.02, **common)
-        reverse = compute_reward_components(route_progress_delta_m=-0.02, **common)
+        forward = compute_reward_components(frontier_advanced_m=0.02, **common)
+        no_new_record = compute_reward_components(frontier_advanced_m=0.0, **common)
 
         self.assertAlmostEqual(forward["route_progress"], 0.2)
         self.assertAlmostEqual(forward["total"], 0.2)
-        self.assertAlmostEqual(reverse["route_progress"], -0.2)
-        self.assertAlmostEqual(reverse["total"], -0.2)
+        self.assertEqual(no_new_record["route_progress"], 0.0)
+        self.assertEqual(no_new_record["total"], 0.0)
+
+    def test_route_progress_reward_is_withheld_while_car_moves_backward(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=-0.3,
+            step_duration_s=0.025,
+            frontier_advanced_m=0.03,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(
+                route_progress_scale=10.0,
+                backward_speed_penalty_scale=1.0,
+                backward_speed_deadband_mps=0.1,
+                time_penalty_per_second=0.0,
+            ),
+        )
+
+        self.assertEqual(components["route_progress"], 0.0)
+        self.assertAlmostEqual(components["reverse_direction_gate"], -0.3)
+        self.assertAlmostEqual(components["backward_motion"], -0.005)
+        self.assertAlmostEqual(components["total"], -0.305)
+
+    def test_reverse_direction_gate_respects_body_speed_deadband(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=-0.05,
+            frontier_advanced_m=0.02,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(route_progress_scale=10.0, time_penalty_per_second=0.0),
+        )
+
+        self.assertAlmostEqual(components["route_progress"], 0.2)
+        self.assertEqual(components["reverse_direction_gate"], 0.0)
+        self.assertEqual(components["backward_motion"], 0.0)
+
+    def test_time_and_noncollision_failure_are_costs(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=0.0,
+            step_duration_s=2.0,
+            frontier_advanced_m=0.0,
+            collision_event=False,
+            episode_failure=True,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(time_penalty_per_second=1.5, episode_failure_penalty=-80.0),
+        )
+        self.assertEqual(components["time_cost"], -3.0)
+        self.assertEqual(components["episode_failure"], -80.0)
+        self.assertEqual(components["total"], -83.0)
+
+    def test_no_frontier_map_never_rewards_raw_speed(self) -> None:
+        reward = compute_reward(
+            v_long=12.0,
+            step_duration_s=0.1,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(forward_scale=100.0, time_penalty_per_second=0.0),
+        )
+        self.assertEqual(reward, 0.0)
 
     def test_reward_breakdown_collision_default_is_minus_one_hundred(self) -> None:
         from src.layer2.rewards import compute_reward_components

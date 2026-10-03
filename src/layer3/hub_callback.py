@@ -164,6 +164,10 @@ class HubTelemetryCallback(BaseCallback):
         self._last_fleet_t = 0.0
         self._episode_count = 0
         self._ep_returns: Optional[np.ndarray] = None
+        self._last_episode_laps: Dict[int, int] = {}
+        self._completed_laps = 0
+        self._clean_episode_wins = 0
+        self._best_lap_time_s: Optional[float] = None
         # Unity's collision count survives environment respawns. Track its
         # per-step deltas to report contacts for the current training episode.
         self._last_collision_counts: Dict[int, int] = {}
@@ -176,6 +180,10 @@ class HubTelemetryCallback(BaseCallback):
         self._pub = _Publisher(self.hub_url)
         n = getattr(self.training_env, "num_envs", 1)
         self._ep_returns = np.zeros(n, dtype=np.float64)
+        self._last_episode_laps = {}
+        self._completed_laps = 0
+        self._clean_episode_wins = 0
+        self._best_lap_time_s = None
         self._last_pose = {}
         self._last_yaw = {}
         self._last_collision_counts = {}
@@ -203,6 +211,31 @@ class HubTelemetryCallback(BaseCallback):
         if self._pub is None:
             return True
 
+        infos = self.locals.get("infos")
+        dones = self.locals.get("dones")
+        if infos is not None:
+            for i, raw in enumerate(infos):
+                info = raw if isinstance(raw, dict) else {}
+                current_laps = max(0, int(info.get("lap_count", 0) or 0))
+                previous_laps = self._last_episode_laps.get(i, 0)
+                self._completed_laps += max(0, current_laps - previous_laps)
+                self._last_episode_laps[i] = current_laps
+                lap_time = info.get("best_lap_time_s")
+                if lap_time is not None:
+                    try:
+                        lap_time = float(lap_time)
+                        if np.isfinite(lap_time) and lap_time > 0:
+                            self._best_lap_time_s = (
+                                lap_time if self._best_lap_time_s is None
+                                else min(self._best_lap_time_s, lap_time)
+                            )
+                    except (TypeError, ValueError):
+                        pass
+                if dones is not None and i < len(dones) and bool(dones[i]):
+                    if bool(info.get("episode_won", False)):
+                        self._clean_episode_wins += 1
+                    self._last_episode_laps[i] = 0
+
         if self.num_timesteps % self.every_n == 0:
             rewards = self.locals.get("rewards")
             mean_r = 0.0
@@ -224,14 +257,15 @@ class HubTelemetryCallback(BaseCallback):
                 "reward": mean_r,
                 "episode": int(self._episode_count),
                 "loss": loss,
+                "completed_laps": int(self._completed_laps),
+                "clean_episode_wins": int(self._clean_episode_wins),
+                "best_lap_time_s": self._best_lap_time_s,
                 "checkpoint": None,
                 "run_id": self.run_id,
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             self._pub.enqueue(payload)
 
-        infos = self.locals.get("infos")
-        dones = self.locals.get("dones")
         if infos is not None and self._ep_returns is not None:
             rewards = self.locals.get("rewards")
             for i, info in enumerate(infos):

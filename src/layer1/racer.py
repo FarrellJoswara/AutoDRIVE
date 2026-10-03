@@ -395,6 +395,9 @@ class Racer:
     def set_simulation_paused(self, paused: bool) -> None:
         """Hold/resume Unity physics during PPO optimization updates."""
         paused = bool(paused)
+        if not paused:
+            self.resume_simulation()
+            return
         with self._simulation_pause_lock:
             if paused == self._simulation_paused:
                 return
@@ -404,26 +407,37 @@ class Racer:
                     "before the Unity Bridge is connected."
                 )
 
-            ack = (
-                self._simulation_pause_ack
-                if paused
-                else self._simulation_resume_ack
-            )
+            ack = self._simulation_pause_ack
             ack.clear()
-            event = (
-                "AICAR_SIMULATION_PAUSE"
-                if paused
-                else "AICAR_SIMULATION_RESUME"
-            )
-            self.sio.emit(event, to=self.client_sid)
+            self.sio.emit("AICAR_SIMULATION_PAUSE", to=self.client_sid)
             if not ack.wait(timeout=self.step_timeout):
                 raise TimeoutError(
                     f"[Racer {self.racer_id}] Unity did not acknowledge "
-                    f"simulation {'pause' if paused else 'resume'} within "
+                    "simulation pause within "
                     f"{self.step_timeout:.1f}s. Rebuild the simulator with "
                     "AiCarSimulationGate enabled."
                 )
             self._simulation_paused = paused
+
+    def resume_simulation(self) -> None:
+        """Force Unity physics to resume, even after reconnecting to a paused player."""
+        with self._simulation_pause_lock:
+            if not self._connected or not self.client_sid:
+                raise RuntimeError(
+                    f"[Racer {self.racer_id}] Cannot resume simulation "
+                    "before the Unity Bridge is connected."
+                )
+            ack = self._simulation_resume_ack
+            ack.clear()
+            self.sio.emit("AICAR_SIMULATION_RESUME", to=self.client_sid)
+            if not ack.wait(timeout=self.step_timeout):
+                raise TimeoutError(
+                    f"[Racer {self.racer_id}] Unity did not acknowledge "
+                    f"simulation resume within {self.step_timeout:.1f}s. "
+                    "Rebuild the simulator with AiCarSimulationGate enabled."
+                )
+            self._simulation_paused = False
+            self._mark_simulation_resumed()
 
     def _mark_simulation_paused(self) -> None:
         """Start excluding wall time once Unity confirms physics is held."""

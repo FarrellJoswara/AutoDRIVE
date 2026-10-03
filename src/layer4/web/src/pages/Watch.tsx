@@ -114,6 +114,18 @@ export function WatchPage() {
           <span>
             <strong>episode</strong> {metrics?.episode ?? "—"}
           </span>
+          <span>
+            <strong>laps</strong> {metrics?.completed_laps ?? 0}
+          </span>
+          <span>
+            <strong>clean wins</strong> {metrics?.clean_episode_wins ?? 0}
+          </span>
+          <span>
+            <strong>best lap</strong>{" "}
+            {metrics?.best_lap_time_s != null
+              ? `${metrics.best_lap_time_s.toFixed(2)} s`
+              : "—"}
+          </span>
           <span><strong>cars</strong> {cars.length}</span>
           <span className="meta">
             underlay <strong>{mapId}</strong>
@@ -132,6 +144,22 @@ export function WatchPage() {
               <tr>
                 <td>loss</td>
                 <td>{metrics?.loss != null ? metrics.loss.toFixed(6) : "—"}</td>
+              </tr>
+              <tr>
+                <td>completed_laps</td>
+                <td>{metrics?.completed_laps ?? 0}</td>
+              </tr>
+              <tr>
+                <td>clean_episode_wins</td>
+                <td>{metrics?.clean_episode_wins ?? 0}</td>
+              </tr>
+              <tr>
+                <td>best_lap_time_s</td>
+                <td>
+                  {metrics?.best_lap_time_s != null
+                    ? metrics.best_lap_time_s.toFixed(2)
+                    : "—"}
+                </td>
               </tr>
               <tr>
                 <td>run_id</td>
@@ -382,8 +410,11 @@ export function WatchPage() {
               {selected.reward_components && (
                 <>
                   <div><dt>Reward · progress</dt><dd>{(selected.reward_components.route_progress ?? 0).toFixed(3)}</dd></div>
+                  <div><dt>Reward · reverse gate</dt><dd>{(selected.reward_components.reverse_direction_gate ?? 0).toFixed(3)}</dd></div>
                   <div><dt>Reward · reverse</dt><dd>{(selected.reward_components.backward_motion ?? 0).toFixed(3)}</dd></div>
+                  <div><dt>Reward · time</dt><dd>{(selected.reward_components.time_cost ?? 0).toFixed(3)}</dd></div>
                   <div><dt>Reward · collision</dt><dd>{(selected.reward_components.collision ?? 0).toFixed(1)}</dd></div>
+                  <div><dt>Reward · failed episode</dt><dd>{(selected.reward_components.episode_failure ?? 0).toFixed(1)}</dd></div>
                   <div><dt>Reward · total</dt><dd>{(selected.reward_components.total ?? 0).toFixed(3)}</dd></div>
                 </>
               )}

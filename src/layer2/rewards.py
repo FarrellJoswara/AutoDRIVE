@@ -49,11 +49,10 @@ Default weight is 0.0 (off).
 
 Reward priorities
 -----------------
-On maps with route data, forward progress is the small shaping signal. Raw
-forward velocity is only used on maps without route data and defaults to zero.
-The main pace objective is one bonus at a clean target-lap finish, calculated
-from average frontier speed across the entire attempt; single-lap speed never
-adds reward by itself.
+New best-so-far frontier distance is the only positive per-step driving reward
+on mapped tracks. Time costs reward-efficient progress; reverse travel and
+failed episode endings cost reward. The clean target-lap pace bonus remains a
+terminal reward.
 """
 
 from __future__ import annotations
@@ -71,11 +70,11 @@ class RewardConfig:
     configured lap target.
     """
 
-    # Raw forward velocity is not a training objective on mapped tracks.
+    # Deprecated compatibility field. Raw velocity never earns reward.
     forward_scale: float = 0.0
 
-    # Small secondary cost for reversing relative to the car body. Signed route
-    # progress supplies the primary penalty for traveling backward on the map.
+    # Small secondary cost for reversing relative to the car body. The frontier
+    # cannot retreat, so reverse movement earns no progress reward.
     backward_speed_penalty_scale: float = 1.0
     backward_speed_deadband_mps: float = 0.1
 
@@ -83,11 +82,18 @@ class RewardConfig:
     # across all target laps. Per-lap pace is telemetry only.
     lap_time_reward_scale: float = 1000.0
 
-    # Signed shaping reward per metre of current route movement.
+    # Reward per metre of newly advanced high-water frontier.
     route_progress_scale: float = 10.0
+
+    # Cost per simulated second, including while making progress. This makes
+    # slower completion less profitable than faster completion over the same route.
+    time_penalty_per_second: float = 1.0
 
     # Collision penalty; termination is controlled independently by the env.
     collision_penalty: float = -100.0
+
+    # Applied once when a non-collision failure ends/truncates an episode.
+    episode_failure_penalty: float = -100.0
 
     # Subtracted as: slip_penalty * abs(slip_angle). Default 0.0 = ignore slip.
     slip_penalty: float = 0.0
@@ -102,8 +108,10 @@ def compute_reward_components(
     v_long: float,
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
+    frontier_advanced_m: float | None = None,
     clean_run_average_frontier_speed_mps: float | None = None,
     collision_event: bool,
+    episode_failure: bool = False,
     slip_angle: float,
     prev_steering: float,
     steering: float,
@@ -118,6 +126,10 @@ def compute_reward_components(
         Forward speed along the car nose (m/s), from TelemetrySnapshot.v_long.
     step_duration_s:
         Simulated time advanced by this environment step, in seconds.
+    frontier_advanced_m:
+        Newly pushed high-water frontier distance; the only per-step positive
+        driving signal. ``route_progress_delta_m`` is retained for callers that
+        still pass it, but is not used for reward.
     collision_event:
         True if this step counted as a new collision (env-detected).
     slip_angle:
@@ -143,12 +155,14 @@ def compute_reward_components(
     """
     components = {
         "route_progress": 0.0,
+        "reverse_direction_gate": 0.0,
         "backward_motion": 0.0,
+        "time_cost": 0.0,
         "collision": 0.0,
+        "episode_failure": 0.0,
         "lap_bonus": 0.0,
         "slip": 0.0,
         "steering_change": 0.0,
-        "raw_forward_velocity": 0.0,
     }
 
     # Penalize reverse travel by distance, not by action sign: negative throttle
@@ -161,14 +175,24 @@ def compute_reward_components(
         -float(cfg.backward_speed_penalty_scale) * reverse_distance_m
     )
 
-    # Prefer actual along-route frontier movement when the environment supplies
-    # it; raw velocity remains useful for the builtin track without a centerline.
-    if route_progress_delta_m is None:
-        components["raw_forward_velocity"] = cfg.forward_scale * float(v_long)
-    else:
-        components["route_progress"] = (
-            cfg.route_progress_scale * float(route_progress_delta_m)
-        )
+    # Only a new high-water frontier push earns step-wise progress reward.
+    # Signed current-position movement is deliberately ignored: recovering or
+    # retracing route distance must not pay a second time. Raw forward speed is
+    # also never a reward, including on maps without route geometry.
+    if frontier_advanced_m is not None:
+        route_reward = cfg.route_progress_scale * max(0.0, float(frontier_advanced_m))
+        reverse_deadband = max(0.0, float(cfg.backward_speed_deadband_mps))
+        if route_reward > 0.0 and float(v_long) < -reverse_deadband:
+            # Do not pay a new frontier push when the body-frame sensor says
+            # the car is travelling backward (e.g. tail-first).
+            components["reverse_direction_gate"] = -route_reward
+        else:
+            components["route_progress"] = route_reward
+
+    components["time_cost"] = (
+        -max(0.0, float(cfg.time_penalty_per_second))
+        * max(0.0, float(step_duration_s))
+    )
 
     if clean_run_average_frontier_speed_mps is not None:
         components["lap_bonus"] = cfg.lap_time_reward_scale * max(
@@ -178,6 +202,11 @@ def compute_reward_components(
     # Optional wall tax (default weight 0 → this adds nothing).
     if collision_event:
         components["collision"] = float(cfg.collision_penalty)
+
+    # Collision already receives its event penalty above. Other failed endings
+    # (frontier stall, idle timeout, or step cap) receive one terminal cost.
+    if episode_failure and not collision_event:
+        components["episode_failure"] = float(cfg.episode_failure_penalty)
 
     # Optional: discourage sideways sliding (default weight 0).
     components["slip"] = -float(cfg.slip_penalty) * abs(float(slip_angle))
@@ -196,8 +225,10 @@ def compute_reward(
     v_long: float,
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
+    frontier_advanced_m: float | None = None,
     clean_run_average_frontier_speed_mps: float | None = None,
     collision_event: bool,
+    episode_failure: bool = False,
     slip_angle: float,
     prev_steering: float,
     steering: float,
@@ -208,8 +239,10 @@ def compute_reward(
         v_long=v_long,
         step_duration_s=step_duration_s,
         route_progress_delta_m=route_progress_delta_m,
+        frontier_advanced_m=frontier_advanced_m,
         clean_run_average_frontier_speed_mps=clean_run_average_frontier_speed_mps,
         collision_event=collision_event,
+        episode_failure=episode_failure,
         slip_angle=slip_angle,
         prev_steering=prev_steering,
         steering=steering,

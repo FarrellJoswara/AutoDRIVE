@@ -26,6 +26,9 @@ class Settings(BaseModel):
     plateau_window_timesteps: int = Field(default=25_000, ge=1)
     plateau_patience: int = Field(default=5, ge=1)
     plateau_min_improvement_pct: float = Field(default=1.0, ge=0)
+    plateau_min_successful_laps: int = Field(default=10, ge=0)
+    expert_pretrain_steps: int = Field(default=0, ge=0)
+    curriculum_single_lap_successes: int = Field(default=10, ge=0)
     out: Optional[str] = None
     run_name: Optional[str] = None
     seed: int = 0
@@ -45,7 +48,9 @@ class Settings(BaseModel):
     forward_scale: float = 0.0
     backward_speed_penalty_scale: float = Field(default=1.0, ge=0)
     route_progress_scale: float = Field(default=10.0, ge=0)
+    time_penalty_per_second: float = Field(default=1.0, ge=0)
     collision_penalty: float = -100.0
+    episode_failure_penalty: float = -100.0
     slip_penalty: float = 0.2
     steer_jerk_penalty: float = 0.05
     lap_time_reward_scale: float = Field(default=1000.0, ge=0)
@@ -108,6 +113,12 @@ class Settings(BaseModel):
             str(self.plateau_patience),
             "--plateau-min-improvement-pct",
             str(self.plateau_min_improvement_pct),
+            "--plateau-min-successful-laps",
+            str(self.plateau_min_successful_laps),
+            "--expert-pretrain-steps",
+            str(self.expert_pretrain_steps),
+            "--curriculum-single-lap-successes",
+            str(self.curriculum_single_lap_successes),
             "--out",
             str(out),
             "--seed",
@@ -137,8 +148,12 @@ class Settings(BaseModel):
             str(self.backward_speed_penalty_scale),
             "--route-progress-scale",
             str(self.route_progress_scale),
+            "--time-penalty-per-second",
+            str(self.time_penalty_per_second),
             "--collision-penalty",
             str(self.collision_penalty),
+            "--episode-failure-penalty",
+            str(self.episode_failure_penalty),
             "--slip-penalty",
             str(self.slip_penalty),
             "--steer-jerk-penalty",

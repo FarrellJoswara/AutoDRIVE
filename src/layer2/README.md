@@ -75,10 +75,12 @@ LiDAR is scaled; state is **raw** (state scaling deferred).
 Default formula:
 
 ```text
-r  = route_progress_scale * signed_route_delta_m # mapped route, every step
-or forward_scale * v_long             # builtin map fallback
+r  = route_progress_scale * new_frontier_metres
+r -= time_penalty_per_second * simulated_seconds
 r -= backward_speed_penalty_scale * reverse_distance_m
-r += collision_penalty               # default -100 on a new collision
+r += collision_penalty                 # default -100 on collision
+r += episode_failure_penalty           # default -100 on other failed endings
+r += lap_bonus                         # only on clean target-lap completion
 r -= slip_penalty * |slip|           # default 0
 r -= steer_jerk_penalty * |Δsteer|   # default 0
 ```
@@ -87,20 +89,44 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 - **`collision_event`** — env-built: `snap.collision` or `collision_count` increased  
 - **`slip_angle`** — from snapshot  
 - **Steer jerk** — `|steering − prev_steering|` × weight (not a sensor)  
-- **`forward_scale`** is used only when training without a mapped centerline; mapped tracks use signed route progress
+- **`forward_scale`** is deprecated and ignored. Raw velocity never earns reward.
 
 `@dataclass` on `RewardConfig` only auto-builds a simple weight bag.
 
-When `map_id` selects a map with `occupancy/centerline.csv`, Layer 2 projects
-each pose onto the nearby route and rewards signed movement along it every step.
-Forward route movement earns reward; backward route movement loses reward. No
-reward depends on distance from the centerline. Separately, the frontier stays
-as a monotonic best-progress marker and still drives the frontier-stagnation
-rule, lap accounting, and frontier-speed telemetry. Watch receives both the
-moving current-position bar and the stationary-unless-beaten frontier. Builtin
-(`none`) training keeps the velocity fallback. Reward component telemetry
-reports route progress, body-relative reverse motion, collision, lap, slip,
-steering change, and the total separately.
+On mapped tracks, Layer 2 projects each pose onto the route. Only a new
+high-water frontier advance earns positive per-step reward; recovering or
+repeating already-travelled route distance does not. A constant cost per
+simulated second favors faster progress and makes stalling accumulate cost.
+Backward body-frame motion is penalized, and a frontier push is withheld if the
+car is moving backward relative to its body beyond the reverse deadband. A
+collision receives the collision cost; frontier stalls and other failed episode
+endings receive the episode-failure cost. Clean target-lap completion can earn
+the separate average-frontier-speed bonus. No reward depends on distance from
+the centerline. The frontier remains the monotonic progress marker for lap
+accounting and visualization. Builtin (`none`) runs have no route frontier, so
+they receive no positive driving reward; select a validated route map for this
+frontier-based objective. Reward telemetry exposes each term separately.
+
+## Simulator telemetry vs policy input
+
+Layer 1 parses Bridge telemetry into `TelemetrySnapshot`; Layer 2 does not pass
+that entire record to PPO. The policy currently receives:
+
+- all 1,080 LiDAR ranges, normalized to `[0, 1]`;
+- body-relative forward and lateral velocity, yaw rate, body-relative forward
+  and lateral acceleration, sideslip, and the previous throttle and steering
+  commands.
+
+These eight state values are derived from raw velocity, orientation, angular
+velocity, acceleration, and the prior commands. The snapshot also contains
+position, orientation quaternion / heading, world-frame velocity and
+acceleration, wheel encoder angles and optional ticks, reported throttle and
+steering, lap counters and times, and collision state/count. Those additional
+values are available for route projection, logging, reset validation,
+termination, or diagnostics, but are not included in PPO's observation. Route
+position/frontier and lap progress are explicitly kept out of the policy input.
+Encoder fields default to zero if absent from a Bridge packet, so their live
+availability should be verified before using them as policy inputs.
 
 Map centerlines are generated from occupancy data and validated by the map
 pipeline. Review the generated map preview before treating a new map's lap
@@ -132,7 +158,7 @@ been checked against the drivable course.
 | `max_episode_steps` | `0` | `0` = no hard cap; `>0` = truncate after N steps |
 | `stagnation_speed_threshold` | `0.15` | m/s idle threshold |
 | `stagnation_steps` | `200` | Consecutive idle → truncate |
-| `map_id` | `none` | Map centerline used for route-frontier reward; `none` keeps velocity reward |
+| `map_id` | `none` | Map centerline used for route-frontier reward; frontier reward requires a validated route map |
 | `frontier_stagnation_seconds` | `5.0` | Time without a frontier push before truncating a mapped episode |
 | `headless` | `True` | Docker / server friendly |
 | `reward_config` | defaults | See `rewards.py` |
@@ -163,7 +189,7 @@ env = AutoDriveEnv(
     headless=True,
     frame_skip=1,
     max_episode_steps=0,
-    reward_config=RewardConfig(forward_scale=1.0, collision_penalty=0.0),
+    reward_config=RewardConfig(route_progress_scale=10.0, collision_penalty=0.0),
 )
 obs, info = env.reset()
 obs, reward, terminated, truncated, info = env.step([0.5, 0.0])

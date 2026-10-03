@@ -198,6 +198,24 @@ class RouteProgressTracker:
             [float(line[1][0]), float(line[1][1])],
         ]
 
+    def point_and_tangent_at(self, route_s: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Interpolate the route center and forward unit tangent at distance s.
+
+        This exposes the same ordered geometry used for progress projection to
+        Layer 3's demonstration driver; it does not add route data to policy
+        observations.
+        """
+        local_s = float(route_s) % self.length_m if self.closed else min(
+            max(float(route_s), 0.0), self.length_m
+        )
+        i = int(np.searchsorted(self._cum, local_s, side="right") - 1)
+        i = min(max(i, 0), len(self._lengths) - 1)
+        length = self._lengths[i]
+        alpha = 0.0 if length <= 1e-8 else (local_s - self._cum[i]) / length
+        point = self.points[i] + alpha * (self.points[i + 1] - self.points[i])
+        tangent = self._seg[i] / max(length, 1e-8)
+        return point.copy(), tangent.copy()
+
     def _project(self, x: float, z: float, frontier: Optional[float]):
         pos = np.asarray([x, z], dtype=np.float64)
         laps = (0,)

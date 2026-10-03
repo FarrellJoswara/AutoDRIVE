@@ -19,6 +19,9 @@ const empty: Settings = {
   plateau_window_timesteps: 25000,
   plateau_patience: 5,
   plateau_min_improvement_pct: 1,
+  plateau_min_successful_laps: 10,
+  expert_pretrain_steps: 0,
+  curriculum_single_lap_successes: 10,
   out: null,
   run_name: null,
   seed: 0,
@@ -36,7 +39,9 @@ const empty: Settings = {
   forward_scale: 0,
   backward_speed_penalty_scale: 1,
   route_progress_scale: 10,
+  time_penalty_per_second: 1,
   collision_penalty: -100,
+  episode_failure_penalty: -100,
   slip_penalty: 0.2,
   steer_jerk_penalty: 0.05,
   lap_time_reward_scale: 1000,
@@ -309,6 +314,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               </div>
             )}
           </div>
+          {form.map_id === "none" && (
+            <p className="meta run-stop-help">
+              Frontier reward needs a validated centerline map. The builtin map has
+              no positive driving reward under this objective.
+            </p>
+          )}
 
           <div className="section-title">Train / job</div>
           <label className="field">
@@ -521,10 +532,49 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               onChange={(e) => num("plateau_min_improvement_pct", e.target.value)}
             />
           </label>
+          <label className="field">
+            Successful laps required before plateau stopping can end the run
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={form.plateau_min_successful_laps}
+              onChange={(e) => num("plateau_min_successful_laps", e.target.value)}
+            />
+          </label>
           <p className="meta run-stop-help">
             Plateau stopping compares the best measured progress rate against each new
-            window. Lap stopping needs a supported centerline; collision and frontier
-            stagnation reset only the affected car’s episode.
+            window and waits for this many completed laps on closed centerline maps.
+            Collision and frontier stagnation reset only the affected car’s episode.
+          </p>
+          <div className="section-title">Learning warm-up</div>
+          <label className="field">
+            Optional centerline-teacher warm-up steps per car (0 disables)
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              value={form.expert_pretrain_steps}
+              disabled={form.map_id === "none"}
+              onChange={(e) => num("expert_pretrain_steps", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Clean one-lap episodes before training the full lap target
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={form.curriculum_single_lap_successes}
+              disabled={form.map_id === "none" || form.laps_per_episode <= 1}
+              onChange={(e) => num("curriculum_single_lap_successes", e.target.value)}
+            />
+          </label>
+          <p className="meta run-stop-help">
+            Teacher warm-up is disabled by default. When enabled, the map-aware
+            driver supplies labels only; the learned policy still receives LiDAR
+            and vehicle-state inputs. Closed tracks begin with one-lap episodes and
+            advance to the configured target after repeated clean finishes.
           </p>
           <label className="field">
             End episode after no frontier progress (centerline maps; 0 disables)
@@ -547,22 +597,23 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             End that car’s episode on collision
           </label>
           <label className="field">
-            Raw forward-speed reward (mapped tracks use frontier progress)
-            <input
-              type="number"
-              step="any"
-              value={form.forward_scale}
-              onChange={(e) => num("forward_scale", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Signed route-progress reward per meter
+            Reward per meter of new frontier progress
             <input
               type="number"
               min={0}
               step="any"
               value={form.route_progress_scale}
               onChange={(e) => num("route_progress_scale", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Time cost per simulated second
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={form.time_penalty_per_second}
+              onChange={(e) => num("time_penalty_per_second", e.target.value)}
             />
           </label>
           <label className="field">
@@ -586,7 +637,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <label className="field">
-            Collision penalty (applied when a collision is detected)
+            Collision penalty (charged once when a collision is detected)
             <input
               type="number"
               step="any"
@@ -594,11 +645,21 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               onChange={(e) => num("collision_penalty", e.target.value)}
             />
           </label>
+          <label className="field">
+            Failed episode penalty (stall or timeout)
+            <input
+              type="number"
+              step="any"
+              value={form.episode_failure_penalty}
+              onChange={(e) => num("episode_failure_penalty", e.target.value)}
+            />
+          </label>
           <p className="meta run-stop-help">
-            Route progress rewards forward movement and penalizes backward movement
-            each step; centerline distance is not rewarded. The frontier remains a
-            best-progress marker. Pace is telemetry during the run. The bonus is awarded once, only when
-            the car completes its lap target without colliding on that finish.
+            Only new frontier advances earn progress reward; retracing ground and raw
+            speed earn nothing. Simulated time has a running cost, and reversing has
+            an additional body-relative cost. A crash receives the collision penalty;
+            stalls and timeouts receive the failed-episode penalty. Clean completion
+            still earns the configured target-lap pace bonus.
           </p>
           <label className="field">
             slip_penalty

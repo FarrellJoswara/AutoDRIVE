@@ -70,7 +70,10 @@ That glue module is what we call the **feature extractor** (`extractors.py`).
 |-------|--------|--------------|
 | Feature extractor | `src/layer3/extractors.py` | LiDAR CNN + state MLP → one feature vector |
 | Env / VecEnv factory | `src/layer3/envs.py` | 1 env, or **N envs via SubprocVecEnv** |
-| **Training** | `src/layer3/train.py` | PPO `learn()`, checkpoints, save `.zip` |
+| Demonstration driver | `src/layer3/expert.py` | Optional map-aware teacher for action labels; disabled by default |
+| Behavior cloning | `src/layer3/behavior_cloning.py` | Warm-start PPO actor from LiDAR/state demonstrations |
+| **Training** | `src/layer3/train.py` | One-lap curriculum, PPO fine-tuning, clean-lap checkpoint selection, plateau gate |
+| **Evaluation** | `src/layer3/evaluate.py` | Repeatable deterministic lap-success and pace report |
 | **Playback** | `src/layer3/play.py` | Load `.zip`, drive — **no learning** (always 1 env) |
 | Thin CLI | `scripts/demo.py train` / `play` | Flags → calls into `layer3` |
 | Extractor unit test | `scripts/test_layer3_extractor.py` | Fake tensors; no Unity |
@@ -93,11 +96,12 @@ Implemented in `envs.py` / `train.py`. Full detail: [`LAYER3.md` §5](../../LAYE
 
 ## What training actually does (no jargon)
 
-1. Start one or more Gym envs (each talks to its own sim via Layers 1–2).  
-2. Build a PPO model that **includes** our extractor.  
-3. Repeat many times: look → act → get reward → remember (N envs do this in parallel when `n_envs>1`).  
-4. Every so often, PPO updates the net weights from those memories.  
-5. Save a **checkpoint zip** (the “trained brain”).
+1. Start one or more Gym envs (each talks to its own sim via Layers 1–2).
+2. Optional: on closed centerline maps, a cautious teacher can label LiDAR/state samples with throttle and steering. This warm-up is disabled by default. Route pose is used for labels only; it is not added to the policy observation.
+3. If teacher labels were collected, behavior cloning can initialize the PPO actor from them. Otherwise PPO starts from its own initialization (or the checkpoint selected with Resume).
+4. On supported closed routes, PPO starts with one-lap episodes; after repeated clean finishes, Layer 3 promotes each env to the configured lap target.
+5. PPO learns from Layer 2 rewards. After at least three clean PPO wins, the fastest-lap checkpoint can replace the initial policy. If there are no three wins, a teacher-initialized or resumed trusted policy is retained when available; scratch training keeps its latest PPO policy. The Unity pause callback always resumes physics when training exits.
+6. `python -m src.layer3.evaluate --model logs/rl/<run>/final_model.zip --map-id porto` evaluates deterministic clean-lap success and pace over independent resets.
 
 Playback skips 3–4: load zip → only look → act (single car).
 
@@ -110,7 +114,10 @@ src/layer3/
   __init__.py
   extractors.py    # CNN + MLP + fuse
   envs.py          # make_env / make_vec_env (Dummy vs Subproc)
-  train.py         # learn + save
+  expert.py        # centerline teacher for action labels
+  behavior_cloning.py # demonstrations + actor warm start
+  train.py         # curriculum + PPO + checkpoints
+  evaluate.py      # repeatable policy evaluation
   play.py          # load + drive
   README.md        # this file
 
