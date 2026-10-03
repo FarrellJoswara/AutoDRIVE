@@ -3,9 +3,11 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DISPLAY=:99
+ENV TZ=Etc/UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    tzdata \
     xvfb \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -16,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libglu1-mesa \
     mesa-utils \
+    && ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime \
+    && echo Etc/UTC > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

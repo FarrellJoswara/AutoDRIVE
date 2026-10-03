@@ -28,6 +28,10 @@ logs/rl/**
 !logs/rl/.gitkeep
 logs/layer4/**
 !logs/layer4/.gitkeep
+logs/diagnostics/**
+!logs/diagnostics/.gitkeep
+logs/replay/**
+!logs/replay/.gitkeep
 
 # Layer 4 frontend
 src/layer4/web/node_modules/
@@ -43,3 +47,26 @@ src/layer4/web/dist/
 simulator_win/
 autodrive-simulator.zip
 simulator/autodrive-simulator.zip
+simulator/*.old
+simulator/Data.bak*/
+simulator/windows/AutoDRIVE Simulator_Data/
+simulator/windows/AutoDRIVE Simulator_BurstDebugInformation_DoNotShip/
+# Optional AutoDRIVE LLM plugin payloads are unused by AiCar racing.
+simulator/Data/Plugins/libusearch_c.so
+simulator/Data/StreamingAssets/LLMManager.json
+simulator/Data/StreamingAssets/undreamai-v1.1.12-llamacpp/
+simulator/Data/UnitySubsystems/UnityOpenXR/
+# Hub Activate runtime state (physics map id)
+simulator/maps/.active_map.json
+
+# Local Unity Editor project + huge installers (build machine only)
+simulator/unity/AutoDRIVE/
+simulator/unity/Library/
+simulator/unity/Logs/
+simulator/unity/UserSettings/
+simulator/unity/Packages/
+simulator/unity/ProjectSettings/
+logs/layer4/UnitySetup*.exe
+
+
+simulator/_build/

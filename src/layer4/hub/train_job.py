@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import threading
@@ -36,6 +37,7 @@ class TrainJob:
         self.started_at: Optional[str] = None
         self.argv: List[str] = []
         self.exit_code: Optional[int] = None
+        self.stop_reason: Optional[str] = None
         self.log_path: Optional[str] = None
         self.error: Optional[str] = None
         self.cleanup_error: Optional[str] = None
@@ -53,6 +55,7 @@ class TrainJob:
             "started_at": self.started_at,
             "argv": list(self.argv),
             "exit_code": self.exit_code,
+            "stop_reason": self.stop_reason,
             "log_path": self.log_path,
             "hub_url": self.hub_url,
             "error": self.error,
@@ -81,6 +84,7 @@ class TrainJob:
 
             self.state = "starting"
             self.exit_code = None
+            self.stop_reason = None
             self.error = None
             self.cleanup_error = None
             self.stopped_containers = []
@@ -90,6 +94,31 @@ class TrainJob:
             self.started_at = datetime.now(timezone.utc).isoformat()
 
         self._broadcast()
+
+        # Match one simulator process to each Gym worker and assign stable
+        # per-replica ports before the workers bind their bridge listeners.
+        dockerish = bool(settings.docker_mode) or (
+            os.environ.get("AICAR_IN_DOCKER", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if dockerish:
+            try:
+                from src.layer4.hub.docker_control import reconcile_compose_sims
+
+                replicas = reconcile_compose_sims(settings.n_envs)
+                if len(replicas) != settings.n_envs:
+                    raise RuntimeError(
+                        f"Docker returned {len(replicas)} simulator replicas; "
+                        f"expected {settings.n_envs}"
+                    )
+            except Exception as exc:
+                with self._lock:
+                    self.state = "error"
+                    self.error = f"could not scale simulators to {settings.n_envs} environments: {exc}"
+                    self.pid = None
+                    self._proc = None
+                self._broadcast()
+                raise RuntimeError(self.error) from exc
 
         log_file = None
         try:
@@ -139,6 +168,7 @@ class TrainJob:
             self._watcher.start()
 
         self._broadcast()
+
         return self.status()
 
     def _watch_exit(self) -> None:
@@ -148,6 +178,14 @@ class TrainJob:
         code = proc.wait()
         with self._lock:
             settings = self.last_settings
+            if code == 0 and settings is not None:
+                stop_path = settings.resolve_out() / "stop_reason.json"
+                try:
+                    self.stop_reason = json.loads(
+                        stop_path.read_text(encoding="utf-8")
+                    ).get("reason")
+                except (OSError, ValueError, AttributeError):
+                    self.stop_reason = None
             cleanup_pending = self._docker_cleanup_enabled(settings)
             self.exit_code = int(code) if code is not None else None
             self.state = "stopping" if cleanup_pending else "exited"

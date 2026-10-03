@@ -11,10 +11,9 @@ Contract every Gymnasium env must implement
 
 What "terminated" vs "truncated" means
 --------------------------------------
-  terminated  = episode ended because the task is over (goal / failure rule).
-                Layer 2 v1: ALWAYS False — crashing does not end the episode.
-  truncated   = episode ended because of a time / safety cutoff we chose
-                (stagnation, or optional max_episode_steps).
+  terminated  = episode ended because the task is over or the car failed
+                (lap goal, collision when enabled, or frontier stagnation).
+  truncated   = episode ended because of an optional step / idle cutoff.
 
 1 env = 1 car
 -------------
@@ -32,6 +31,7 @@ default_simulator_path).
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import time
@@ -45,8 +45,12 @@ from gymnasium import spaces
 from src.layer1.racer import Racer
 from src.layer1.telemetry import TelemetrySnapshot
 
-from .rewards import RewardConfig, compute_reward
+from .rewards import RewardConfig, compute_reward_components
+from .lap_tracker import LapTracker, map_lap_gate_config
+from .route_progress import RouteProgressTracker, map_centerline_path
 from .spaces import LIDAR_BEAMS, make_action_space, make_observation_space, snapshot_to_obs
+
+SIMULATION_HZ = 40.0
 
 # Type alias: observation is always a dict with "lidar" and "state" arrays.
 ObsType = Dict[str, np.ndarray]
@@ -101,6 +105,9 @@ class AutoDriveEnv(gym.Env):
         |v_long| below this (m/s) counts as "idle" for that step.
     stagnation_steps=200
         Consecutive idle steps before truncated=True (stuck / crashed stop).
+    laps_per_episode=0
+        0 = disabled. On supported closed routes, reaching the target ends
+        this car's episode as a successful lap-goal termination.
     collision_penalty
         Lives on RewardConfig, default 0.0 — see rewards.py / README.
     """
@@ -128,9 +135,13 @@ class AutoDriveEnv(gym.Env):
         stagnation_speed_threshold: float = 0.15,
         # Consecutive idle steps → truncated.
         stagnation_steps: int = 200,
+        map_id: str = "none",
+        laps_per_episode: int = 10,
+        frontier_stagnation_seconds: float = 5.0,
+        terminate_on_collision: bool = True,
         # Seconds to wait for Unity to connect on reset/init.
         connect_timeout: float = 60.0,
-        # Reward weights. None → RewardConfig() defaults (forward_scale=1, …).
+        # Reward weights. None → RewardConfig() defaults.
         reward_config: Optional[RewardConfig] = None,
         # Must stay 1080 in v1 (no LiDAR downsampling).
         lidar_beams: int = LIDAR_BEAMS,
@@ -147,6 +158,8 @@ class AutoDriveEnv(gym.Env):
         # Guard: max_episode_steps < 0 is meaningless; 0 means "unlimited".
         if max_episode_steps < 0:
             raise ValueError(f"max_episode_steps must be >= 0, got {max_episode_steps}")
+        if laps_per_episode < 0:
+            raise ValueError(f"laps_per_episode must be >= 0, got {laps_per_episode}")
         # Guard: Layer 2 v1 locks full 1080-beam LiDAR.
         if lidar_beams != LIDAR_BEAMS:
             raise ValueError(
@@ -159,6 +172,55 @@ class AutoDriveEnv(gym.Env):
         self.max_episode_steps = int(max_episode_steps)
         self.stagnation_speed_threshold = float(stagnation_speed_threshold)
         self.stagnation_steps = int(stagnation_steps)
+        self.map_id = str(map_id or "none")
+        self.laps_per_episode = int(laps_per_episode)
+        self.frontier_stagnation_seconds = max(0.0, float(frontier_stagnation_seconds))
+        self.terminate_on_collision = bool(terminate_on_collision)
+        self.route_progress: Optional[RouteProgressTracker] = None
+        self._expected_spawn_xz: Optional[Tuple[float, float]] = None
+        centerline_path = map_centerline_path(self.map_id)
+        if self.map_id != "none" and centerline_path is None:
+            raise FileNotFoundError(
+                f"Map '{self.map_id}' has no occupancy/centerline.csv; "
+                "generate and validate its centerline before training."
+            )
+        if centerline_path is not None:
+            try:
+                # Keep route projection continuous when frame_skip is raised.
+                # A fixed 0.5 m reverse window is enough at 40 Hz, but can reject
+                # valid signed motion when one Gym action spans several ticks.
+                max_action_distance = 15.0 * self.frame_skip / SIMULATION_HZ
+                self.route_progress = RouteProgressTracker.from_csv(
+                    centerline_path,
+                    max_forward_m=max(2.0, max_action_distance),
+                    backward_tolerance_m=max(0.5, max_action_distance),
+                )
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    f"Cannot use map '{self.map_id}' for route-progress training: {exc}"
+                ) from exc
+            # Unity's map loader uses meta.spawn, falling back to the first
+            # centerline point. Remember that authoritative XZ pose so reset()
+            # never silently re-anchors a frontier to Unity's stale scene spawn.
+            try:
+                meta = json.loads(
+                    (centerline_path.parent / "meta.json").read_text(encoding="utf-8")
+                )
+                spawn = meta.get("spawn") if isinstance(meta, dict) else None
+                if isinstance(spawn, dict):
+                    self._expected_spawn_xz = (
+                        float(spawn["x"]), float(spawn["z"])
+                    )
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                pass
+            if self._expected_spawn_xz is None:
+                point = self.route_progress.points[0]
+                self._expected_spawn_xz = (float(point[0]), float(point[1]))
+        lap_gate = map_lap_gate_config(self.map_id, route=self.route_progress)
+        self.lap_tracker = LapTracker(
+            self.route_progress,
+            gate_progress_m=lap_gate.get("progress_m") if lap_gate.get("supported") else None,
+        )
         self.connect_timeout = float(connect_timeout)
         self.reward_config = reward_config or RewardConfig()
         self.lidar_beams = int(lidar_beams)
@@ -196,11 +258,16 @@ class AutoDriveEnv(gym.Env):
         self._prev_throttle = 0.0        # last throttle (for obs + rewards)
         self._prev_steering = 0.0        # last steering (for obs + jerk term)
         self._prev_collision_count = 0   # to detect NEW collisions
+        self._prev_collision_flag = False  # rising-edge fallback when count is unavailable
+        self._pending_collision_event = False  # collision observed while reset settles
         self._last_snap: TelemetrySnapshot = TelemetrySnapshot()
 
-        # Block until Unity Socket.IO client is up (auto-connect or manual).
-        if auto_launch or racer is not None:
-            self._wait_for_connection()
+        # The bridge listener is always owned by this Racer, including when
+        # Unity is launched externally (for example, in Docker). Wait for the
+        # simulator's first actual connection/frame before reset() sends a
+        # command; otherwise cold Unity startup races the shorter per-step
+        # timeout and SubprocVecEnv can fail while workers are initializing.
+        self._wait_for_connection()
 
     def _wait_for_connection(self) -> None:
         """Block until the Unity client connects (or bridge frames arrive)."""
@@ -238,9 +305,35 @@ class AutoDriveEnv(gym.Env):
 
         # Layer 1 soft reset (pose / controls); does not restart Unity process.
         snap = self.racer.reset()
-        # Nudge a few zero-action ticks so telemetry reflects post-reset state.
+        reset_collision_pending = False
+        # Nudge zero-action ticks so telemetry reflects the new spawn. Preserve
+        # collisions that happen during this settling window instead of making
+        # the final warm-up count the new baseline and silently swallowing them.
         for _ in range(max(1, self.frame_skip)):
+            previous_count = int(snap.collision_count)
+            previous_flag = bool(snap.collision)
             snap = self.racer.step(0.0, 0.0)
+            current_count = int(snap.collision_count)
+            if current_count > previous_count:
+                reset_collision_pending = True
+            elif current_count < previous_count and current_count > 0:
+                # Unity may clear its cumulative count as part of the soft reset.
+                reset_collision_pending = True
+            if bool(snap.collision) and not previous_flag:
+                reset_collision_pending = True
+
+        expected_spawn = getattr(self, "_expected_spawn_xz", None)
+        if expected_spawn is not None:
+            actual_xz = (float(snap.position[0]), float(snap.position[2]))
+            spawn_error = float(np.linalg.norm(np.asarray(actual_xz) - expected_spawn))
+            if spawn_error > 0.75:
+                raise RuntimeError(
+                    f"Unity reset for map '{self.map_id}' landed at "
+                    f"({actual_xz[0]:.3f}, {actual_xz[1]:.3f}), but the configured "
+                    f"spawn is ({expected_spawn[0]:.3f}, {expected_spawn[1]:.3f}) "
+                    f"({spawn_error:.2f} m away). Refusing to reset the frontier "
+                    "from an incorrect pose."
+                )
 
         # Clear episode counters / history.
         self._episode_steps = 0
@@ -248,7 +341,29 @@ class AutoDriveEnv(gym.Env):
         self._prev_throttle = 0.0
         self._prev_steering = 0.0
         self._prev_collision_count = int(snap.collision_count)
+        self._prev_collision_flag = bool(snap.collision)
+        self._pending_collision_event = reset_collision_pending
         self._last_snap = snap
+        progress_state = None
+        progress_now = self._progress_time(snap)
+        if self.route_progress is not None:
+            try:
+                # Each Gym reset starts a new per-car frontier at that episode's
+                # configured spawn, independent of small post-teleport physics
+                # settling offsets in the returned telemetry pose.
+                frontier_x, frontier_z = (
+                    expected_spawn
+                    if expected_spawn is not None
+                    else (float(snap.position[0]), float(snap.position[2]))
+                )
+                progress_state = self.route_progress.reset(
+                    float(frontier_x), float(frontier_z), progress_now
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Spawn for map '{self.map_id}' does not project onto its centerline: {exc}"
+                ) from exc
+        self.lap_tracker.reset(progress_state, progress_now)
 
         obs = snapshot_to_obs(snap, 0.0, 0.0, lidar_beams=self.lidar_beams)
         info = self._build_info(snap, reward=0.0, collision_event=False)
@@ -280,20 +395,62 @@ class AutoDriveEnv(gym.Env):
         for _ in range(self.frame_skip):
             snap = self.racer.step(throttle, steering)
 
-        # Collision "event": flag this tick OR collision_count increased.
-        collision_event = bool(snap.collision) or (
-            int(snap.collision_count) > self._prev_collision_count
+        # Prefer Unity's cumulative counter, but also accept a rising edge on
+        # the collision flag for Bridge builds that only transmit a boolean.
+        # Latching the previous flag prevents a sticky flag from ending every
+        # subsequent episode after an autoreset.
+        collision_count = int(snap.collision_count)
+        collision_flag = bool(snap.collision)
+        collision_event = (
+            self._pending_collision_event
+            or collision_count > self._prev_collision_count
+            or (collision_flag and not self._prev_collision_flag)
+        )
+        self._pending_collision_event = False
+
+        progress = None
+        if self.route_progress is not None:
+            progress = self.route_progress.update(
+                float(snap.position[0]), float(snap.position[2]), self._progress_time(snap)
+            )
+
+        previous_lap_count = int(getattr(self.lap_tracker, "lap_count", 0))
+        lap_sample = self.lap_tracker.update(
+            progress["progress_m"] if progress is not None else None,
+            self._progress_time(snap),
+        )
+        completed_laps = max(
+            0,
+            int(getattr(self.lap_tracker, "lap_count", previous_lap_count))
+            - previous_lap_count,
+        )
+        lap_target_reached = (
+            completed_laps > 0
+            and getattr(self, "laps_per_episode", 0) > 0
+            and bool(getattr(self.lap_tracker, "supported", False))
+            and int(getattr(self.lap_tracker, "lap_count", 0))
+            >= getattr(self, "laps_per_episode", 0)
+        )
+        clean_episode_win = lap_target_reached and not collision_event
+        average_frontier_speed_mps = (
+            lap_sample.get("completed_attempt_average_frontier_speed_mps")
+            if clean_episode_win and isinstance(lap_sample, dict)
+            else None
         )
 
         # Score this step (all reward math lives in rewards.py).
-        reward = compute_reward(
+        reward_components = compute_reward_components(
             v_long=float(snap.v_long),
+            step_duration_s=self.frame_skip / SIMULATION_HZ,
+            route_progress_delta_m=(progress["current_delta_m"] if progress is not None else None),
+            clean_run_average_frontier_speed_mps=average_frontier_speed_mps,
             collision_event=collision_event,
             slip_angle=float(snap.slip_angle),
             prev_steering=self._prev_steering,
             steering=steering,
             cfg=self.reward_config,
         )
+        reward = reward_components["total"]
 
         # Bookkeeping for truncation rules.
         self._episode_steps += 1
@@ -302,15 +459,40 @@ class AutoDriveEnv(gym.Env):
         else:
             self._idle_steps = 0
 
-        # v1: never terminate on crash; only truncate on idle / optional max steps.
-        terminated = False
-        hit_stagnation = self._idle_steps >= self.stagnation_steps
+        # A terminal collision or a stalled frontier causes the vector worker
+        # to reset this car alone; reset() reinitializes its frontier at spawn.
+        terminated = clean_episode_win or bool(self.terminate_on_collision and collision_event)
+        if progress is not None:
+            no_push_s = progress["time_since_push_s"] or 0.0
+            hit_frontier_stagnation = (
+                self.frontier_stagnation_seconds > 0
+                and no_push_s >= self.frontier_stagnation_seconds
+            )
+        else:
+            hit_frontier_stagnation = False
+        hit_idle_stagnation = (
+            progress is None and self._idle_steps >= self.stagnation_steps
+        )
+
+        # On maps with route data, failure to advance the frontier is a car
+        # failure, not merely an external timeout. This lets training learn
+        # from the failed episode while the vector environment respawns it.
+        termination_reason = (
+            "collision" if self.terminate_on_collision and collision_event
+            else "lap_target" if clean_episode_win
+            else None
+        )
+        if not terminated and hit_frontier_stagnation:
+            terminated = True
+            termination_reason = "frontier_stagnation"
         # max_episode_steps == 0 → disabled (no hard cap).
         hit_max_steps = (
             self.max_episode_steps > 0
             and self._episode_steps >= self.max_episode_steps
         )
-        truncated = bool(hit_stagnation or hit_max_steps)
+        truncated = bool(
+            (hit_idle_stagnation or hit_max_steps) and not terminated
+        )
 
         obs = snapshot_to_obs(
             snap,
@@ -318,19 +500,68 @@ class AutoDriveEnv(gym.Env):
             prev_steering=steering,
             lidar_beams=self.lidar_beams,
         )
-        info = self._build_info(snap, reward=reward, collision_event=collision_event)
+        info = self._build_info(
+            snap,
+            reward=reward,
+            collision_event=collision_event,
+            throttle_command=throttle,
+            steering_command=steering,
+        )
+        info["reward_components"] = reward_components
+        info["laps_per_episode"] = getattr(self, "laps_per_episode", 0)
+        info["episode_won"] = bool(clean_episode_win)
+        info["lap_reward"] = float(
+            self.reward_config.lap_time_reward_scale * average_frontier_speed_mps
+            if average_frontier_speed_mps is not None else 0.0
+        )
+        if clean_episode_win and isinstance(lap_sample, dict):
+            info["completed_attempt_elapsed_s"] = lap_sample.get("completed_attempt_elapsed_s")
+            info["average_frontier_speed_mps"] = average_frontier_speed_mps
+        if progress is not None:
+            info.update({
+                "frontier_line": progress["line"],
+                "frontier_progress_m": progress["progress_m"],
+                "frontier_advanced_m": progress["advanced_m"],
+                "current_progress_line": progress["current_line"],
+                "current_progress_m": progress["current_progress_m"],
+                "signed_route_delta_m": progress["current_delta_m"],
+                "current_route_speed_mps": (
+                    progress["current_delta_m"] / (self.frame_skip / SIMULATION_HZ)
+                ),
+                "route_projection_valid": progress["current_projection_valid"],
+                "time_since_frontier_push_s": progress["time_since_push_s"],
+                "frontier_speed_mps": progress["speed_mps"],
+            })
         if truncated:
             info["truncate_reason"] = (
-                "stagnation" if hit_stagnation else "max_episode_steps"
+                "stagnation" if hit_idle_stagnation else "max_episode_steps"
             )
+        if termination_reason is not None:
+            info["termination_reason"] = termination_reason
 
         # Remember controls / collision count for the NEXT step.
         self._prev_throttle = throttle
         self._prev_steering = steering
-        self._prev_collision_count = int(snap.collision_count)
+        self._prev_collision_count = collision_count
+        self._prev_collision_flag = collision_flag
         self._last_snap = snap
 
         return obs, reward, terminated, truncated, info
+
+    def _progress_time(self, snap: TelemetrySnapshot) -> float:
+        # Bridge receipt timestamps are wall-clock based. Exclude PPO's policy
+        # optimization pauses so they cannot age frontier-stagnation timers or
+        # make lap frontier-speed rewards depend on machine training speed.
+        simulation_clock = getattr(getattr(self, "racer", None), "simulation_time", None)
+        if callable(simulation_clock):
+            try:
+                sim_time = float(simulation_clock())
+                if np.isfinite(sim_time):
+                    return sim_time
+            except (TypeError, ValueError, RuntimeError):
+                pass
+        stamp = float(snap.timestamp)
+        return stamp if np.isfinite(stamp) and stamp > 0 else time.monotonic()
 
     def _build_info(
         self,
@@ -338,6 +569,8 @@ class AutoDriveEnv(gym.Env):
         *,
         reward: float,
         collision_event: bool,
+        throttle_command: Optional[float] = None,
+        steering_command: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Build the Gym `info` dict (diagnostics for YOU / logging / callbacks).
@@ -347,12 +580,18 @@ class AutoDriveEnv(gym.Env):
         callbacks, debugging — not for the neural net unless you later copy
         fields into obs yourself.
         """
-        return {
+        info = {
             "step": self._episode_steps,
             "idle_steps": self._idle_steps,
             "reward": float(reward),
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
+            "throttle_command": (
+                None if throttle_command is None else float(throttle_command)
+            ),
+            "steering_command": (
+                None if steering_command is None else float(steering_command)
+            ),
             "collision": bool(snap.collision),
             "collision_event": bool(collision_event),
             "collision_count": int(snap.collision_count),
@@ -360,9 +599,15 @@ class AutoDriveEnv(gym.Env):
             # Radians — TelemetrySnapshot.heading_yaw (for fleet canvas later)
             "yaw": float(snap.heading_yaw),
         }
+        info.update(self.lap_tracker.sample(self._progress_time(snap)))
+        return info
 
     def close(self) -> None:
         """Tear down the Unity process if this env owns the Racer."""
         if getattr(self, "racer", None) is not None and self._owns_racer:
             self.racer.kill()
         return None
+
+    def set_simulation_paused(self, paused: bool) -> None:
+        """Synchronize the simulator with PPO's rollout/update phases."""
+        self.racer.set_simulation_paused(paused)

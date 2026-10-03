@@ -77,7 +77,7 @@ That glue module is what we call the **feature extractor** (`extractors.py`).
 
 PPO’s update math is inside **Stable-Baselines3**. We wire envs + net + `learn()`.
 
-### Many sims at once (planned)
+### Many sims at once
 
 Faster training = **N** cars in **N processes**, still **one** brain:
 
@@ -103,7 +103,7 @@ Playback skips 3–4: load zip → only look → act (single car).
 
 ---
 
-## Files we will create (Python)
+## Layer 3 files
 
 ```text
 src/layer3/
@@ -126,8 +126,8 @@ scripts/test_layer3_extractor.py
 # teach — smoke (1 env)
 python scripts/demo.py train --n-envs 1 --timesteps 100000 --out logs/rl/run1
 
-# teach — parallel sims (planned)
-python scripts/demo.py train --n-envs 2 --base-port 4567 --timesteps 100000 --out logs/rl/run2
+# teach — parallel sims
+python scripts/demo.py train --n-envs 2 --timesteps 100000 --out logs/rl/run2
 
 # watch / eval (always 1 env, no learning)
 python scripts/demo.py play --model logs/rl/run2/final_model.zip --steps 2000

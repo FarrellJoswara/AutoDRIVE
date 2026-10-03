@@ -2,7 +2,7 @@
 # A = sim (Unity Linux .x86_64, one process per container)
 # B = brain (Python Layers 1–4; Mission Control hub + static UI on :8090)
 #
-#   docker compose up --build --scale sim=2
+#   docker compose up --build
 # Browser → http://localhost:8090  (Settings / Train / Live)
 # Or train via CLI with --no-auto-launch against ports 4567+.
 
@@ -40,6 +40,7 @@ services:
       - HUB_PORT=8090
       - HUB_URL=http://127.0.0.1:8090
       - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
+      - AICAR_MAPS_DIR=/app/simulator/maps
     networks:
       - aicar
     # GPU on B by default (NVIDIA Container Toolkit / Docker Desktop GPU)
@@ -75,7 +76,12 @@ services:
       - BRAIN_HOST=brain
       - BASE_PORT=4567
       - "AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64"
-      # Optional: force a single port (disables hostname-based indexing):
+      - AICAR_MAPS_DIR=/app/simulator/maps
+      # Mission Control recreates the sim pool to match Train's environment count.
+      - AICAR_EXPECTED_SIMS=0
+      # Optional override; otherwise entrypoint reads maps/.active_map.json from Activate
+      # - AICAR_MAP_ID=porto
+      # Internal override for manual simulator debugging only:
       # - PORT=4567
       - DISPLAY=:99
     networks:

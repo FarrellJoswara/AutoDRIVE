@@ -1,7 +1,9 @@
 # AutoDRIVE Simulator
 
-Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). Executables are
-**gitignored**; only this doc lives in git.
+Binaries used by Layer 1 (`src/layer1`) and Layer 2 (`src/layer2`). The Linux
+player is included in the repository for Docker's bind-mounted simulator
+service. `main.py` downloads it from the simulator release if it is missing.
+The Windows player is used for local headed demos.
 
 ## Easiest: use `python main.py`
 
@@ -42,3 +44,13 @@ See [`docker/README.md`](../docker/README.md).
 ## Protocol
 
 This RoboRacer Windows / Linux client speaks **Socket.IO over Engine.IO v4**. Layer 1 uses `python-socketio` 5.x + gevent accordingly.
+
+## Custom maps (Phase 3 TrackLoader)
+
+Stock release binaries ignore custom meshes. To drive occupancy-generated tracks:
+
+1. Build AutoDRIVE with scripts under [`unity/`](unity/README.md)
+2. Copy the player into this folder; `touch simulator/.aicar_trackloader`
+3. In Mission Control: **Generate mesh** → **Activate** (hub writes `maps/.active_map.json` and restarts sims)
+
+Entrypoint sets `AICAR_MAP_ID` from that file (or env); does not pass `-map-id` on Unity argv.

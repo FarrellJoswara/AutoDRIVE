@@ -9,6 +9,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
 from src.layer2 import AutoDriveEnv, RewardConfig
 
+BRIDGE_BASE_PORT = 4567
+
 
 def build_env(
     *,
@@ -17,14 +19,21 @@ def build_env(
     headless: bool = True,
     auto_launch: bool = True,
     connect_timeout: float = 60.0,
-    frame_skip: int = 1,
+    frame_skip: int = 4,
     max_episode_steps: int = 0,
     stagnation_speed_threshold: float = 0.15,
-    stagnation_steps: int = 200,
-    forward_scale: float = 1.0,
-    collision_penalty: float = 0.0,
-    slip_penalty: float = 0.0,
-    steer_jerk_penalty: float = 0.0,
+    stagnation_steps: int = 50,
+    map_id: str = "none",
+    laps_per_episode: int = 10,
+    frontier_stagnation_seconds: float = 5.0,
+    terminate_on_collision: bool = True,
+    route_progress_scale: float = 10.0,
+    forward_scale: float = 0.0,
+    backward_speed_penalty_scale: float = 1.0,
+    collision_penalty: float = -100.0,
+    slip_penalty: float = 0.2,
+    steer_jerk_penalty: float = 0.05,
+    lap_time_reward_scale: float = 1000.0,
 ) -> AutoDriveEnv:
     """Construct one AutoDriveEnv (top-level for Windows pickling / partial)."""
     env = AutoDriveEnv(
@@ -36,8 +45,15 @@ def build_env(
         max_episode_steps=max_episode_steps,
         stagnation_speed_threshold=stagnation_speed_threshold,
         stagnation_steps=stagnation_steps,
+        map_id=map_id,
+        laps_per_episode=laps_per_episode,
+        frontier_stagnation_seconds=frontier_stagnation_seconds,
+        terminate_on_collision=terminate_on_collision,
         reward_config=RewardConfig(
             forward_scale=forward_scale,
+            backward_speed_penalty_scale=backward_speed_penalty_scale,
+            lap_time_reward_scale=lap_time_reward_scale,
+            route_progress_scale=route_progress_scale,
             collision_penalty=collision_penalty,
             slip_penalty=slip_penalty,
             steer_jerk_penalty=steer_jerk_penalty,
@@ -59,7 +75,6 @@ def make_env(
 def make_vec_env(
     n_envs: int,
     *,
-    base_port: int = 4567,
     seed: int = 0,
     **env_kwargs: Any,
 ) -> VecEnv:
@@ -71,9 +86,12 @@ def make_vec_env(
     """
     if n_envs < 1:
         raise ValueError(f"n_envs must be >= 1, got {n_envs}")
+    if n_envs > 16:
+        raise ValueError("n_envs must be <= 16 (the simulator bridge range)")
 
     env_fns = [
-        make_env(port=base_port + i, seed=seed + i, **env_kwargs) for i in range(n_envs)
+        make_env(port=BRIDGE_BASE_PORT + i, seed=seed + i, **env_kwargs)
+        for i in range(n_envs)
     ]
     if n_envs == 1:
         return DummyVecEnv(env_fns)
@@ -92,10 +110,17 @@ def env_kwargs_from_args(args: Any) -> Dict[str, Any]:
         "max_episode_steps",
         "stagnation_speed_threshold",
         "stagnation_steps",
+        "map_id",
+        "laps_per_episode",
+        "frontier_stagnation_seconds",
+        "terminate_on_collision",
+        "route_progress_scale",
         "forward_scale",
+        "backward_speed_penalty_scale",
         "collision_penalty",
         "slip_penalty",
         "steer_jerk_penalty",
+        "lap_time_reward_scale",
     )
     out: Dict[str, Any] = {}
     for key in keys:

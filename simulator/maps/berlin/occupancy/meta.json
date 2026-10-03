@@ -1,0 +1,54 @@
+{
+  "label": "Berlin",
+  "source": "https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Racetracks",
+  "mesh": {
+    "status": "ready",
+    "built_at": "2026-09-30T23:59:17.922070+00:00",
+    "wall_height_m": 0.35,
+    "wall_thickness_m": 0.08,
+    "collider_stride": 3,
+    "n_contours": 3,
+    "n_verts_visual": 888,
+    "n_faces_visual": 666,
+    "n_verts_collider": 304,
+    "n_faces_collider": 228,
+    "track_obj": "mesh/track.obj",
+    "track_col_obj": "mesh/track_col.obj"
+  },
+  "mesh_preview": {
+    "status": "ready",
+    "built_at": "2026-10-01T15:40:08.988181+00:00",
+    "file": "mesh/preview.png",
+    "size_px": 512,
+    "n_verts": 888,
+    "n_faces": 666,
+    "frame": "occupancy_image"
+  },
+  "align": {
+    "scale": 1.0,
+    "tx": 0.0,
+    "tz": 0.0,
+    "source": "ros_identity"
+  },
+  "centerline": {
+    "status": "ready",
+    "built_at": "2026-10-02T18:37:40.427735+00:00",
+    "n_points": 308,
+    "spacing_m": 0.25,
+    "closed": true,
+    "file": "centerline.csv",
+    "free_space_semantics": "known_free_v1",
+    "algorithm": "connected_skeleton_longest_valid_cycle_v2"
+  },
+  "spawn": {
+    "x": 8.879196,
+    "y": 0.05,
+    "z": -8.870793,
+    "yaw": -2.407794,
+    "source": "centerline",
+    "file": "centerline.csv",
+    "width_m": 2.450001,
+    "index": 231,
+    "built_at": "2026-10-02T18:37:40.451978+00:00"
+  }
+}

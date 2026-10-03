@@ -10,14 +10,27 @@ import {
 } from "./draw";
 import type { LoadedMap, MapId } from "./mapLoader";
 import { loadMap } from "./mapLoader";
-import { getFleetHot, getFleetHotAgeMs } from "../store";
+import {
+  getFleetHot,
+  getFleetHotAgeMs,
+  getReplayFleetHot,
+  getReplayFleetHotAgeMs,
+  getTrainingPhaseAgeMs,
+  getTrainingPhaseHot,
+  getTrainingStateHot,
+} from "../store";
 
 export interface FleetCanvasProps {
   showMap: boolean;
   showFleet: boolean;
+  showFrontier: boolean;
+  showCurrentProgress: boolean;
   showLidar: boolean;
+  fleetSource?: "train" | "replay";
   selectedEnvId: number;
   mapId: MapId;
+  /** Hub catalog yaml URL; null when mapId is none or unknown. */
+  mapYamlUrl: string | null;
   /** Side-panel sync — last React-visible fleet (throttled) */
   fleetPanel: FleetTelemetry | null;
 }
@@ -42,20 +55,28 @@ export function FleetCanvas(props: FleetCanvasProps) {
     const v = viewRef.current;
     v.showMap = props.showMap;
     v.showFleet = props.showFleet;
+    v.showFrontier = props.showFrontier;
+    v.showCurrentProgress = props.showCurrentProgress;
     v.showLidar = props.showLidar;
     v.selectedEnvId = props.selectedEnvId;
     mapDirty.current = true;
-  }, [props.showMap, props.showFleet, props.showLidar, props.selectedEnvId]);
+  }, [props.showMap, props.showFleet, props.showFrontier, props.showCurrentProgress, props.showLidar, props.selectedEnvId]);
 
   // Load occupancy map
   useEffect(() => {
     let cancelled = false;
     mapRef.current = null;
     mapDirty.current = true;
-    if (props.mapId === "none") {
+    // Reset grow-only pose fit so a new underlay re-frames around current cars.
+    const v = viewRef.current;
+    v.fitMinX = Infinity;
+    v.fitMaxX = -Infinity;
+    v.fitMinZ = Infinity;
+    v.fitMaxZ = -Infinity;
+    if (props.mapId === "none" || !props.mapYamlUrl) {
       return;
     }
-    void loadMap(props.mapId)
+    void loadMap(props.mapId, props.mapYamlUrl)
       .then((m) => {
         if (cancelled) return;
         mapRef.current = m;
@@ -71,7 +92,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
     return () => {
       cancelled = true;
     };
-  }, [props.mapId]);
+  }, [props.mapId, props.mapYamlUrl]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -82,6 +103,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
     let raf = 0;
     let alive = true;
     let lastDrawnKey = "";
+    let lastBoundsKey = "";
 
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
@@ -106,13 +128,30 @@ export function FleetCanvas(props: FleetCanvasProps) {
       if (!alive) return;
       raf = requestAnimationFrame(tick);
 
-      const fleet = getFleetHot();
-      const age = getFleetHotAgeMs();
-      const stale = age > 500;
       const p = propsRef.current;
+      const fleet = p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
+      const age = p.fleetSource === "replay" ? getReplayFleetHotAgeMs() : getFleetHotAgeMs();
+      const stale = age > 500;
+      const phase = p.fleetSource === "train" ? getTrainingPhaseHot() : null;
+      const trainState = getTrainingStateHot();
+      const trainActive = trainState === "starting" || trainState === "running" || trainState === "stopping";
+      const ppoUpdating =
+        trainActive &&
+        phase?.phase === "ppo_update" &&
+        getTrainingPhaseAgeMs() < 60_000 &&
+        phase.step >= (fleet?.step ?? 0);
+      const staleLabel = stale
+        ? ppoUpdating
+          ? "PPO updating — simulator paused"
+          : p.fleetSource === "train" && !trainActive
+            ? null
+            : `No recent ${p.fleetSource === "replay" ? "replay " : ""}fleet telemetry (${Math.max(1, Math.floor(age / 1000))}s)`
+        : null;
       const view = viewRef.current;
       view.showMap = p.showMap;
       view.showFleet = p.showFleet;
+      view.showFrontier = p.showFrontier;
+      view.showCurrentProgress = p.showCurrentProgress;
       view.showLidar = p.showLidar;
       view.selectedEnvId = p.selectedEnvId;
 
@@ -121,6 +160,14 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const map = mapRef.current;
       const bounds = resolveBounds(map, view, fleet);
+      const boundsKey =
+        bounds.minX.toFixed(2) +
+        ":" +
+        bounds.maxX.toFixed(2) +
+        ":" +
+        bounds.minZ.toFixed(2) +
+        ":" +
+        bounds.maxZ.toFixed(2);
 
       const seq =
         (fleet?.ts ?? "") +
@@ -129,12 +176,17 @@ export function FleetCanvas(props: FleetCanvasProps) {
         ":" +
         view.showMap +
         view.showFleet +
+        view.showFrontier +
+        view.showCurrentProgress +
         view.showLidar +
         view.selectedEnvId +
         (map?.id ?? "none") +
-        stale;
+        boundsKey +
+        staleLabel;
 
-      if (mapDirty.current) {
+      // Redraw static underlay when map OR fitted bounds change.
+      if (mapDirty.current || boundsKey !== lastBoundsKey) {
+        lastBoundsKey = boundsKey;
         const sctx = sc.getContext("2d");
         if (sctx) {
           drawStaticMap(sctx, map, view.showMap, cssW, cssH, dpr, bounds);
@@ -151,13 +203,13 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const opts: DrawFrameOpts = {
         map,
         fleet,
-        stale,
+        staleLabel,
         view,
         cssW,
         cssH,
         dpr,
       };
-      drawDynamic(dctx, opts);
+      drawDynamic(dctx, opts, bounds);
       lastFleetSeq.current += 1;
     };
 

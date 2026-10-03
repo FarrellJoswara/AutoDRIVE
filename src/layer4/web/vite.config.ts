@@ -13,6 +13,7 @@ export default defineConfig({
     port: 8080,
     proxy: {
       "/health": "http://127.0.0.1:8090",
+      "/api": "http://127.0.0.1:8090",
       "/train": "http://127.0.0.1:8090",
       "/settings": "http://127.0.0.1:8090",
       "/telemetry": "http://127.0.0.1:8090",

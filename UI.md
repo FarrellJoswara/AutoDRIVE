@@ -1,8 +1,8 @@
 # Mission Control UI — Architecture Plan
 
-**Status:** Phases 1–3 implemented (hub + Settings/Train/Live); Phase 6 fleet canvas stubbed.  
-**Depends on:** Layer 3 train CLI (`python -m src.layer3.train`) · Docker A/B (`docker/`)  
-**Code home (planned):** **`src/layer4/`** — FastAPI hub + Vite/React frontend + shared types/settings  
+**Status:** Current implementation includes Train, Maps, Watch, and Replay. The phased checklist below is retained as design history and may describe earlier UI names or deferred work.
+**Depends on:** Layer 3 train CLI (`python -m src.layer3.train`) · Docker A/B (`docker/`)
+**Code home:** **`src/layer4/`** — FastAPI hub + Vite/React frontend + shared types/settings
 **Infra:** stays in `docker/` / compose — **not** under `src/`
 
 **Start here** for watch+control of training. **Layers 1–3 = learning path; Layer 4 = Mission Control infra** (hub + web). Dockerfiles/compose stay at repo root.
@@ -47,7 +47,7 @@ Ship a **Mission Control** surface that:
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Browser  → http://localhost:8090  (single entry: brain B)              │
-│  Vite/React ON B (not host-default)  · Settings · Train · Live · Fleet  │
+│  Vite/React ON B (not host-default)  · Train · Maps · Watch · Replay   │
 └───────────────┬───────────────────────────────▲─────────────────────────┘
                 │ REST (start/stop/status/settings)│ WS /ws (fan-out)
                 ▼                                  │
@@ -288,7 +288,7 @@ Rough per-car, per-sample cost at 15 Hz:
 
 Each LiDAR reading is just **distances** (how far until a hit per beam index). That list alone cannot aim anything on the map. To draw **rays** you also need:
 
-1. **Where beam 0 points** relative to the car (start angle vs yaw), and  
+1. **Where beam 0 points** relative to the car (start angle vs yaw), and
 2. The **angular step** around the car from beam to beam (and FOV / CW vs CCW).
 
 **Calibration is not documented in this repo yet.** Layers 1–2 only expose beam count and range bounds (`LIDAR_BEAMS`, `range_min` / `range_max`). **Do not guess 360°/CCW.**
@@ -311,13 +311,13 @@ Each LiDAR reading is just **distances** (how far until a hit per beam index). T
 | **f1tenth_racetracks** (secondary) | https://github.com/f1tenth/f1tenth_racetracks | 20+ tracks: `*_map.png` + yaml + `*_centerline.csv` | **GPL-3.0** — great format, may **not** match AutoDRIVE RoboRacer scenes |
 | AutoDRIVE site / RCT | https://autodrive-ecosystem.github.io · [Race Control Tower](https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Race-Control-Tower) | Ecosystem docs; RCT is a Socket.IO proxy/monitor — **no** fleet map pack | BSD-2-Clause (RCT) |
 
-**Vendored samples (this repo):** `assets/maps/` — Porto occupancy + yaml, Berlin occupancy + yaml, Porto library preview. See `assets/maps/ATTRIBUTION.md`. Prefer documenting further tracks as URLs; vendor only small occupancy / preview images when needed.
+**Vendored samples (this repo):** `simulator/maps/<id>/occupancy/` — Porto, Berlin, ICRA 2026 Classic/Master. See `simulator/maps/ATTRIBUTION.md`. Hub auto-lists via `GET /api/maps`.
 
 #### Recommended v1 pick
 
 **Static occupancy (or library outline) as the canvas map layer**, not waypoints-first:
 
-1. **Default:** `assets/maps/porto/Porto.pgm` + `Porto.yaml` (or Berlin pair) — metre-accurate via `resolution` / `origin`; blit onto the **static** canvas with world→pixel from yaml (ROS map frame: origin = lower-left of image in world metres).
+1. **Default:** `simulator/maps/porto/occupancy/Porto.pgm` + `Porto.yaml` (or Berlin / ICRA pairs) — metre-accurate via `resolution` / `origin`; blit onto the **static** canvas with world→pixel from yaml (ROS map frame: origin = lower-left of image in world metres).
 2. **Visual alt:** `Library/*.png` (e.g. `Porto_preview.png`) when a nicer outline is wanted — calibrate against live poses (or pair with the matching Legacy yaml) before trusting scale.
 3. **Do not** pull FBX into Mission Control; if a future track has meshes only, orthographic screenshot **or** Phase 6.1 breadcrumb until a 2D asset exists.
 
@@ -346,8 +346,7 @@ First-class Pydantic (or equivalent) model on the hub; **UI page is not buried**
 
 | Settings field | CLI flag | Default (today) | Notes |
 | :--- | :--- | :--- | :--- |
-| `n_envs` | `--n-envs` | `1` | Docker: match `--scale sim=N` |
-| `base_port` | `--base-port` | `4567` | Ports `base .. base+n_envs-1` |
+| `n_envs` | `--n-envs` | `1` | Mission Control scales one simulator per environment (1–16); bridge ports are assigned automatically |
 | `timesteps` | `--timesteps` | `10000` | |
 | `out` | `--out` | stamp under `logs/rl/` | Or derive from `run_name` |
 | `run_name` | (UI-only → `--out`) | optional | Convenience for Settings UI |
@@ -407,7 +406,6 @@ Write JSON under e.g. `logs/layer4/settings.json` (volume-mounted). `PUT /settin
 ```text
 python -m src.layer3.train
   --n-envs {n_envs}
-  --base-port {base_port}
   --timesteps {timesteps}
   --out {out}
   --seed {seed}
@@ -429,10 +427,11 @@ Keep v1 **simple** — **full Settings** + Train + Live from the first React shi
 
 | Section | Content |
 | :--- | :--- |
-| **Settings** | **First-class** form bound to full Settings model (all train CLI flags §7); Save; Docker preset toggle |
-| **Train** | Start / Stop; status badge; PID; link/path to log; last exit code |
-| **Live** | Table or sparkline: step, reward, episode, optional loss; last checkpoint |
-| **Fleet** (Phase 6) | Layered canvas (map → cars → LiDAR → collision **X**); side panel + layer toggles; WS-driven only — see Phase 6 |
+| **Settings** | **First-class** form bound to full Settings model (all train CLI flags §7); Save; Docker preset toggle; **map dropdown** (builtin + mesh-ready) |
+| **Train** | Merged into Settings surface: Start / Stop; status badge; PID; log path; Start **locks in** selected map |
+| **Live** | Merged into **Watch**: compact step/reward/episode + sparkline; Details disclosure |
+| **Fleet** | Renamed **Watch**: layered canvas; no map picker; underlay from Train `map_id` |
+| **Maps** | Authoring only: upload / mesh / centerline — does not Activate or Start train |
 
 ### Where Vite runs — **Docker B (brain)** — **LOCKED, Docker-first**
 
@@ -561,7 +560,7 @@ Layers 1–3 remain the learning path under `src/layer1|2|3`. Layer 4 is infra f
 | Compose note | Publish `8080` only if in-B Vite HMR needs a separate port; otherwise **`:8090` alone** |
 
 ```text
-docker compose up --build --scale sim=2
+docker compose up --build
 # B: uvicorn src.layer4.hub.app:app --host 0.0.0.0 --port 8090
 #    (+ static from layer4/web/dist in prod)
 # A×2: dial brain:4567, brain:4568
@@ -649,7 +648,7 @@ Settings is **not** an optional late phase. Hub Settings API lands in Phase 1; t
 1. [ ] Publish per-env sim-state on TelemetryBus from `self.locals["new_obs"]["lidar"]` + `infos` (§6) — min-pool 1080→120, time-based `fleet_hz`, skip done-steps, **no UI `step()`**
 2. [ ] **Measure / document LiDAR angles** (where beam 0 points + angular step / FOV / CW vs CCW vs yaw); commit `angle_min` / `angle_increment` / sign — **not in repo today**; until then **map + cars + collision X** still ship; **no rays** until documented
 3. [ ] Fleet page (lazy-loaded): two canvases, `rAF` + refs, LiDAR as one filled path (§8)
-4. [ ] Background: prefer vendored occupancy / library PNG under `assets/maps/` (§6); else grid+auto-fit (6a) → breadcrumb (6b)
+4. [ ] Background: prefer vendored occupancy under `simulator/maps/` (§6); else grid+auto-fit (6a) → breadcrumb (6b)
 5. [ ] Side panel: episode / steps / return / collision / optional speed / **stale indicator**
 6. [ ] Toggles: map / fleet / LiDAR; selected-car LiDAR when multi-env; marker legend
 7. [ ] Optional: RaceTrack **display** helpers only (waypoints / gates / snapshot aggregate) — never on the L2/L3 train launch path; fix its x/y vs x/z axis disagreement first
@@ -714,7 +713,7 @@ Locked: **later**, not day 1 — see §7. Prefer start-of-run Settings (Phase 4 
 | 5 | During train, WS clients receive telemetry samples |
 | 6 | Settings round-trip matches CLI flags in §7 |
 | 7 | CLI train without `HUB_URL` still works (no hub required) |
-| 8 | Docker: `--scale sim=N` + Settings `n_envs=N`, `auto_launch=false` |
+| 8 | Docker: Train setting `n_envs=N` automatically scales the simulator pool; `auto_launch=false` |
 | 9 | **Hub killed *and* hub hung (`SIGSTOP`) mid-run → train keeps stepping at full rate**; samples drop, no exception |
 | 10 | WS client killed / tab closed mid-run → hub keeps broadcasting; reopened tab resyncs via `GET /train/status` |
 
@@ -747,8 +746,8 @@ Train and UI talk to the hub API, not to Redis. Swapping the bus backend must no
 
 ## Related docs
 
-- [`LAYER3.md`](LAYER3.md) — PPO train/play plan  
-- [`PLAN.md`](PLAN.md) — system overview (UI section points here)  
-- [`docker/README.md`](docker/README.md) — A/B compose  
-- [`README.md`](README.md) — status + quick start  
-- [`src/layer3/train.py`](src/layer3/train.py) — authoritative CLI flags  
+- [`LAYER3.md`](LAYER3.md) — PPO train/play plan
+- [`PLAN.md`](PLAN.md) — system overview (UI section points here)
+- [`docker/README.md`](docker/README.md) — A/B compose
+- [`README.md`](README.md) — status + quick start
+- [`src/layer3/train.py`](src/layer3/train.py) — authoritative CLI flags
