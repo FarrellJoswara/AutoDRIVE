@@ -54,6 +54,14 @@ namespace AiCar.Editor
             Debug.Log("[AiCar] Linux fixed-step player staged without replacing the active simulator");
         }
 
+        public static void BuildLinuxFixedStepServerStagingOnly()
+        {
+            var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-server-experiment");
+            BuildLinux(publish: false, stagingName: "linux-fixed-step-server-experiment", dedicatedServer: true);
+            SetJobWorkerCount(staging, 1);
+            Debug.Log("[AiCar] Linux fixed-step Dedicated Server player staged without replacing the active simulator");
+        }
+
         static void SetJobWorkerCount(string staging, int workerCount)
         {
             var bootConfig = Path.Combine(staging, "AutoDRIVE Simulator_Data", "boot.config");
@@ -120,12 +128,15 @@ namespace AiCar.Editor
             BuildLinux(publish: true);
         }
 
-        static void BuildLinux(bool publish, string stagingName = "linux")
+        static void BuildLinux(bool publish, string stagingName = "linux", bool dedicatedServer = false)
         {
             EnsureSceneInBuild();
             // Linux Mono nondevelopment player is often missing on Windows Editor installs;
             // go straight to IL2CPP. If postprocess NREs (incomplete sysroot), retry Development.
-            PlayerSettings.SetScriptingBackend(BuildTargetGroup.Standalone, ScriptingImplementation.IL2CPP);
+            var scriptingTarget = dedicatedServer
+                ? UnityEditor.Build.NamedBuildTarget.Server
+                : UnityEditor.Build.NamedBuildTarget.Standalone;
+            PlayerSettings.SetScriptingBackend(scriptingTarget, ScriptingImplementation.IL2CPP);
             var staging = Path.Combine(SimulatorRoot, "_build", stagingName);
             WipeDir(staging);
             Directory.CreateDirectory(staging);
@@ -135,6 +146,7 @@ namespace AiCar.Editor
                 scenes = new[] { ScenePath },
                 locationPathName = exe,
                 target = BuildTarget.StandaloneLinux64,
+                subtarget = (int)(dedicatedServer ? StandaloneBuildSubtarget.Server : StandaloneBuildSubtarget.Player),
                 options = BuildOptions.None,
             };
             var report = BuildPipeline.BuildPlayer(opts);

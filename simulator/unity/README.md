@@ -153,6 +153,45 @@ measurement, excluding PPO update time and longer-run resource contention; it
 suggests five-at-30 can modestly increase total collection throughput if CPU
 headroom exists, but does not establish higher end-to-end training throughput.
 
+## Linux Dedicated Server evaluation (October 4, 2026)
+
+`BuildLinuxFixedStepServerStagingOnly` builds an isolated Linux Dedicated Server
+candidate at `simulator/_build/linux-fixed-step-server-experiment/`; it never
+publishes over the active simulator. The target must use
+`NamedBuildTarget.Server` when setting the IL2CPP backend. Setting only the
+regular `Standalone` target produced a Mono server build, which is not a fair
+comparison with the training player and was discarded. The candidate also uses
+`job-worker-count=1`, matching the fixed-step baseline.
+
+The normal player and IL2CPP Dedicated Server were compared with camera
+streaming disabled, the same seeded scripted controls, Porto map, and 0.086 s
+action interval. Three alternating-order pairs ran for 30 simulated seconds
+each (349 actions per build). Every pair had exact matches for all recorded
+vehicle telemetry, all 1081 LiDAR beams, observations, rewards, actions,
+protocol IDs, and physics ticks per action; simulated-time deltas also matched
+exactly. The full report and raw traces are in
+`logs/diagnostics/dedicated_server_equivalence_long.json` and `.npz`.
+
+This did not reduce training CPU demand in the test. Median Unity CPU use was
+0.771 CPU seconds per simulated second for the normal player and 0.781 for the
+server candidate; the median paired comparison used 1.5% more CPU in the server
+build. Median simulation throughput was 0.940 versus 0.931 environment-seconds
+per wall second. The server package was about 2.0% smaller on disk. These runs
+were serial and low priority while the user's
+training run remained active; PPO update cost was not measured. The exact
+behavior match is confirmed, but the CPU and throughput results do not justify
+using the Dedicated Server build as a training optimization. Keep the normal
+fixed-step player for training unless later isolated tests show a repeatable
+end-to-end gain.
+
+The repeatable runtime comparison is
+`scripts/test_dedicated_server_equivalence.py`; it compares both staged players
+without changing the active simulator. Unity 2022.3.52f1 can build the Server
+subtarget after Linux Dedicated Server Build Support is installed. The Unity
+CLI module inventory may still show that module as available even when the
+server player variants are present; a successful staged build is the check used
+here.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
