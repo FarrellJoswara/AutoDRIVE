@@ -3,8 +3,10 @@ import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetTelemetry } fr
 import {
   DrawFrameOpts,
   ViewState,
-  drawDynamic,
+  drawEvaluatorCarIncremental,
+  drawFleetCars,
   drawStaticMap,
+  drawTelemetryOverlay,
   initialViewState,
   resolveBounds,
 } from "./draw";
@@ -74,7 +76,9 @@ function interpolateEvaluator(
 export function FleetCanvas(props: FleetCanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const staticRef = useRef<HTMLCanvasElement>(null);
-  const dynRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const fleetCarsRef = useRef<HTMLCanvasElement>(null);
+  const evaluatorRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<LoadedMap | null>(null);
   const viewRef = useRef<ViewState>(initialViewState());
   const lastFleetSeq = useRef(0);
@@ -131,12 +135,17 @@ export function FleetCanvas(props: FleetCanvasProps) {
   useEffect(() => {
     const wrap = wrapRef.current;
     const sc = staticRef.current;
-    const dc = dynRef.current;
-    if (!wrap || !sc || !dc) return;
+    const oc = overlayRef.current;
+    const fc = fleetCarsRef.current;
+    const ec = evaluatorRef.current;
+    if (!wrap || !sc || !oc || !fc || !ec) return;
 
     let raf = 0;
     let alive = true;
-    let lastDrawnKey = "";
+    let lastOverlayKey = "";
+    let lastFleetCarsKey = "";
+    let lastEvaluatorBoundsKey = "";
+    let previousEvaluatorCar: EvaluatorCarTelemetry | null = null;
     let lastBoundsKey = "";
 
     const resize = () => {
@@ -144,14 +153,17 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const cssW = Math.max(1, Math.floor(rect.width));
       const cssH = Math.max(1, Math.floor(rect.height));
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      for (const c of [sc, dc]) {
+      for (const c of [sc, oc, fc, ec]) {
         c.width = Math.floor(cssW * dpr);
         c.height = Math.floor(cssH * dpr);
         c.style.width = `${cssW}px`;
         c.style.height = `${cssH}px`;
       }
       mapDirty.current = true;
-      lastDrawnKey = "";
+      lastOverlayKey = "";
+      lastFleetCarsKey = "";
+      lastEvaluatorBoundsKey = "";
+      previousEvaluatorCar = null;
     };
 
     resize();
@@ -230,7 +242,9 @@ export function FleetCanvas(props: FleetCanvasProps) {
         evaluatorTransitionRef.current = null;
         evaluatorTargetRef.current = null;
       }
-      const bounds = resolveBounds(map, view, fleet, evaluatorCar?.pose);
+      // The fitted view follows sampled evaluator targets rather than its
+      // interpolated pose, so animation frames cannot continuously reframe it.
+      const bounds = resolveBounds(map, view, fleet, evaluatorTargetRef.current?.car.pose);
       const boundsKey =
         bounds.minX.toFixed(2) +
         ":" +
@@ -240,11 +254,12 @@ export function FleetCanvas(props: FleetCanvasProps) {
         ":" +
         bounds.maxZ.toFixed(2);
 
-      const seq =
+      const overlayKey =
         (fleet?.ts ?? "") +
         ":" +
         (fleet?.step ?? "") +
-        (evaluatorCar ? `${evaluatorCar.pose[0].toFixed(3)}:${evaluatorCar.pose[1].toFixed(3)}:${evaluatorCar.yaw.toFixed(3)}:${evaluatorCar.speed.toFixed(2)}` : "no-evaluator") +
+        ":evaluator:" +
+        Boolean(evaluatorCar) +
         (ppoProgress ? `${ppoProgress.label}:${ppoProgress.progress.toFixed(3)}:${ppoProgress.detail}` : "no-ppo-progress") +
         ":" +
         view.showMap +
@@ -265,14 +280,10 @@ export function FleetCanvas(props: FleetCanvasProps) {
           drawStaticMap(sctx, map, view.showMap, cssW, cssH, dpr, bounds);
         }
         mapDirty.current = false;
-        lastDrawnKey = "";
+        lastOverlayKey = "";
+        lastFleetCarsKey = "";
       }
 
-      if (seq === lastDrawnKey) return;
-      lastDrawnKey = seq;
-
-      const dctx = dc.getContext("2d");
-      if (!dctx) return;
       const opts: DrawFrameOpts = {
         map,
         fleet,
@@ -284,8 +295,48 @@ export function FleetCanvas(props: FleetCanvasProps) {
         cssH,
         dpr,
       };
-      drawDynamic(dctx, opts, bounds);
-      lastFleetSeq.current += 1;
+      if (overlayKey !== lastOverlayKey) {
+        lastOverlayKey = overlayKey;
+        const octx = oc.getContext("2d");
+        if (octx) drawTelemetryOverlay(octx, opts, bounds);
+      }
+
+      const fleetCarsKey = `${fleet?.ts ?? ""}:${fleet?.step ?? ""}:${view.showFleet}:${view.selectedEnvId}:${boundsKey}`;
+      if (fleetCarsKey !== lastFleetCarsKey) {
+        lastFleetCarsKey = fleetCarsKey;
+        const fctx = fc.getContext("2d");
+        if (fctx) drawFleetCars(fctx, opts, bounds);
+        lastFleetSeq.current += 1;
+      }
+
+      const evaluatorBoundsChanged = boundsKey !== lastEvaluatorBoundsKey;
+      if (evaluatorBoundsChanged) {
+        lastEvaluatorBoundsKey = boundsKey;
+        previousEvaluatorCar = null;
+      }
+      const visibleEvaluatorCar = view.showFleet ? evaluatorCar : null;
+      const evaluatorKey = visibleEvaluatorCar
+        ? `${visibleEvaluatorCar.pose[0].toFixed(4)}:${visibleEvaluatorCar.pose[1].toFixed(4)}:${visibleEvaluatorCar.yaw.toFixed(4)}:${visibleEvaluatorCar.speed.toFixed(3)}`
+        : "none";
+      const previousEvaluatorKey = previousEvaluatorCar
+        ? `${previousEvaluatorCar.pose[0].toFixed(4)}:${previousEvaluatorCar.pose[1].toFixed(4)}:${previousEvaluatorCar.yaw.toFixed(4)}:${previousEvaluatorCar.speed.toFixed(3)}`
+        : "none";
+      if (evaluatorKey !== previousEvaluatorKey || evaluatorBoundsChanged) {
+        const ectx = ec.getContext("2d");
+        if (ectx) {
+          drawEvaluatorCarIncremental(
+            ectx,
+            visibleEvaluatorCar,
+            previousEvaluatorCar,
+            bounds,
+            cssW,
+            cssH,
+            dpr,
+            evaluatorBoundsChanged
+          );
+        }
+        previousEvaluatorCar = evaluatorCar;
+      }
     };
 
     raf = requestAnimationFrame(tick);
@@ -299,7 +350,9 @@ export function FleetCanvas(props: FleetCanvasProps) {
   return (
     <div className="fleet-canvas-wrap" ref={wrapRef}>
       <canvas className="fleet-canvas fleet-canvas-static" ref={staticRef} />
-      <canvas className="fleet-canvas fleet-canvas-dyn" ref={dynRef} />
+      <canvas className="fleet-canvas fleet-canvas-overlay" ref={overlayRef} />
+      <canvas className="fleet-canvas fleet-canvas-cars" ref={fleetCarsRef} />
+      <canvas className="fleet-canvas fleet-canvas-evaluator" ref={evaluatorRef} />
     </div>
   );
 }

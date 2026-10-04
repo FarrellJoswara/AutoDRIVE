@@ -151,7 +151,7 @@ function niceGridStep(w: number, h: number): number {
   return 10 * pow;
 }
 
-export function drawDynamic(
+export function drawTelemetryOverlay(
   ctx: CanvasRenderingContext2D,
   opts: DrawFrameOpts,
   /** Must match the bounds passed to drawStaticMap in the same frame. */
@@ -251,16 +251,6 @@ export function drawDynamic(
     }
   }
 
-  if (view.showFleet) {
-    for (const car of fleet?.cars ?? []) {
-      if (car.reset || !car.pose) continue;
-      drawCar(ctx, car, scale, ox, oy, view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId, dpr);
-    }
-    if (evaluatorCar) {
-      drawEvaluatorCar(ctx, evaluatorCar, scale, ox, oy, dpr);
-    }
-  }
-
   if (ppoProgress) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const boxWidth = Math.min(280, Math.max(210, cssW - 24));
@@ -295,6 +285,66 @@ export function drawDynamic(
     ctx.font = "11px Cascadia Code, Consolas, monospace";
     ctx.fillText(staleLabel, 12, 18);
   }
+}
+
+/** Training cars change at fleet telemetry cadence, independently of eval animation. */
+export function drawFleetCars(
+  ctx: CanvasRenderingContext2D,
+  opts: DrawFrameOpts,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+): void {
+  const { fleet, view, cssW, cssH, dpr } = opts;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  if (!view.showFleet || !fleet) return;
+  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  for (const car of fleet.cars) {
+    if (car.reset || !car.pose) continue;
+    drawCar(ctx, car, scale, ox, oy, view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId, dpr);
+  }
+}
+
+/**
+ * Redraw only the evaluator glyph. Its old bounds are dirtied on a dedicated
+ * transparent canvas, so 60 Hz interpolation never clears route lines or the
+ * full-size scene buffer.
+ */
+export function drawEvaluatorCarIncremental(
+  ctx: CanvasRenderingContext2D,
+  car: EvaluatorCarTelemetry | null,
+  previous: EvaluatorCarTelemetry | null,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  cssW: number,
+  cssH: number,
+  dpr: number,
+  clearAll = false
+): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (clearAll) {
+    ctx.clearRect(0, 0, cssW, cssH);
+    if (!car) return;
+  } else if (previous) {
+    const oldBounds = evaluatorDirtyRect(previous, bounds, cssW, cssH);
+    ctx.clearRect(oldBounds.x, oldBounds.y, oldBounds.w, oldBounds.h);
+  } else if (!car) {
+    return;
+  }
+  if (!car) return;
+  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  drawEvaluatorCar(ctx, car, scale, ox, oy, dpr);
+}
+
+function evaluatorDirtyRect(
+  car: EvaluatorCarTelemetry,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  cssW: number,
+  cssH: number
+): { x: number; y: number; w: number; h: number } {
+  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  const sx = ox + car.pose[0] * scale;
+  const sy = oy - car.pose[1] * scale;
+  // Includes the glyph, EVAL label, and speed label with ample room for text.
+  return { x: sx - 16, y: sy - 30, w: 120, h: 64 };
 }
 
 function carRadiusPx(scale: number): number {

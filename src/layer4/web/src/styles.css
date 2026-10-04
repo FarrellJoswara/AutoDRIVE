@@ -796,8 +796,18 @@ label.check {
   z-index: 0;
 }
 
-.fleet-canvas-dyn {
+.fleet-canvas-overlay {
   z-index: 1;
+  pointer-events: none;
+}
+
+.fleet-canvas-cars {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.fleet-canvas-evaluator {
+  z-index: 3;
   pointer-events: none;
 }
 
