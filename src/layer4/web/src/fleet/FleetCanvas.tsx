@@ -1,14 +1,15 @@
 import { useEffect, useRef } from "react";
-import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetTelemetry } from "../api";
+import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetCar, FleetTelemetry } from "../api";
 import {
   DrawFrameOpts,
   ViewState,
   drawEvaluatorCarIncremental,
-  drawFleetCars,
+  drawFleetCarsIncremental,
   drawStaticMap,
   drawTelemetryOverlay,
   initialViewState,
   resolveBounds,
+  worldToScreenTransform,
 } from "./draw";
 import type { LoadedMap, MapId } from "./mapLoader";
 import { loadMap } from "./mapLoader";
@@ -20,6 +21,7 @@ import {
   getReplayFleetHotAgeMs,
   getTrainingPhaseHot,
   getTrainingStateHot,
+  subscribeFleetFrames,
 } from "../store";
 
 export interface FleetCanvasProps {
@@ -49,6 +51,37 @@ interface EvaluatorTransition {
   durationMs: number;
 }
 
+interface FleetCarTransition {
+  from: FleetCar;
+  to: FleetCar;
+  startedAt: number;
+  durationMs: number;
+}
+
+function interpolateFleetCar(transition: FleetCarTransition, now: number): FleetCar {
+  const t = transition.durationMs <= 0
+    ? 1
+    : Math.max(0, Math.min(1, (now - transition.startedAt) / transition.durationMs));
+  const { from, to } = transition;
+  let yaw = to.yaw;
+  if (from.yaw != null && to.yaw != null) {
+    let angleDelta = (to.yaw - from.yaw) % (Math.PI * 2);
+    if (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
+    if (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
+    yaw = from.yaw + angleDelta * t;
+  }
+  const pose = from.pose && to.pose
+    ? [
+      from.pose[0] + (to.pose[0] - from.pose[0]) * t,
+      from.pose[1] + (to.pose[1] - from.pose[1]) * t,
+    ] as [number, number]
+    : to.pose;
+  const speed = from.speed != null && to.speed != null
+    ? from.speed + (to.speed - from.speed) * t
+    : to.speed;
+  return { ...to, pose, yaw, speed };
+}
+
 function interpolateEvaluator(
   transition: EvaluatorTransition,
   now: number,
@@ -70,8 +103,8 @@ function interpolateEvaluator(
 }
 
 /**
- * Two canvases: static map underlayer + dynamic cars/LiDAR.
- * rAF reads getFleetHot() — WS does not drive React for every sample.
+ * Static map and telemetry layers redraw on changes; rAF is active only while
+ * fleet/evaluator interpolation is in progress.
  */
 export function FleetCanvas(props: FleetCanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -81,9 +114,9 @@ export function FleetCanvas(props: FleetCanvasProps) {
   const evaluatorRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<LoadedMap | null>(null);
   const viewRef = useRef<ViewState>(initialViewState());
-  const lastFleetSeq = useRef(0);
   const mapDirty = useRef(true);
   const propsRef = useRef(props);
+  const scheduleFrameRef = useRef<() => void>(() => {});
   const evaluatorTransitionRef = useRef<EvaluatorTransition | null>(null);
   const evaluatorTargetRef = useRef<{ key: string; car: EvaluatorCarTelemetry; receivedAt: number } | null>(null);
   propsRef.current = props;
@@ -98,7 +131,12 @@ export function FleetCanvas(props: FleetCanvasProps) {
     v.showLidar = props.showLidar;
     v.selectedEnvId = props.selectedEnvId;
     mapDirty.current = true;
+    scheduleFrameRef.current();
   }, [props.showMap, props.showFleet, props.showFrontier, props.showCurrentProgress, props.showLidar, props.selectedEnvId]);
+
+  useEffect(() => {
+    scheduleFrameRef.current();
+  }, [props.fleetSource, props.evaluatorActive, props.evaluatorCar, props.evaluatorSnapshotTimesteps, props.trainingStep, props.rolloutSize]);
 
   // Load occupancy map
   useEffect(() => {
@@ -119,12 +157,14 @@ export function FleetCanvas(props: FleetCanvasProps) {
         if (cancelled) return;
         mapRef.current = m;
         mapDirty.current = true;
+        scheduleFrameRef.current();
       })
       .catch((err) => {
         console.warn("fleet map load failed", err);
         if (!cancelled) {
           mapRef.current = null;
           mapDirty.current = true;
+          scheduleFrameRef.current();
         }
       });
     return () => {
@@ -141,38 +181,71 @@ export function FleetCanvas(props: FleetCanvasProps) {
     if (!wrap || !sc || !oc || !fc || !ec) return;
 
     let raf = 0;
+    let idleTimer = 0;
     let alive = true;
+    let cssW = 1;
+    let cssH = 1;
+    let dpr = 1;
     let lastOverlayKey = "";
-    let lastFleetCarsKey = "";
     let lastEvaluatorBoundsKey = "";
     let previousEvaluatorCar: EvaluatorCarTelemetry | null = null;
     let lastBoundsKey = "";
+    let lastFleetSampleKey = "";
+    let lastFleetSampleAt = 0;
+    let fleetCarTransitions = new Map<number, FleetCarTransition>();
+    let previousFleetCars: FleetCar[] = [];
+    let lastFleetBoundsKey = "";
+    let lastFleetCarsKey = "";
+
+    const scheduleFrame = () => {
+      if (!alive) return;
+      if (idleTimer) {
+        window.clearTimeout(idleTimer);
+        idleTimer = 0;
+      }
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+
+    const scheduleIdleFrame = () => {
+      if (!alive || idleTimer) return;
+      // Check staleness and low-frequency status changes without a permanent
+      // 60 Hz polling loop while the canvas is otherwise still.
+      idleTimer = window.setTimeout(() => {
+        idleTimer = 0;
+        scheduleFrame();
+      }, 500);
+    };
 
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
-      const cssW = Math.max(1, Math.floor(rect.width));
-      const cssH = Math.max(1, Math.floor(rect.height));
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      for (const c of [sc, oc, fc, ec]) {
+      cssW = Math.max(1, Math.floor(rect.width));
+      cssH = Math.max(1, Math.floor(rect.height));
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      for (const c of [sc, oc, fc]) {
         c.width = Math.floor(cssW * dpr);
         c.height = Math.floor(cssH * dpr);
         c.style.width = `${cssW}px`;
         c.style.height = `${cssH}px`;
       }
+      ec.width = Math.floor(120 * dpr);
+      ec.height = Math.floor(64 * dpr);
+      ec.style.width = "120px";
+      ec.style.height = "64px";
       mapDirty.current = true;
       lastOverlayKey = "";
       lastFleetCarsKey = "";
       lastEvaluatorBoundsKey = "";
       previousEvaluatorCar = null;
+      previousFleetCars = [];
+      lastFleetBoundsKey = "";
+      lastFleetCarsKey = "";
+      scheduleFrame();
     };
-
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
 
     const tick = () => {
       if (!alive) return;
-      raf = requestAnimationFrame(tick);
+      raf = 0;
+      const now = performance.now();
 
       const p = propsRef.current;
       const fleet = p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
@@ -210,10 +283,29 @@ export function FleetCanvas(props: FleetCanvasProps) {
       view.showLidar = p.showLidar;
       view.selectedEnvId = p.selectedEnvId;
 
-      const cssW = sc.clientWidth;
-      const cssH = sc.clientHeight;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const map = mapRef.current;
+      const fleetSampleKey = `${fleet?.run_id ?? ""}:${fleet?.step ?? ""}:${fleet?.ts ?? ""}`;
+      if (fleetSampleKey !== lastFleetSampleKey) {
+        const sampleIntervalMs = lastFleetSampleAt > 0
+          ? Math.max(40, Math.min(500, now - lastFleetSampleAt))
+          : 0;
+        const previousById = new Map(previousFleetCars.map((car) => [car.env_id, car]));
+        const nextTransitions = new Map<number, FleetCarTransition>();
+        for (const target of fleet?.cars ?? []) {
+          if (target.reset || !target.pose) continue;
+          const from = previousById.get(target.env_id) ?? target;
+          nextTransitions.set(target.env_id, {
+            from,
+            to: target,
+            startedAt: now,
+            durationMs: previousById.has(target.env_id) ? sampleIntervalMs : 0,
+          });
+        }
+        fleetCarTransitions = nextTransitions;
+        lastFleetSampleKey = fleetSampleKey;
+        lastFleetSampleAt = now;
+      }
+
       let evaluatorCar: EvaluatorCarTelemetry | null = null;
       if (p.fleetSource !== "replay" && p.evaluatorActive) {
         const live = getEvaluatorLiveHot();
@@ -221,7 +313,6 @@ export function FleetCanvas(props: FleetCanvasProps) {
           live && live.snapshot_timesteps === p.evaluatorSnapshotTimesteps ? live : null;
         const target = matchingLive ?? p.evaluatorCar ?? null;
         if (target) {
-          const now = performance.now();
           const key = `${matchingLive ? "ws" : "poll"}:${target.pose[0]}:${target.pose[1]}:${target.yaw}:${target.speed}`;
           const previousTarget = evaluatorTargetRef.current;
           if (!previousTarget || previousTarget.key !== key) {
@@ -253,6 +344,13 @@ export function FleetCanvas(props: FleetCanvasProps) {
         bounds.minZ.toFixed(2) +
         ":" +
         bounds.maxZ.toFixed(2);
+
+      const fleetAnimating = view.showFleet && [...fleetCarTransitions.values()].some(
+        (transition) => transition.durationMs > 0 && now < transition.startedAt + transition.durationMs,
+      );
+      const currentFleetCars = view.showFleet
+        ? [...fleetCarTransitions.values()].map((transition) => interpolateFleetCar(transition, now))
+        : [];
 
       const overlayKey =
         (fleet?.ts ?? "") +
@@ -302,11 +400,28 @@ export function FleetCanvas(props: FleetCanvasProps) {
       }
 
       const fleetCarsKey = `${fleet?.ts ?? ""}:${fleet?.step ?? ""}:${view.showFleet}:${view.selectedEnvId}:${boundsKey}`;
-      if (fleetCarsKey !== lastFleetCarsKey) {
-        lastFleetCarsKey = fleetCarsKey;
+      const fleetPoseKey = `${view.showFleet}:${view.selectedEnvId}:${boundsKey}:` + (fleetAnimating
+        ? currentFleetCars.map((car) => `${car.env_id}:${car.pose?.[0].toFixed(4)}:${car.pose?.[1].toFixed(4)}:${car.yaw?.toFixed(4)}:${car.speed?.toFixed(3)}:${car.collision}`).join("|")
+        : fleetCarsKey);
+      const fleetBoundsChanged = boundsKey !== lastFleetBoundsKey;
+      if (fleetPoseKey !== lastFleetCarsKey || fleetBoundsChanged) {
+        lastFleetCarsKey = fleetPoseKey;
+        lastFleetBoundsKey = boundsKey;
         const fctx = fc.getContext("2d");
-        if (fctx) drawFleetCars(fctx, opts, bounds);
-        lastFleetSeq.current += 1;
+        if (fctx) {
+          drawFleetCarsIncremental(
+            fctx,
+            currentFleetCars,
+            previousFleetCars,
+            view,
+            bounds,
+            cssW,
+            cssH,
+            dpr,
+            fleetBoundsChanged
+          );
+        }
+        previousFleetCars = currentFleetCars;
       }
 
       const evaluatorBoundsChanged = boundsKey !== lastEvaluatorBoundsKey;
@@ -324,26 +439,54 @@ export function FleetCanvas(props: FleetCanvasProps) {
       if (evaluatorKey !== previousEvaluatorKey || evaluatorBoundsChanged) {
         const ectx = ec.getContext("2d");
         if (ectx) {
+          if (visibleEvaluatorCar) {
+            const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+            const x = ox + visibleEvaluatorCar.pose[0] * scale - 16;
+            const y = oy - visibleEvaluatorCar.pose[1] * scale - 30;
+            ec.style.display = "block";
+            ec.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+          } else {
+            ec.style.display = "none";
+          }
           drawEvaluatorCarIncremental(
             ectx,
             visibleEvaluatorCar,
-            previousEvaluatorCar,
             bounds,
             cssW,
             cssH,
-            dpr,
-            evaluatorBoundsChanged
+            dpr
           );
         }
-        previousEvaluatorCar = evaluatorCar;
+        previousEvaluatorCar = visibleEvaluatorCar;
+      }
+
+      const evaluatorAnimating = Boolean(
+        visibleEvaluatorCar && evaluatorTransitionRef.current &&
+        evaluatorTransitionRef.current.durationMs > 0 &&
+        now < evaluatorTransitionRef.current.startedAt + evaluatorTransitionRef.current.durationMs,
+      );
+      if (fleetAnimating || evaluatorAnimating) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        scheduleIdleFrame();
       }
     };
 
-    raf = requestAnimationFrame(tick);
+    scheduleFrameRef.current = scheduleFrame;
+    const ro = new ResizeObserver(resize);
+    resize();
+    ro.observe(wrap);
+    window.addEventListener("resize", resize);
+    const unsubscribeFleetFrames = subscribeFleetFrames(scheduleFrame);
+    scheduleFrame();
     return () => {
       alive = false;
+      if (idleTimer) window.clearTimeout(idleTimer);
       cancelAnimationFrame(raf);
       ro.disconnect();
+      window.removeEventListener("resize", resize);
+      unsubscribeFleetFrames();
+      scheduleFrameRef.current = () => {};
     };
   }, []);
 

@@ -20,6 +20,39 @@ interface RewardSample {
   complete: boolean;
 }
 
+function downsampleChartPoints<T>(
+  points: T[],
+  getValue: (point: T) => number,
+  maxPoints = 600,
+): Array<{ point: T; index: number }> {
+  if (points.length <= maxPoints) {
+    return points.map((point, index) => ({ point, index }));
+  }
+  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
+  const bucketSize = (points.length - 2) / bucketCount;
+  const sampled: Array<{ point: T; index: number }> = [{ point: points[0], index: 0 }];
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const start = Math.floor(1 + bucket * bucketSize);
+    const end = Math.min(points.length - 1, Math.floor(1 + (bucket + 1) * bucketSize));
+    let minIndex = start;
+    let maxIndex = start;
+    for (let index = start + 1; index < end; index += 1) {
+      const value = getValue(points[index]);
+      if (value < getValue(points[minIndex])) minIndex = index;
+      if (value > getValue(points[maxIndex])) maxIndex = index;
+    }
+    for (const index of minIndex === maxIndex
+      ? [minIndex]
+      : minIndex < maxIndex ? [minIndex, maxIndex] : [maxIndex, minIndex]) {
+      if (sampled[sampled.length - 1].index !== index) sampled.push({ point: points[index], index });
+    }
+  }
+  if (sampled[sampled.length - 1].index !== points.length - 1) {
+    sampled.push({ point: points[points.length - 1], index: points.length - 1 });
+  }
+  return sampled;
+}
+
 /**
  * Observe surface — underlay from Train-selected map_id; no map picker / Activate.
  */
@@ -44,6 +77,7 @@ export function WatchPage() {
   const [rewardSamples, setRewardSamples] = useState<RewardSample[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<number | null>(null);
   const mapsRef = useRef<MapCatalogEntry[]>([]);
+  const lastAppliedMapIdRef = useRef<string | null>(null);
   const rewardRunRef = useRef<{
     runId: string;
     step: number;
@@ -55,6 +89,8 @@ export function WatchPage() {
 
   const applyMapId = (mid: string, list: MapCatalogEntry[]) => {
     const id = mid.trim() || "none";
+    if (lastAppliedMapIdRef.current === id) return;
+    lastAppliedMapIdRef.current = id;
     setMapId(id);
     if (id === "none") {
       setMapNote(
@@ -96,7 +132,9 @@ export function WatchPage() {
     if (!metrics || !Number.isFinite(metrics.reward)) return;
     const previous = rewardRunRef.current;
     const sameRun = previous?.runId === metrics.run_id && previous.rolloutSize === rolloutSize;
-    const totals = sameRun ? new Map(previous.totals) : new Map<number, number>();
+    // This map is private to the effect ref, so mutate it instead of cloning
+    // and sorting the complete training history for every metrics sample.
+    const totals = sameRun ? previous.totals : new Map<number, number>();
     const startStep = sameRun
       ? previous.step
       : Math.floor(Math.max(0, metrics.step - 1) / rolloutSize) * rolloutSize;
@@ -113,7 +151,6 @@ export function WatchPage() {
     }
 
     const samples = [...totals.entries()]
-      .sort(([a], [b]) => a - b)
       .map(([index, reward]) => ({
         step: (index + 1) * rolloutSize,
         reward,
@@ -124,11 +161,20 @@ export function WatchPage() {
   }, [metrics, rolloutSize]);
 
   const rewardTrend = rewardSamples;
+  const rewardChartPoints = useMemo(
+    () => downsampleChartPoints(rewardTrend, (point) => point.reward),
+    [rewardTrend],
+  );
 
   const rewardRange = useMemo(() => {
     if (rewardTrend.length === 0) return null;
-    const values = rewardTrend.map((point) => point.reward);
-    return { min: Math.min(...values), max: Math.max(...values) };
+    let min = Infinity;
+    let max = -Infinity;
+    for (const point of rewardTrend) {
+      min = Math.min(min, point.reward);
+      max = Math.max(max, point.reward);
+    }
+    return { min, max };
   }, [rewardTrend]);
 
   const evaluatorScores = useMemo(() => evaluationHistory
@@ -144,13 +190,22 @@ export function WatchPage() {
     }))
     .filter((point): point is { index: number; step: number; score: number; improved: boolean } =>
       typeof point.score === "number" && Number.isFinite(point.score)), [evaluationHistory]);
+  const evaluatorChartPoints = useMemo(
+    () => downsampleChartPoints(evaluatorScores, (point) => point.score),
+    [evaluatorScores],
+  );
   const evaluatorRange = useMemo(() => {
     if (!evaluatorScores.length) return null;
-    const scores = evaluatorScores.map((point) => point.score);
-    return { min: Math.min(...scores), max: Math.max(...scores) };
+    let min = Infinity;
+    let max = -Infinity;
+    for (const point of evaluatorScores) {
+      min = Math.min(min, point.score);
+      max = Math.max(max, point.score);
+    }
+    return { min, max };
   }, [evaluatorScores]);
   const evaluatorPolyline = evaluatorRange && evaluatorScores.length > 1
-    ? evaluatorScores.map((point, index) => {
+    ? evaluatorChartPoints.map(({ point, index }) => {
       const x = 64 + index / (evaluatorScores.length - 1) * 648;
       const span = evaluatorRange.max - evaluatorRange.min;
       const normalized = span > 1e-8 ? (point.score - evaluatorRange.min) / span : 0.5;
@@ -178,7 +233,7 @@ export function WatchPage() {
       ? null
       : Math.ceil(nextEvaluationThreshold / rolloutSize) * rolloutSize;
   const rewardPolyline = rewardRange && rewardTrend.length > 1
-    ? rewardTrend.map((point, index) => {
+    ? rewardChartPoints.map(({ point, index }) => {
       const x = 64 + index / (rewardTrend.length - 1) * 648;
       const span = rewardRange.max - rewardRange.min;
       const normalized = span > 1e-8 ? (point.reward - rewardRange.min) / span : 0.5;
@@ -190,6 +245,7 @@ export function WatchPage() {
   useEffect(() => {
     let cancelled = false;
     let lastHistoryKey: string | null = null;
+    let lastEvaluationKey: string | undefined;
     const syncHistory = (key: string) => {
       if (key === lastHistoryKey) return;
       lastHistoryKey = key;
@@ -203,7 +259,11 @@ export function WatchPage() {
         .then((status) => {
           if (cancelled) return;
           const last = status.last_evaluation ?? null;
-          setEvaluation(last);
+          const evaluationKey = last == null ? "none" : JSON.stringify(last);
+          if (evaluationKey !== lastEvaluationKey) {
+            lastEvaluationKey = evaluationKey;
+            setEvaluation(last);
+          }
           if (last?.state === "complete") syncHistory(last.updated_utc);
         })
         .catch(() => undefined);
@@ -218,10 +278,15 @@ export function WatchPage() {
 
   // Follow Train map_id: event (immediate) + short poll + focus refresh
   useEffect(() => {
+    let lastSettingsKey = "";
     const syncFromSettings = () => {
       void getSettings()
         .then((s) => {
-          setWatchSettings(s);
+          const settingsKey = JSON.stringify(s);
+          if (settingsKey !== lastSettingsKey) {
+            lastSettingsKey = settingsKey;
+            setWatchSettings(s);
+          }
           applyMapId(s.map_id ?? "none", mapsRef.current);
         })
         .catch(() => undefined);
@@ -751,7 +816,7 @@ export function WatchPage() {
                 <text key={index} x="53" y={[21, 85, 149][index]} textAnchor="end" className="reward-chart-axis-label">{value.toFixed(2)}</text>
               ))}
               <polyline points={rewardPolyline} className="reward-chart-line" />
-              {rewardTrend.map((point, index) => {
+              {rewardChartPoints.map(({ point, index }) => {
                 const span = rewardRange.max - rewardRange.min;
                 const normalized = span > 1e-8 ? (point.reward - rewardRange.min) / span : 0.5;
                 return <circle key={point.step} cx={64 + index / Math.max(1, rewardTrend.length - 1) * 648} cy={145 - normalized * 128} r="3" className="reward-chart-point"><title>{`PPO rollout ending at step ${point.step.toLocaleString()} · estimated reward ${point.reward.toFixed(2)}${point.complete ? " · complete" : " · in progress"}`}</title></circle>;
@@ -786,7 +851,7 @@ export function WatchPage() {
                 <text key={index} x="53" y={[21, 85, 149][index]} textAnchor="end" className="reward-chart-axis-label">{value.toFixed(2)}</text>
               ))}
               <polyline points={evaluatorPolyline} className="evaluator-chart-line" />
-              {evaluatorScores.map((point, index) => {
+              {evaluatorChartPoints.map(({ point, index }) => {
                 const span = evaluatorRange.max - evaluatorRange.min;
                 const normalized = span > 1e-8 ? (point.score - evaluatorRange.min) / span : 0.5;
                 return <circle key={`${point.index}-${point.step}`} cx={64 + index / (evaluatorScores.length - 1) * 648} cy={145 - normalized * 128} r="3.2" className={point.improved ? "evaluator-chart-point improved" : "evaluator-chart-point"}>

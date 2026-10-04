@@ -650,7 +650,7 @@ label.check {
   background: color-mix(in srgb, var(--bg0) 78%, transparent);
   border: 1px solid var(--line);
   pointer-events: none;
-  z-index: 2;
+  z-index: 4;
 }
 
 
@@ -809,6 +809,11 @@ label.check {
 .fleet-canvas-evaluator {
   z-index: 3;
   pointer-events: none;
+  inset: auto;
+  left: 0;
+  top: 0;
+  width: 120px;
+  height: 64px;
 }
 
 .fleet-side {

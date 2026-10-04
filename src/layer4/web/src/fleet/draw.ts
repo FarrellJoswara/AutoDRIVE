@@ -287,32 +287,12 @@ export function drawTelemetryOverlay(
   }
 }
 
-/** Training cars change at fleet telemetry cadence, independently of eval animation. */
-export function drawFleetCars(
+/** Update moving fleet glyphs without clearing the route-sized backing canvas. */
+export function drawFleetCarsIncremental(
   ctx: CanvasRenderingContext2D,
-  opts: DrawFrameOpts,
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
-): void {
-  const { fleet, view, cssW, cssH, dpr } = opts;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
-  if (!view.showFleet || !fleet) return;
-  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
-  for (const car of fleet.cars) {
-    if (car.reset || !car.pose) continue;
-    drawCar(ctx, car, scale, ox, oy, view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId, dpr);
-  }
-}
-
-/**
- * Redraw only the evaluator glyph. Its old bounds are dirtied on a dedicated
- * transparent canvas, so 60 Hz interpolation never clears route lines or the
- * full-size scene buffer.
- */
-export function drawEvaluatorCarIncremental(
-  ctx: CanvasRenderingContext2D,
-  car: EvaluatorCarTelemetry | null,
-  previous: EvaluatorCarTelemetry | null,
+  cars: FleetCar[],
+  previousCars: FleetCar[],
+  view: ViewState,
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   cssW: number,
   cssH: number,
@@ -322,29 +302,48 @@ export function drawEvaluatorCarIncremental(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (clearAll) {
     ctx.clearRect(0, 0, cssW, cssH);
-    if (!car) return;
-  } else if (previous) {
-    const oldBounds = evaluatorDirtyRect(previous, bounds, cssW, cssH);
-    ctx.clearRect(oldBounds.x, oldBounds.y, oldBounds.w, oldBounds.h);
-  } else if (!car) {
-    return;
+  } else {
+    for (const car of previousCars) {
+      if (!car.pose) continue;
+      const dirty = fleetCarDirtyRect(car, bounds, cssW, cssH);
+      ctx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+    }
   }
-  if (!car) return;
+  if (!view.showFleet) return;
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
-  drawEvaluatorCar(ctx, car, scale, ox, oy, dpr);
+  for (const car of cars) {
+    if (car.reset || !car.pose) continue;
+    drawCar(ctx, car, scale, ox, oy, view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId, dpr);
+  }
 }
 
-function evaluatorDirtyRect(
-  car: EvaluatorCarTelemetry,
+function fleetCarDirtyRect(
+  car: FleetCar,
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   cssW: number,
   cssH: number
 ): { x: number; y: number; w: number; h: number } {
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
-  const sx = ox + car.pose[0] * scale;
-  const sy = oy - car.pose[1] * scale;
-  // Includes the glyph, EVAL label, and speed label with ample room for text.
-  return { x: sx - 16, y: sy - 30, w: 120, h: 64 };
+  const sx = ox + car.pose![0] * scale;
+  const sy = oy - car.pose![1] * scale;
+  // Covers the rotated glyph plus the two short env/speed labels.
+  return { x: sx - 16, y: sy - 24, w: 112, h: 48 };
+}
+
+/** Draw into the compact evaluator canvas; FleetCanvas positions it by transform. */
+export function drawEvaluatorCarIncremental(
+  ctx: CanvasRenderingContext2D,
+  car: EvaluatorCarTelemetry | null,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  cssW: number,
+  cssH: number,
+  dpr: number
+): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, 120, 64);
+  if (!car) return;
+  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  drawEvaluatorCar(ctx, car, scale, 16, 30, dpr);
 }
 
 function carRadiusPx(scale: number): number {
@@ -451,13 +450,10 @@ function drawEvaluatorCar(
   ctx: CanvasRenderingContext2D,
   car: EvaluatorCarTelemetry,
   scale: number,
-  ox: number,
-  oy: number,
+  sx: number,
+  sy: number,
   dpr: number
 ): void {
-  const [wx, wz] = car.pose;
-  const sx = ox + wx * scale;
-  const sy = oy - wz * scale;
   const r = carRadiusPx(scale) + 1;
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

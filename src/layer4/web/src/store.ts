@@ -64,6 +64,7 @@ export function getEvaluatorLiveHot(): EvaluatorLiveTelemetry | null {
 }
 
 const listeners = new Set<Listener>();
+const fleetFrameListeners = new Set<Listener>();
 let ws: WebSocket | null = null;
 let backoff = 250;
 let reconnectTimer: number | null = null;
@@ -71,6 +72,16 @@ let started = false;
 
 function emit() {
   listeners.forEach((l) => l());
+}
+
+/** Wake canvas animation only when new telemetry or training state arrives. */
+export function subscribeFleetFrames(listener: Listener): () => void {
+  fleetFrameListeners.add(listener);
+  return () => fleetFrameListeners.delete(listener);
+}
+
+function emitFleetFrame() {
+  fleetFrameListeners.forEach((listener) => listener());
 }
 
 function setState(partial: Partial<StoreState>) {
@@ -94,6 +105,7 @@ function pushMetric(m: MetricsTelemetry) {
 function ingestFleet(p: FleetTelemetry) {
   fleetHot = p;
   fleetHotReceivedAt = performance.now();
+  emitFleetFrame();
   const now = performance.now();
   // Throttle React side-panel updates (~4 Hz); canvas reads getFleetHot()
   if (now - lastFleetUiEmit >= 1000 / FLEET_UI_HZ) {
@@ -108,6 +120,7 @@ function ingestFleet(p: FleetTelemetry) {
 function ingestReplayFleet(p: FleetTelemetry) {
   replayFleetHot = p;
   replayFleetReceivedAt = performance.now();
+  emitFleetFrame();
   const now = performance.now();
   if (now - lastReplayUiEmit >= 1000 / FLEET_UI_HZ) {
     lastReplayUiEmit = now;
@@ -152,6 +165,7 @@ export function getTrainingPhaseAgeMs(): number {
 function ingestTrainingPhase(phase: TrainingPhaseTelemetry | null) {
   trainingPhaseHot = phase;
   setState({ trainingPhase: phase });
+  emitFleetFrame();
 }
 
 async function resyncStatus() {
@@ -213,11 +227,13 @@ function connect() {
       if (msg.type === "status") {
         const status = msg.payload as TrainStatus;
         setState({ status });
+        emitFleetFrame();
         if (status.state === "starting") ingestTrainingPhase(null);
       } else if (msg.type === "train_phase") {
         ingestTrainingPhase(msg.payload as TrainingPhaseTelemetry);
       } else if (msg.type === "evaluator_live") {
         evaluatorLiveHot = msg.payload as EvaluatorLiveTelemetry;
+        emitFleetFrame();
       } else if (msg.type === "replay_status") {
         setState({ replayStatus: msg.payload as ReplayStatus });
       } else if (msg.type === "replay_telemetry") {
