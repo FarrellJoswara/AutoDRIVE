@@ -142,6 +142,17 @@ steps spanning more than one Bridge ID by dividing elapsed fixed time by the
 observed ID increase. This is an aggregate mean; intermediate event timestamps
 are not sampled separately.
 
+The October 4, 2026 fixed-step scaling check compared four camera-off
+environments at 60 FPS with five at 30 FPS, using the same fixed 0.086 s action
+interval and scripted actions. The five-at-30 configuration delivered 3.271
+aggregate simulated environment-seconds per wall second versus 3.140 for
+four-at-60 (+4.2%), while using about 3.842 versus 3.508 Unity CPU cores
+(+9.5%). Per-environment throughput was lower at five-at-30 (0.654 versus
+0.785 simulated seconds per wall second). This was a short simulator-only
+measurement, excluding PPO update time and longer-run resource contention; it
+suggests five-at-30 can modestly increase total collection throughput if CPU
+headroom exists, but does not establish higher end-to-end training throughput.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
