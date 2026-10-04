@@ -20,7 +20,8 @@ from test_camera_fixed_interval import (
 
 
 def run_one(*, label: str, simulator: Path, port: int, repeat: int,
-            seconds: float, interval: float, map_id: str, seed: int) -> dict[str, Any]:
+            seconds: float, interval: float, map_id: str, seed: int,
+            worker_index: int = 0) -> dict[str, Any]:
     prior_camera = os.environ.get("AICAR_DISABLE_CAMERA_STREAM")
     prior_fps = os.environ.get("AICAR_ACTION_IDLE_TARGET_FPS")
     os.environ["AICAR_DISABLE_CAMERA_STREAM"] = "1"
@@ -30,7 +31,7 @@ def run_one(*, label: str, simulator: Path, port: int, repeat: int,
             label=label, camera_enabled=False, simulator_path=simulator,
             port=port, interval_s=interval, seconds=seconds, map_id=map_id,
             step_timeout=15.0, policy_path=None, seed=seed,
-            repeat_index=repeat, worker_index=0,
+            repeat_index=repeat, worker_index=worker_index,
         )
     finally:
         for key, value in (("AICAR_DISABLE_CAMERA_STREAM", prior_camera),
