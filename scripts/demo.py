@@ -155,7 +155,7 @@ def _cmd_layer2(args: argparse.Namespace) -> int:
         max_episode_steps=max(50, args.steps + 10),
         stagnation_steps=200,
         connect_timeout=args.connect_timeout,
-        reward_config=RewardConfig(forward_scale=1.0, collision_penalty=0.0),
+        reward_config=RewardConfig(forward_scale=1.0, collision_penalty_magnitude=0.0),
     )
     try:
         obs, info = env.reset()
@@ -239,8 +239,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         str(args.connect_timeout),
         "--forward-scale",
         str(args.forward_scale),
-        "--collision-penalty",
-        str(args.collision_penalty),
+        "--collision-penalty-magnitude",
+        str(max(0.0, -args.collision_penalty)),
     ]
     if args.out is not None:
         argv.extend(["--out", str(args.out)])

@@ -260,7 +260,7 @@ class RouteProgressTests(unittest.TestCase):
             slip_angle=0.0,
             prev_steering=0.0,
             steering=0.0,
-            cfg=RewardConfig(time_penalty_per_second=1.5, episode_failure_penalty=-80.0),
+            cfg=RewardConfig(time_penalty_per_second=1.5, episode_failure_penalty_magnitude=80.0),
         )
         self.assertEqual(components["time_cost"], -3.0)
         self.assertEqual(components["episode_failure"], -80.0)
@@ -292,6 +292,49 @@ class RouteProgressTests(unittest.TestCase):
         )
         self.assertEqual(components["collision"], -100.0)
         self.assertEqual(components["total"], -100.0)
+
+    def test_collision_cost_includes_configured_share_of_positive_episode_return(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=0.0, collision_event=True, positive_episode_return=500.0,
+            slip_angle=0.0, prev_steering=0.0, steering=0.0,
+            cfg=RewardConfig(collision_penalty_magnitude=100.0, collision_reward_percent=20.0),
+        )
+        self.assertEqual(components["collision"], -200.0)
+        self.assertEqual(components["total"], -200.0)
+
+    def test_full_collision_clawback_cancels_frontier_earnings_plus_fixed_cost(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=0.0, collision_event=True, positive_episode_return=500.0,
+            frontier_advanced_m=2.0,
+            slip_angle=0.0, prev_steering=0.0, steering=0.0,
+            cfg=RewardConfig(
+                route_progress_scale=10.0,
+                collision_penalty_magnitude=100.0,
+                collision_reward_percent=100.0,
+            ),
+        )
+        self.assertEqual(components["route_progress"], 20.0)
+        self.assertEqual(components["collision"], -620.0)
+        self.assertEqual(components["total"], -600.0)
+
+    def test_stall_claws_back_frontier_earnings_plus_fixed_failure_cost(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        components = compute_reward_components(
+            v_long=0.0, collision_event=False, episode_failure=True,
+            positive_episode_return=500.0,
+            slip_angle=0.0, prev_steering=0.0, steering=0.0,
+            cfg=RewardConfig(
+                episode_failure_penalty_magnitude=100.0,
+                episode_failure_reward_percent=100.0,
+            ),
+        )
+        self.assertEqual(components["episode_failure"], -600.0)
+        self.assertEqual(components["total"], -600.0)
 
     def test_closed_route_wrap_increases_global_frontier(self) -> None:
         points = np.asarray([[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], dtype=float)

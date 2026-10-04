@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
+import os
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from stable_baselines3.common.callbacks import BaseCallback
 
@@ -97,171 +100,303 @@ def make_model(vec_env, *, device: str, seed: int, tensorboard_log: Optional[str
     )
 
 
-class LapCurriculumCallback(BaseCallback):
-    """Start with one-lap episodes, then promote to the configured lap target."""
-
-    def __init__(self, *, target_laps: int, successful_single_laps: int) -> None:
-        super().__init__(verbose=0)
-        self.target_laps = max(0, int(target_laps))
-        self.successful_single_laps = max(0, int(successful_single_laps))
-        self.single_lap_wins = 0
-        self.promoted = self.target_laps <= 1 or self.successful_single_laps == 0
-        self.promotion_step: Optional[int] = None
-
-    def _on_step(self) -> bool:
-        if self.promoted or self.target_laps <= 1:
-            return True
-        infos = self.locals.get("infos") or []
-        self.single_lap_wins += sum(
-            1 for info in infos
-            if isinstance(info, dict) and bool(info.get("episode_won", False))
-        )
-        if self.single_lap_wins >= self.successful_single_laps:
-            self.training_env.env_method("set_laps_per_episode", self.target_laps)
-            self.promoted = True
-            self.promotion_step = int(self.num_timesteps)
-            if self.verbose:
-                print(
-                    f"lap curriculum: {self.single_lap_wins} clean one-lap episodes; "
-                    f"promoted to {self.target_laps} laps/episode at step {self.num_timesteps}"
-                )
-        return True
 class RunStopCallback(BaseCallback):
-    """Stop on configured limits or when measured learning progress plateaus."""
+    """Enforce only the optional wall-clock limit; evaluation owns plateau stop."""
 
-    def __init__(
-        self,
-        *,
-        max_duration_seconds: float = 0.0,
-        stop_after_laps: int = 0,
-        plateau_min_timesteps: int = 100_000,
-        plateau_window_timesteps: int = 25_000,
-        plateau_patience: int = 5,
-        plateau_min_improvement_pct: float = 1.0,
-        plateau_min_successful_laps: int = 10,
-    ):
+    def __init__(self, *, max_duration_seconds: float = 0.0) -> None:
         super().__init__(verbose=0)
         self.max_duration_seconds = max(0.0, float(max_duration_seconds))
-        self.stop_after_laps = max(0, int(stop_after_laps))
-        self.plateau_min_timesteps = max(0, int(plateau_min_timesteps))
-        self.plateau_window_timesteps = max(1, int(plateau_window_timesteps))
-        self.plateau_patience = max(1, int(plateau_patience))
-        self.plateau_min_improvement_pct = max(0.0, float(plateau_min_improvement_pct))
-        self.plateau_min_successful_laps = max(0, int(plateau_min_successful_laps))
         self._started_at = 0.0
         self.stop_reason: Optional[str] = None
-        self._lap_totals: list[int] = []
-        self._episode_laps: list[int] = []
-        self._completed_laps = 0
-        self._window_progress_m = 0.0
-        self._window_reward = 0.0
-        self._window_frontier_samples = 0
-        self._window_samples = 0
-        self._best_progress_rate: Optional[float] = None
-        self._stale_windows = 0
-        self._evaluated_windows = 0
-        self.plateau_summary: Dict[str, Any] = {}
 
     def _on_training_start(self) -> None:
         self._started_at = time.monotonic()
 
     def _on_step(self) -> bool:
-        if (
-            self.max_duration_seconds > 0
-            and time.monotonic() - self._started_at >= self.max_duration_seconds
-        ):
+        if self.max_duration_seconds > 0 and time.monotonic() - self._started_at >= self.max_duration_seconds:
             self.stop_reason = "max_duration"
             return False
-
-        infos = self.locals.get("infos") or []
-        dones = self.locals.get("dones")
-        if dones is None:
-            dones = []
-
-        if len(self._lap_totals) != len(infos):
-            self._lap_totals = [0] * len(infos)
-            self._episode_laps = [0] * len(infos)
-        for index, info in enumerate(infos):
-            if isinstance(info, dict):
-                current = max(0, int(info.get("lap_count", 0) or 0))
-                previous = self._episode_laps[index]
-                delta = max(0, current - previous)
-                self._lap_totals[index] += delta
-                self._completed_laps += delta
-                self._episode_laps[index] = current
-            if index < len(dones) and bool(dones[index]):
-                self._episode_laps[index] = 0
-
-        if self.stop_after_laps > 0:
-            if any(total >= self.stop_after_laps for total in self._lap_totals):
-                self.stop_reason = "lap_target"
-                return False
-
-        # Prefer actual route distance. Builtin maps fall back to mean reward.
-        rewards = self.locals.get("rewards")
-        for index, info in enumerate(infos):
-            reward = float(rewards[index]) if rewards is not None and index < len(rewards) else 0.0
-            if not math.isfinite(reward):
-                reward = 0.0
-            self._window_reward += reward
-            self._window_samples += 1
-            if isinstance(info, dict) and "frontier_advanced_m" in info:
-                advanced_m = float(info.get("frontier_advanced_m", 0.0) or 0.0)
-                if math.isfinite(advanced_m):
-                    self._window_progress_m += max(0.0, advanced_m)
-                    self._window_frontier_samples += 1
-
-        if self._window_samples >= self.plateau_window_timesteps:
-            if self._window_frontier_samples == self._window_samples:
-                progress_rate = self._window_progress_m / self._window_samples
-                metric = "frontier_m_per_env_step"
-            else:
-                progress_rate = self._window_reward / max(1, self._window_samples)
-                metric = "reward_per_env_step"
-
-            self._window_progress_m = 0.0
-            self._window_reward = 0.0
-            self._window_frontier_samples = 0
-            self._window_samples = 0
-            self._evaluated_windows += 1
-
-            # Observe windows during warm-up to establish a baseline, but do
-            # not count them toward patience until minimum training is reached.
-            if self._best_progress_rate is None:
-                self._best_progress_rate = progress_rate
-            else:
-                improvement_pct = (
-                    (progress_rate - self._best_progress_rate)
-                    / max(abs(self._best_progress_rate), 1e-9)
-                    * 100.0
-                )
-                if progress_rate > self._best_progress_rate and improvement_pct >= self.plateau_min_improvement_pct:
-                    self._best_progress_rate = progress_rate
-                    self._stale_windows = 0
-                elif self.num_timesteps >= self.plateau_min_timesteps:
-                    self._stale_windows += 1
-
-            self.plateau_summary = {
-                "metric": metric,
-                "latest_window_rate": progress_rate,
-                "best_window_rate": self._best_progress_rate,
-                "evaluated_windows": self._evaluated_windows,
-                "stale_windows": self._stale_windows,
-                "minimum_timesteps": self.plateau_min_timesteps,
-                "window_timesteps": self.plateau_window_timesteps,
-                "patience": self.plateau_patience,
-                "minimum_improvement_pct": self.plateau_min_improvement_pct,
-                "completed_laps": self._completed_laps,
-                "minimum_successful_laps": self.plateau_min_successful_laps,
-            }
-            if (
-                self.num_timesteps >= self.plateau_min_timesteps
-                and self._stale_windows >= self.plateau_patience
-                and self._completed_laps >= self.plateau_min_successful_laps
-            ):
-                self.stop_reason = "progress_plateau"
-                return False
         return True
+
+
+class EvaluationCallback(BaseCallback):
+    """Asynchronously evaluate snapshots until failure, frontier stall, or ten laps."""
+
+    def __init__(
+        self, evaluation_env, *, out_dir: Path, every_timesteps: int,
+        frame_skip: int, selection_metric: str, plateau_min_timesteps: int,
+        plateau_patience: int, min_improvement_pct: float,
+        exploration_std_min: float, exploration_std_max: float,
+        exploration_improvement_scale: float, exploration_plateau_scale: float,
+        live_pose_publisher: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> None:
+        super().__init__(verbose=0)
+        self.evaluation_env = evaluation_env
+        self.live_pose_publisher = live_pose_publisher
+        self.out_dir = Path(out_dir)
+        self.every_timesteps = max(1, int(every_timesteps))
+        self.frame_skip = max(1, int(frame_skip))
+        if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward"}:
+            raise ValueError(f"unsupported evaluation metric: {selection_metric}")
+        self.selection_metric = selection_metric
+        self.plateau_min_timesteps = max(0, int(plateau_min_timesteps))
+        self.plateau_patience = max(1, int(plateau_patience))
+        self.min_improvement_pct = max(0.0, float(min_improvement_pct))
+        self.std_min = float(exploration_std_min)
+        self.std_max = float(exploration_std_max)
+        self.improvement_scale = float(exploration_improvement_scale)
+        self.plateau_scale = float(exploration_plateau_scale)
+        self.next_eval = self.every_timesteps
+        self.best_score: Optional[float] = None
+        self.stale_evaluations = 0
+        self.stop_reason: Optional[str] = None
+        self.history_path = self.out_dir / "evaluation_history.jsonl"
+        self.status_path = self.out_dir / "evaluation_status.json"
+        self.latest: Dict[str, Any] = {}
+        self._last_adaptation = "initial"
+        self._target_log_std: Optional[float] = None
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="policy-evaluation")
+        self._future: Optional[Future] = None
+        self._candidate_path: Optional[Path] = None
+        self._evaluation_requested = False
+        self._evaluation_index = 0
+        self._executor_shutdown = False
+        self._live_pose: Optional[Dict[str, Any]] = None
+        self._active_snapshot_steps: Optional[int] = None
+        self._last_live_status_write = 0.0
+        self._last_live_pose_publish = 0.0
+        self._live_result: Optional[Dict[str, Any]] = None
+
+    def _write_status(self, state: str, snapshot_timesteps: Optional[int] = None) -> None:
+        latest = self.latest or None
+        status = {
+            "state": state,
+            "snapshot_timesteps": snapshot_timesteps,
+            "selection_metric": self.selection_metric,
+            "best_selection_score": self.best_score,
+            "stale_evaluations": self.stale_evaluations,
+            "plateau_patience": self.plateau_patience,
+            "latest_result": latest,
+            "live_result": self._live_result,
+            "evaluator_car": self._live_pose,
+            "stop_reason": self.stop_reason,
+            "updated_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        self.status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+    def _on_training_start(self) -> None:
+        self._write_status("waiting")
+
+    def _policy_std(self) -> Any:
+        return self.model.policy.log_std
+
+    def _on_rollout_start(self) -> None:
+        import torch
+        with torch.no_grad():
+            log_std = self._policy_std()
+            if self._target_log_std is None:
+                self._target_log_std = float(log_std.detach().mean().cpu())
+            self._target_log_std = min(
+                math.log(self.std_max),
+                max(math.log(self.std_min), self._target_log_std),
+            )
+            log_std.fill_(self._target_log_std)
+
+    def _adjust_exploration(self, scale: float) -> None:
+        import torch
+        if self._target_log_std is None:
+            self._target_log_std = float(self._policy_std().detach().mean().cpu())
+        self._target_log_std += math.log(scale)
+        self._target_log_std = min(
+            math.log(self.std_max),
+            max(math.log(self.std_min), self._target_log_std),
+        )
+        with torch.no_grad():
+            self._policy_std().fill_(self._target_log_std)
+
+    def _evaluate_snapshot(self, policy: Any, timesteps: int) -> Dict[str, Any]:
+        from src.layer3.evaluate import evaluate_until_episode_end
+
+        class SnapshotModel:
+            def predict(self, obs, *, deterministic=True):
+                return policy.predict(obs, deterministic=deterministic)
+
+        return evaluate_until_episode_end(
+            SnapshotModel(),
+            self.evaluation_env,
+            frame_skip=self.frame_skip,
+            timesteps=timesteps,
+            lap_target=10,
+            on_step=self._on_evaluation_step,
+        )
+
+    def _on_evaluation_step(self, info: Dict[str, Any]) -> None:
+        live_result = info.get("_evaluation_metrics")
+        if isinstance(live_result, dict):
+            self._live_result = {
+                key: live_result[key]
+                for key in (
+                    "frontier_distance_m",
+                    "frontier_speed_mps",
+                    "simulated_seconds",
+                    "laps_observed",
+                    "lap_times_s",
+                    "best_10_lap_time_s",
+                    "reward_per_simulated_second",
+                    "total_reward",
+                    "collisions",
+                )
+                if key in live_result
+            }
+
+        # Publish evaluator metrics independently of pose telemetry. Position
+        # or yaw can be absent on a valid simulator step; that must not freeze
+        # the live score in evaluation_status.json.
+        now = time.monotonic()
+        if now - self._last_live_status_write >= 0.25:
+            self._last_live_status_write = now
+            self._write_status("running", snapshot_timesteps=self._active_snapshot_steps)
+
+        position = info.get("position")
+        if not isinstance(position, (list, tuple)) or len(position) < 3:
+            return
+        try:
+            pose = [float(position[0]), float(position[2])]
+            yaw = float(info["yaw"])
+            speed = float(info.get("true_speed", 0.0) or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return
+        if not all(math.isfinite(value) for value in (*pose, yaw, speed)):
+            return
+        self._live_pose = {"pose": pose, "yaw": yaw, "speed": speed}
+        now = time.monotonic()
+        if self.live_pose_publisher is not None and now - self._last_live_pose_publish >= 1.0 / 15.0:
+            self._last_live_pose_publish = now
+            self.live_pose_publisher({
+                **self._live_pose,
+                "run_id": self.out_dir.name,
+                "snapshot_timesteps": self._active_snapshot_steps,
+            })
+
+    def _launch_evaluation(self) -> None:
+        if self._future is not None or self._executor_shutdown:
+            return
+        # Snapshot at the rollout boundary, when PPO is not updating weights.
+        # Inference uses a CPU copy, so the evaluator never reads weights being
+        # changed by the training process.
+        snapshot = copy.deepcopy(self.model.policy).to("cpu")
+        snapshot.set_training_mode(False)
+        evaluation_timestep = int(self.num_timesteps)
+        self._active_snapshot_steps = evaluation_timestep
+        self._live_pose = None
+        self._live_result = None
+        self._last_live_status_write = 0.0
+        self._last_live_pose_publish = 0.0
+        self._evaluation_index += 1
+        candidate_base = self.out_dir / f"evaluation_candidate_{self._evaluation_index}"
+        self.model.save(str(candidate_base))
+        self._candidate_path = Path(f"{candidate_base}.zip")
+        self._write_status("running", snapshot_timesteps=evaluation_timestep)
+        self._future = self._executor.submit(
+            self._evaluate_snapshot, snapshot, evaluation_timestep,
+        )
+        print(
+            f"evaluation started: snapshot_steps={evaluation_timestep} "
+            "(training continues in parallel)",
+            flush=True,
+        )
+
+    def _collect_evaluation(self) -> None:
+        if self._future is None or not self._future.done():
+            return
+        future, candidate = self._future, self._candidate_path
+        self._future = None
+        self._candidate_path = None
+        try:
+            result = future.result()
+        except Exception as exc:
+            if candidate is not None:
+                candidate.unlink(missing_ok=True)
+            raise RuntimeError("deterministic policy evaluation failed") from exc
+
+        score = float(result[
+            "frontier_speed_mps"
+            if self.selection_metric == "frontier_speed"
+            else "reward_per_simulated_second"
+            if self.selection_metric == "reward_per_simulated_second"
+            else "total_reward"
+        ])
+        improved = self.best_score is None
+        if self.best_score is not None:
+            pct = (score - self.best_score) / max(abs(self.best_score), 1e-6) * 100.0
+            improved = score > self.best_score and pct >= self.min_improvement_pct
+        if improved:
+            self.best_score = score
+            self.stale_evaluations = 0
+            best_path = self.out_dir / "best_evaluated_model.zip"
+            if candidate is None or not candidate.is_file():
+                raise RuntimeError("evaluation snapshot checkpoint is missing")
+            os.replace(candidate, best_path)
+            self._adjust_exploration(self.improvement_scale)
+            self._last_adaptation = "reduced_after_improvement"
+        else:
+            if candidate is not None:
+                candidate.unlink(missing_ok=True)
+            if self.num_timesteps >= self.plateau_min_timesteps:
+                self.stale_evaluations += 1
+            if self.stale_evaluations > 0 and self.stale_evaluations % 3 == 0:
+                self._adjust_exploration(self.plateau_scale)
+                self._last_adaptation = "increased_after_three_stale_evaluations"
+        result.update({
+            "selection_score": score,
+            "selection_metric": self.selection_metric,
+            "best_selection_score": self.best_score,
+            "improved": improved,
+            "stale_evaluations": self.stale_evaluations,
+            "exploration_std": self._policy_std().detach().exp().cpu().tolist(),
+            "exploration_adaptation": self._last_adaptation,
+        })
+        self.latest = result
+        with self.history_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(result) + "\n")
+        print(
+            "evaluation: "
+            f"snapshot_steps={result['timesteps']} frontier={result['frontier_distance_m']:.1f}m "
+            f"pace={result['frontier_speed_mps']:.3f}m/s "
+            f"selection={self.selection_metric}:{score:.3f} "
+            f"crashes={result['collisions']} laps={result['laps_observed']} "
+            f"stale={self.stale_evaluations}", flush=True,
+        )
+        if (self.num_timesteps >= self.plateau_min_timesteps
+                and self.stale_evaluations >= self.plateau_patience):
+            self.stop_reason = "evaluation_plateau"
+            self.latest["stop_reason"] = self.stop_reason
+        self._live_pose = None
+        self._live_result = None
+        self._active_snapshot_steps = None
+        self._write_status("complete", snapshot_timesteps=int(result["timesteps"]))
+
+    def _on_rollout_end(self) -> None:
+        if self.num_timesteps >= self.next_eval:
+            while self.next_eval <= self.num_timesteps:
+                self.next_eval += self.every_timesteps
+            self._evaluation_requested = True
+
+        self._collect_evaluation()
+        if self.stop_reason is None and self._evaluation_requested and self._future is None:
+            self._evaluation_requested = False
+            self._launch_evaluation()
+
+    def _on_step(self) -> bool:
+        return self.stop_reason is None
+
+    def _on_training_end(self) -> None:
+        # A finite training stop can occur while the separate evaluator is still
+        # driving. Join it before train() closes the evaluation simulator.
+        if not self._executor_shutdown:
+            self._executor.shutdown(wait=True)
+            self._executor_shutdown = True
+        self._collect_evaluation()
 
 
 class SimulatorPauseCallback(BaseCallback):
@@ -299,46 +434,6 @@ class SimulatorPauseCallback(BaseCallback):
         self._paused = False
 
 
-class CleanLapCheckpointCallback(BaseCallback):
-    """Keep only PPO policies that repeatedly demonstrate clean laps."""
-
-    MINIMUM_SUCCESSFUL_EPISODES = 3
-
-    def __init__(self, path: Path) -> None:
-        super().__init__(verbose=0)
-        self.path = Path(path)
-        self.successful_episodes = 0
-        self.best_lap_time_s: Optional[float] = None
-
-    def _on_step(self) -> bool:
-        infos = self.locals.get("infos") or []
-        dones = self.locals.get("dones")
-        for index, info in enumerate(infos):
-            if not isinstance(info, dict):
-                continue
-            if dones is not None and index < len(dones) and not bool(dones[index]):
-                continue
-            if not bool(info.get("episode_won", False)):
-                continue
-            self.successful_episodes += 1
-            lap_time = info.get("best_lap_time_s")
-            try:
-                lap_time = float(lap_time)
-            except (TypeError, ValueError):
-                lap_time = None
-            if self.successful_episodes < self.MINIMUM_SUCCESSFUL_EPISODES:
-                continue
-            if lap_time is not None and math.isfinite(lap_time) and lap_time > 0:
-                if self.best_lap_time_s is None or lap_time < self.best_lap_time_s:
-                    self.best_lap_time_s = lap_time
-                    self.model.save(str(self.path))
-            elif self.best_lap_time_s is None and not self.path.with_suffix(".zip").exists():
-                # Older simulator builds may report a clean win without lap
-                # timing; retain the first successful policy as a fallback.
-                self.model.save(str(self.path))
-        return True
-
-
 def train(
     *,
     n_envs: int = 1,
@@ -347,16 +442,18 @@ def train(
     seed: int = 0,
     device: str = "auto",
     resume: Optional[Path] = None,
+    laps_per_episode: int = 10,
     env_kwargs: Optional[Dict[str, Any]] = None,
     max_duration_seconds: float = 0.0,
-    stop_after_laps: int = 0,
     plateau_min_timesteps: int = 100_000,
-    plateau_window_timesteps: int = 25_000,
     plateau_patience: int = 5,
     plateau_min_improvement_pct: float = 1.0,
-    plateau_min_successful_laps: int = 10,
-    expert_pretrain_steps: int = 0,
-    curriculum_single_lap_successes: int = 10,
+    evaluation_every_timesteps: int = 50_000,
+    evaluation_metric: str = "frontier_speed",
+    exploration_std_min: float = 0.2,
+    exploration_std_max: float = 0.8,
+    exploration_improvement_scale: float = 0.9,
+    exploration_plateau_scale: float = 1.1,
 ) -> Path:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -384,13 +481,15 @@ def train(
     if env_kwargs:
         print(f"env: {env_kwargs}")
 
+    # A successful lap target ends this car's episode; the overall PPO job
+    # continues with a fresh episode. Zero disables the optional target.
+    env_kwargs["laps_per_episode"] = max(0, int(laps_per_episode))
     vec_env = make_vec_env(n_envs, seed=seed, **env_kwargs)
+    evaluation_env = None
     try:
-        trusted_initial_path = out_dir / "trusted_initial_model"
         if resume is not None:
             print(f"resuming from {resume}")
             model = PPO.load(str(resume), env=vec_env, device=resolved_device)
-            model.save(str(trusted_initial_path))
         else:
             model = make_model(
                 vec_env,
@@ -399,104 +498,31 @@ def train(
                 tensorboard_log=str(tb_dir),
             )
 
-        expert_summary = None
-        cloning_summary = None
-        final_lap_target = max(0, int(env_kwargs.get("laps_per_episode", 10)))
-        curriculum = LapCurriculumCallback(
-            target_laps=final_lap_target,
-            successful_single_laps=curriculum_single_lap_successes,
-        )
-        route_training_supported = False
-        centerline = None
-        route = None
-        if resume is None and final_lap_target > 0:
-            from src.layer2.route_progress import RouteProgressTracker, map_centerline_path
-            centerline = map_centerline_path(str(env_kwargs.get("map_id", "none")))
-            if centerline is not None:
-                route = RouteProgressTracker.from_csv(centerline)
-                route_training_supported = bool(route.closed)
-            if route_training_supported:
-                # Start with one circuit even when expert data collection is
-                # disabled; the curriculum promotes only after clean success.
-                initial_laps = (
-                    1
-                    if final_lap_target > 1 and curriculum_single_lap_successes > 0
-                    else final_lap_target
-                )
-                vec_env.env_method("set_laps_per_episode", initial_laps)
-                curriculum.promoted = initial_laps == final_lap_target
-                if expert_pretrain_steps > 0:
-                    from src.layer3.behavior_cloning import (
-                        behavior_clone_actor,
-                        collect_centerline_demonstrations,
-                    )
-                    from src.layer3.expert import CenterlineExpert
-
-                    expert = CenterlineExpert(route)
-                    # Privileged map geometry generates action labels only.
-                    # The policy observation remains LiDAR + vehicle state.
-                    dataset, expert_summary = collect_centerline_demonstrations(
-                        vec_env,
-                        expert,
-                        steps=expert_pretrain_steps,
-                        output_path=out_dir / "expert_demonstrations.npz",
-                    )
-                    print(
-                        "expert collection summary: "
-                        f"{expert_summary['completed_episodes']} episodes, "
-                        f"{expert_summary['successful_episodes']} clean laps, "
-                        f"endings={expert_summary['termination_counts']}, "
-                        f"examples={expert_summary['termination_examples']}",
-                        flush=True,
-                    )
-                    if expert_summary["successful_episodes"] < 1:
-                        raise RuntimeError(
-                            "centerline teacher produced no clean one-lap demonstrations; "
-                            f"endings={expert_summary['termination_counts']}; "
-                            "refusing to initialize the learned policy from unvalidated labels"
-                        )
-                    cloning_summary = behavior_clone_actor(model, dataset, seed=seed)
-                    model.save(str(out_dir / "expert_initialized_model"))
-                    print(
-                        "expert warmup: "
-                        f"{expert_summary['transitions']} transitions, "
-                        f"{expert_summary['successful_episodes']} clean one-lap episodes, "
-                        f"endings={expert_summary['termination_counts']}, "
-                        f"validation loss {cloning_summary['initial_validation_loss']:.4f} -> "
-                        f"{cloning_summary['final_validation_loss']:.4f}"
-                    )
-            else:
-                curriculum.promoted = True
-                print("map has no closed centerline; one-lap curriculum and expert warmup skipped")
-        elif resume is not None:
-            curriculum.promoted = True
-            vec_env.env_method("set_laps_per_episode", final_lap_target)
-
         config = {
             "n_envs": n_envs,
             "bridge_ports": list(range(4567, 4567 + n_envs)),
+            "evaluation_port": 4567 + n_envs,
             "timesteps": timesteps,
             "stopping": {
                 "max_duration_seconds": max(0.0, float(max_duration_seconds)),
-                "stop_after_laps": max(0, int(stop_after_laps)),
-                "lap_target_semantics": "any_car_total_across_run",
                 "plateau_min_timesteps": max(0, int(plateau_min_timesteps)),
-                "plateau_window_timesteps": max(1, int(plateau_window_timesteps)),
                 "plateau_patience": max(1, int(plateau_patience)),
                 "plateau_min_improvement_pct": max(0.0, float(plateau_min_improvement_pct)),
-                "plateau_min_successful_laps": (
-                    max(0, int(plateau_min_successful_laps))
-                    if route_training_supported else 0
-                ),
-                "plateau_metric": "frontier_m_per_env_step; reward_per_env_step_without_route",
+                "evaluation_every_timesteps": max(1, int(evaluation_every_timesteps)),
+                "evaluation_metric": evaluation_metric,
+                "evaluation_runs_in_parallel": True,
+                "evaluation_stop_conditions": ["collision", "frontier_stall", "10_laps"],
+                "plateau_metric": evaluation_metric,
+                "exploration": {
+                    "std_min": float(exploration_std_min),
+                    "std_max": float(exploration_std_max),
+                    "scale_after_improvement": float(exploration_improvement_scale),
+                    "scale_after_three_stale_evaluations": float(exploration_plateau_scale),
+                },
             },
             "learning_strategy": {
-                "expert_pretrain_steps": max(0, int(expert_pretrain_steps)),
-                "expert_demonstrations": expert_summary,
-                "behavior_cloning": cloning_summary,
-                "curriculum_single_lap_successes": max(0, int(curriculum_single_lap_successes)),
-                "curriculum_final_laps_per_episode": final_lap_target,
-                "teacher_map_geometry_in_policy_observation": False,
+                "lap_termination": env_kwargs["laps_per_episode"] > 0,
+                "laps_per_episode": env_kwargs["laps_per_episode"],
             },
             "seed": seed,
             "device": resolved_device,
@@ -533,24 +559,40 @@ def train(
             save_vecnormalize=False,
         )
 
-        stop_cb = RunStopCallback(
-            max_duration_seconds=max_duration_seconds,
-            stop_after_laps=stop_after_laps,
-            plateau_min_timesteps=plateau_min_timesteps,
-            plateau_window_timesteps=plateau_window_timesteps,
-            plateau_patience=plateau_patience,
-            plateau_min_improvement_pct=plateau_min_improvement_pct,
-            plateau_min_successful_laps=(
-                plateau_min_successful_laps if route_training_supported else 0
-            ),
+        stop_cb = RunStopCallback(max_duration_seconds=max_duration_seconds)
+        evaluation_env_kwargs = dict(env_kwargs)
+        evaluation_env_kwargs["laps_per_episode"] = 10
+        # Evaluation is bounded by an actual failure/stall or ten laps, never
+        # by a step/time cap or the training collision-toggle preference.
+        evaluation_env_kwargs["max_episode_steps"] = 0
+        evaluation_env_kwargs["terminate_on_collision"] = True
+        evaluation_env_kwargs["frontier_stagnation_seconds"] = max(
+            0.1, float(evaluation_env_kwargs.get("frontier_stagnation_seconds", 5.0))
         )
-        simulator_pause_cb = SimulatorPauseCallback()
-        clean_lap_cb = CleanLapCheckpointCallback(out_dir / "best_clean_lap_model")
-        curriculum.verbose = 1
-        callbacks = [simulator_pause_cb, checkpoint_cb, curriculum, clean_lap_cb, stop_cb]
+        evaluation_env = make_vec_env(
+            1, seed=seed + 50_000, port_start=4567 + n_envs,
+            **evaluation_env_kwargs,
+        )
         from src.layer3.hub_callback import maybe_hub_callback
 
         hub_cb = maybe_hub_callback(run_id=out_dir.name)
+        evaluation_cb = EvaluationCallback(
+            evaluation_env,
+            out_dir=out_dir,
+            every_timesteps=evaluation_every_timesteps,
+            frame_skip=int(env_kwargs.get("frame_skip", 4)),
+            selection_metric=evaluation_metric,
+            plateau_min_timesteps=plateau_min_timesteps,
+            plateau_patience=plateau_patience,
+            min_improvement_pct=plateau_min_improvement_pct,
+            exploration_std_min=exploration_std_min,
+            exploration_std_max=exploration_std_max,
+            exploration_improvement_scale=exploration_improvement_scale,
+            exploration_plateau_scale=exploration_plateau_scale,
+            live_pose_publisher=hub_cb.publish_evaluator_live if hub_cb is not None else None,
+        )
+        simulator_pause_cb = SimulatorPauseCallback()
+        callbacks = [simulator_pause_cb, evaluation_cb, checkpoint_cb, stop_cb]
         if hub_cb is not None:
             callbacks.append(hub_cb)
             print(f"hub telemetry: HUB_URL set → publishing to hub (run_id={out_dir.name})")
@@ -565,49 +607,17 @@ def train(
         last_model_path = out_dir / "ppo_last_model"
         model.save(str(last_model_path))
         final_policy_source = "ppo_last_model"
-        trusted_model = out_dir / "expert_initialized_model.zip"
-        if not trusted_model.is_file():
-            trusted_model = trusted_initial_path.with_suffix(".zip")
-        if clean_lap_cb.successful_episodes >= clean_lap_cb.MINIMUM_SUCCESSFUL_EPISODES:
-            selected_path = out_dir / "best_clean_lap_model.zip"
-            if selected_path.is_file():
-                model = PPO.load(str(selected_path), env=vec_env, device=resolved_device)
-                final_policy_source = "best_clean_lap_model"
-        elif (
-            clean_lap_cb.successful_episodes < clean_lap_cb.MINIMUM_SUCCESSFUL_EPISODES
-            and trusted_model.is_file()
-        ):
-            # PPO can lose the demonstrator before it has learned to finish a
-            # lap. Keep the initial sensor-only policy (or the user's resumed
-            # checkpoint) as the usable model rather than publishing an
-            # unvalidated, non-driving checkpoint.
-            model = PPO.load(
-                str(trusted_model),
-                env=vec_env,
-                device=resolved_device,
-            )
-            final_policy_source = (
-                "expert_initialized_model_no_clean_ppo_lap"
-                if trusted_model.name == "expert_initialized_model.zip"
-                else "trusted_initial_model_no_clean_ppo_lap"
-            )
+        selected_path = out_dir / "best_evaluated_model.zip"
+        if selected_path.is_file():
+            model = PPO.load(str(selected_path), env=vec_env, device=resolved_device)
+            final_policy_source = "best_evaluated_model"
         stop_record = {
-            "reason": stop_cb.stop_reason or "timestep_limit",
+            "reason": evaluation_cb.stop_reason or stop_cb.stop_reason or "timestep_limit",
             "num_timesteps": ppo_timesteps,
             "max_duration_seconds": max(0.0, float(max_duration_seconds)),
-            "stop_after_laps": max(0, int(stop_after_laps)),
-            "plateau": stop_cb.plateau_summary,
-            "completed_laps": stop_cb._completed_laps,
-            "successful_ppo_episodes": clean_lap_cb.successful_episodes,
-            "minimum_successful_ppo_episodes_for_promotion": clean_lap_cb.MINIMUM_SUCCESSFUL_EPISODES,
-            "best_ppo_lap_time_s": clean_lap_cb.best_lap_time_s,
+            "plateau": evaluation_cb.latest,
+            "evaluations_path": str(evaluation_cb.history_path),
             "final_policy_source": final_policy_source,
-            "curriculum": {
-                "single_lap_wins": curriculum.single_lap_wins,
-                "promoted": curriculum.promoted,
-                "promotion_step": curriculum.promotion_step,
-                "final_laps_per_episode": curriculum.target_laps,
-            },
         }
         (out_dir / "stop_reason.json").write_text(
             json.dumps(stop_record, indent=2), encoding="utf-8"
@@ -618,6 +628,8 @@ def train(
         print(f"saved {final_path}.zip")
         return Path(str(final_path) + ".zip")
     finally:
+        if evaluation_env is not None:
+            evaluation_env.close()
         vec_env.close()
 
 
@@ -628,23 +640,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--timesteps",
         type=int,
         default=0,
-        help="Maximum total env steps; 0 disables the cap and stops on progress plateau",
+        help="Maximum total env steps; 0 disables the cap and stops on evaluation plateau",
     )
     p.add_argument(
         "--max-duration-seconds", type=float, default=0.0,
         help="Optional wall-clock run limit; 0 disables it",
     )
-    p.add_argument(
-        "--stop-after-laps", type=int, default=0,
-        help="Stop when any car completes this many laps; 0 disables it",
-    )
     p.add_argument("--plateau-min-timesteps", type=int, default=100_000)
-    p.add_argument("--plateau-window-timesteps", type=int, default=25_000)
     p.add_argument("--plateau-patience", type=int, default=5)
     p.add_argument("--plateau-min-improvement-pct", type=float, default=1.0)
-    p.add_argument("--plateau-min-successful-laps", type=int, default=10)
-    p.add_argument("--expert-pretrain-steps", type=int, default=0)
-    p.add_argument("--curriculum-single-lap-successes", type=int, default=10)
+    p.add_argument("--evaluation-every-timesteps", type=int, default=50_000)
+    p.add_argument(
+        "--evaluation-metric",
+        choices=("frontier_speed", "reward_per_simulated_second", "total_reward"),
+        default="total_reward",
+    )
+    p.add_argument("--exploration-std-min", type=float, default=0.2)
+    p.add_argument("--exploration-std-max", type=float, default=0.8)
+    p.add_argument("--exploration-improvement-scale", type=float, default=0.9)
+    p.add_argument("--exploration-plateau-scale", type=float, default=1.1)
     p.add_argument("--out", type=Path, default=None, help="Run directory under logs/rl/")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", type=_device_arg, default="auto")
@@ -665,17 +679,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     p.add_argument("--map-id", type=str, default="none")
-    p.add_argument("--laps-per-episode", type=int, default=10)
+    p.add_argument("--laps-per-episode", type=int, default=10,
+                   help="Successful laps before resetting an episode; 0 disables")
     p.add_argument("--frontier-stagnation-seconds", type=float, default=5.0)
     p.add_argument("--forward-scale", type=float, default=0.0)
     p.add_argument("--backward-speed-penalty-scale", type=float, default=1.0)
     p.add_argument("--route-progress-scale", type=float, default=10.0)
-    p.add_argument("--time-penalty-per-second", type=float, default=1.0)
-    p.add_argument("--collision-penalty", type=float, default=-100.0)
-    p.add_argument("--episode-failure-penalty", type=float, default=-100.0)
+    p.add_argument("--time-penalty-per-second", type=float, default=5.0)
+    p.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
+    p.add_argument("--collision-reward-percent", type=float, default=100.0)
+    p.add_argument("--episode-failure-penalty-magnitude", type=float, default=100.0)
+    p.add_argument("--episode-failure-reward-percent", type=float, default=100.0)
     p.add_argument("--slip-penalty", type=float, default=0.2)
     p.add_argument("--steer-jerk-penalty", type=float, default=0.05)
-    p.add_argument("--lap-time-reward-scale", type=float, default=1000.0)
     return p
 
 
@@ -699,16 +715,18 @@ def main(argv: Optional[list] = None) -> int:
         seed=args.seed,
         device=args.device,
         resume=args.resume,
+        laps_per_episode=args.laps_per_episode,
         env_kwargs=env_kwargs_from_args(args),
         max_duration_seconds=args.max_duration_seconds,
-        stop_after_laps=args.stop_after_laps,
         plateau_min_timesteps=args.plateau_min_timesteps,
-        plateau_window_timesteps=args.plateau_window_timesteps,
         plateau_patience=args.plateau_patience,
         plateau_min_improvement_pct=args.plateau_min_improvement_pct,
-        plateau_min_successful_laps=args.plateau_min_successful_laps,
-        expert_pretrain_steps=args.expert_pretrain_steps,
-        curriculum_single_lap_successes=args.curriculum_single_lap_successes,
+        evaluation_every_timesteps=args.evaluation_every_timesteps,
+        evaluation_metric=args.evaluation_metric,
+        exploration_std_min=args.exploration_std_min,
+        exploration_std_max=args.exploration_std_max,
+        exploration_improvement_scale=args.exploration_improvement_scale,
+        exploration_plateau_scale=args.exploration_plateau_scale,
     )
     print(f"done: {zip_path}")
     return 0

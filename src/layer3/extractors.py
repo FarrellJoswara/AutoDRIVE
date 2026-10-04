@@ -10,7 +10,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 class LidarStateExtractor(BaseFeaturesExtractor):
     """
-    Encode Dict obs {"lidar": (1080,), "state": (8,)} into one feature vector.
+    Encode Dict obs {"lidar": (1081,), "state": (9,)} into one feature vector.
 
     LiDAR uses a 1D-CNN (neighboring beams). State uses a small MLP. Both are
     concatenated and projected to ``features_dim``.

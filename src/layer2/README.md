@@ -7,7 +7,7 @@ Layer 2 wraps **one** Layer 1 `Racer` as a standard [Gymnasium](https://gymnasiu
 **Rules (v1):**
 
 - **1 env = 1 car = 1 port** (no multi-car inside one env)  
-- Headless by default; full **1080** LiDAR; `frame_skip=1` (every physics tick; cannot be `0`)  
+- Headless by default; full **1081** LiDAR; `frame_skip=1` (every physics tick; cannot be `0`)
 - Crashes end the episode when `terminate_on_collision` is enabled; each new collision receives the configured penalty (default `-100`)
 - Episodes end by **stagnation** truncation (and optional `max_episode_steps` if `> 0`)  
 
@@ -52,23 +52,25 @@ Exports: `AutoDriveEnv`, `RewardConfig`, `compute_reward`, `default_simulator_pa
 
 | Piece | Role |
 |-------|------|
-| `LIDAR_BEAMS = 1080`, `STATE_DIM = 8` | Fixed sizes for v1 |
+| `LIDAR_BEAMS = 1081`, `STATE_DIM = 9` | Full live scan and normalized sensor/control state |
 | `make_action_space()` | `Box(-1, 1, shape=(2,))` → `[throttle, steering]` |
-| `make_observation_space()` | Dict: `lidar` ∈ `[0,1]^1080`, `state` ∈ `R^8` (±inf) |
+| `make_observation_space()` | Dict: `lidar` ∈ `[0,1]^1081`, `state` ∈ `[-5,5]^9` |
 | `snapshot_to_obs(snap, prev_throttle, prev_steering)` | Build the obs dict |
 | `_normalize_lidar` | Map ranges to `[0, 1]` |
-| `_body_frame_accel` | World accel → body `a_long` / `a_lat` |
+| State scaling | Direct Bridge body-frame velocity/acceleration plus normalized IMU rate and actuator feedback |
 
-**`state` vector (8 floats):**  
-`v_long`, `v_lat`, `yaw_rate`, `a_long`, `a_lat`, `slip_angle`, `prev_throttle`, `prev_steering`  
+**`state` vector (9 normalized floats):**
+`v_long`, `v_lat`, `yaw_rate`, `a_long`, `a_lat`, measured throttle, measured steering, previous throttle command, previous steering command.
 
-LiDAR is scaled; state is **raw** (state scaling deferred).
+Velocity and acceleration are consumed from the Bridge's body-frame axes without a second yaw rotation. Speed is scaled by the RoboRacer maximum, acceleration by 1 g, yaw rate by 10 rad/s, and steering feedback by its 30° range. State values are clipped to ±5 after scaling; each channel keeps its own units and scale.
+
+Live scans contain 1081 rays: both endpoints of the -135°..+135° fan at 0.25° spacing. The documented 1080-ray variant is angularly resampled. Positive infinity and sub-minimum echoes are treated as no return and map to max range. Missing, malformed, or non-finite scans fail observation construction instead of being filled with fake zero-distance obstacles.
 
 ### `rewards.py`
 
 | Piece | Role |
 |-------|------|
-| `RewardConfig` | Weights for route progress, reverse motion, collision, lap, slip, and steering |
+| `RewardConfig` | Weights for route progress, reverse motion, collision, time, slip, and steering |
 | `compute_reward(...)` | Pure function: facts in → scalar PPO reward |
 | `compute_reward_components(...)` | Same calculation with each term exposed for telemetry |
 
@@ -76,11 +78,11 @@ Default formula:
 
 ```text
 r  = route_progress_scale * new_frontier_metres
-r -= time_penalty_per_second * simulated_seconds
+r -= time_penalty_per_second * simulated_seconds # default 5 per second
 r -= backward_speed_penalty_scale * reverse_distance_m
-r += collision_penalty                 # default -100 on collision
-r += episode_failure_penalty           # default -100 on other failed endings
-r += lap_bonus                         # only on clean target-lap completion
+r -= collision_penalty_magnitude       # default 100 on collision
+r -= positive_episode_return * collision_reward_percent / 100
+r -= episode_failure_penalty_magnitude # default 100 on other failed endings
 r -= slip_penalty * |slip|           # default 0
 r -= steer_jerk_penalty * |Δsteer|   # default 0
 ```
@@ -95,13 +97,14 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 
 On mapped tracks, Layer 2 projects each pose onto the route. Only a new
 high-water frontier advance earns positive per-step reward; recovering or
-repeating already-travelled route distance does not. A constant cost per
-simulated second favors faster progress and makes stalling accumulate cost.
+repeating already-travelled route distance does not. A cost of 5 reward units
+per simulated second favors faster progress and makes stalling accumulate cost.
 Backward body-frame motion is penalized, and a frontier push is withheld if the
 car is moving backward relative to its body beyond the reverse deadband. A
-collision receives the collision cost; frontier stalls and other failed episode
-endings receive the episode-failure cost. Clean target-lap completion can earn
-the separate average-frontier-speed bonus. No reward depends on distance from
+collision receives the fixed collision cost plus a percentage of positive
+frontier reward accumulated during that car's life; frontier stalls and other
+failed episode endings receive the episode-failure cost. Lap completions never
+change reward or end an episode. No reward depends on distance from
 the centerline. The frontier remains the monotonic progress marker for lap
 accounting and visualization. Builtin (`none`) runs have no route frontier, so
 they receive no positive driving reward; select a validated route map for this
@@ -189,7 +192,7 @@ env = AutoDriveEnv(
     headless=True,
     frame_skip=1,
     max_episode_steps=0,
-    reward_config=RewardConfig(route_progress_scale=10.0, collision_penalty=0.0),
+    reward_config=RewardConfig(route_progress_scale=10.0, collision_penalty_magnitude=0.0),
 )
 obs, info = env.reset()
 obs, reward, terminated, truncated, info = env.step([0.5, 0.0])

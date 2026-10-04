@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 from .route_progress import RouteProgressTracker
@@ -32,6 +32,7 @@ class LapTracker:
 
     def reset(self, progress: Optional[Dict[str, Any]] = None, now: float = 0.0) -> None:
         self.lap_count = 0
+        self.lap_times_s: List[float] = []
         self.last_lap_time_s: Optional[float] = None
         self.best_lap_time_s: Optional[float] = None
         self._start_progress: Optional[float] = None
@@ -109,6 +110,7 @@ class LapTracker:
                     lap_time = max(0.0, crossing_time - lap_started_at)
                     self.lap_count += 1
                     self.last_lap_time_s = lap_time
+                    self.lap_times_s.append(lap_time)
                     frontier_start = (
                         crossing_progress - self.length_m
                         if self._lap_frontier_start_m is None
@@ -150,6 +152,7 @@ class LapTracker:
         return {
             "lap_supported": self.supported,
             "lap_count": int(self.lap_count),
+            "lap_times_s": list(self.lap_times_s),
             "last_lap_time_s": self.last_lap_time_s,
             "best_lap_time_s": self.best_lap_time_s,
             "lap_elapsed_s": elapsed,

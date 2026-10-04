@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
 import { useHubStore } from "../store";
+import { formatLapDuration, tenLapMetrics } from "./lapTiming";
 
 export function ReplayPage() {
   const { replayStatus, replayFleet, replayFleetAgeMs } = useHubStore();
@@ -50,6 +51,7 @@ export function ReplayPage() {
   const running = ["starting", "running", "stopping"].includes(replayStatus?.state ?? "idle");
   const selectedMap = useMemo(() => maps.find((map) => map.id === mapId) ?? null, [maps, mapId]);
   const car = replayFleet?.cars.find((entry) => entry.env_id === 0) ?? null;
+  const tenLap = car ? tenLapMetrics(car) : null;
   const stale = replayFleetAgeMs > 1000;
 
   async function perform(action: () => Promise<unknown>, success: string) {
@@ -174,6 +176,9 @@ export function ReplayPage() {
           {!car ? <p className="meta">Start replay to see the model on track.</p> : (
             <dl className="fleet-stats replay-stats">
               <div><dt>Completed laps</dt><dd>{car.lap_count ?? 0}</dd></div>
+              <div><dt>10-lap progress</dt><dd>{tenLap?.progressLaps ?? 0}/10</dd></div>
+              <div><dt>10-lap time so far</dt><dd>{formatLapDuration(tenLap?.currentTimeS ?? null)}</dd></div>
+              <div><dt>Best 10 laps this session</dt><dd>{formatLapDuration(car.best_10_lap_time_s ?? null)}</dd></div>
               <div><dt>Current lap</dt><dd>{car.lap_elapsed_s != null ? `${car.lap_elapsed_s.toFixed(2)} s` : "—"}</dd></div>
               <div><dt>Last lap</dt><dd>{car.last_lap_time_s != null ? `${car.last_lap_time_s.toFixed(2)} s` : "—"}</dd></div>
               <div><dt>Best lap</dt><dd>{car.best_lap_time_s != null ? `${car.best_lap_time_s.toFixed(2)} s` : "—"}</dd></div>

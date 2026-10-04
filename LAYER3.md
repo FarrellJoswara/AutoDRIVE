@@ -41,7 +41,7 @@ Full CNN/MLP/fuse explainer: [`src/layer3/README.md`](src/layer3/README.md).
 
 | Term | Meaning |
 |------|---------|
-| **Observation** | Dict: `lidar` (1080,), `state` (8,) |
+| **Observation** | Dict: `lidar` (1081,), `state` (9,) |
 | **Action** | `[throttle, steering]` ∈ [-1, 1] |
 | **Feature extractor** | LiDAR 1D-CNN + state MLP → one fused vector |
 | **PPO** | Training algorithm (SB3) |

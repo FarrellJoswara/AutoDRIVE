@@ -1,4 +1,4 @@
-import type { FleetCar, FleetTelemetry } from "../api";
+import type { EvaluatorCarTelemetry, FleetCar, FleetTelemetry } from "../api";
 import {
   LIDAR_RANGE_MAX_M,
   LIDAR_RANGE_MIN_M,
@@ -35,7 +35,9 @@ export interface ViewState {
 export interface DrawFrameOpts {
   map: LoadedMap | null;
   fleet: FleetTelemetry | null;
+  evaluatorCar?: EvaluatorCarTelemetry | null;
   staleLabel: string | null;
+  ppoProgress?: { label: string; progress: number; detail: string } | null;
   view: ViewState;
   cssW: number;
   cssH: number;
@@ -155,11 +157,11 @@ export function drawDynamic(
   /** Must match the bounds passed to drawStaticMap in the same frame. */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
 ): void {
-  const { fleet, staleLabel, view, cssW, cssH, dpr } = opts;
+  const { fleet, evaluatorCar, staleLabel, ppoProgress, view, cssW, cssH, dpr } = opts;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  if (!fleet || !fleet.cars.length) {
+  if ((!fleet || !fleet.cars.length) && !evaluatorCar) {
     ctx.fillStyle = "rgba(138, 163, 150, 0.8)";
     ctx.font = "13px Segoe UI, sans-serif";
     ctx.fillText("Waiting for fleet telemetry…", 16, 28);
@@ -167,9 +169,9 @@ export function drawDynamic(
   }
 
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
-  const rMin = fleet.lidar_range_min ?? LIDAR_RANGE_MIN_M;
-  const rMax = fleet.lidar_range_max ?? LIDAR_RANGE_MAX_M;
-  const gate = fleet.lap_gate;
+  const rMin = fleet?.lidar_range_min ?? LIDAR_RANGE_MIN_M;
+  const rMax = fleet?.lidar_range_max ?? LIDAR_RANGE_MAX_M;
+  const gate = fleet?.lap_gate;
   if (view.showFleet && gate && gate.length === 2) {
     const x1 = ox + gate[0][0] * scale;
     const y1 = oy - gate[0][1] * scale;
@@ -194,9 +196,10 @@ export function drawDynamic(
 
   // The backend owns route projection and frontier geometry; canvas only draws it.
   if (view.showFrontier) {
-    for (const car of fleet.cars) {
+    for (const car of fleet?.cars ?? []) {
       const line = car.frontier_line;
       if (car.reset || !line || line.length !== 2) continue;
+      ctx.globalAlpha = view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId ? 0.18 : 1;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.strokeStyle = car.env_id === view.selectedEnvId
         ? "rgba(255, 205, 86, 0.95)"
@@ -208,14 +211,16 @@ export function drawDynamic(
       ctx.lineTo(ox + line[1][0] * scale, oy - line[1][1] * scale);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
   }
   // Current position bar follows the car's signed route position; unlike the
   // best-so-far frontier it moves backward when the car retreats.
   if (view.showCurrentProgress) {
-    for (const car of fleet.cars) {
+    for (const car of fleet?.cars ?? []) {
       const line = car.current_progress_line;
       if (car.reset || !line || line.length !== 2) continue;
+      ctx.globalAlpha = view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId ? 0.18 : 1;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.strokeStyle = car.env_id === view.selectedEnvId
         ? "rgba(62, 207, 142, 0.98)"
@@ -226,13 +231,14 @@ export function drawDynamic(
       ctx.moveTo(ox + line[0][0] * scale, oy - line[0][1] * scale);
       ctx.lineTo(ox + line[1][0] * scale, oy - line[1][1] * scale);
       ctx.stroke();
+      ctx.globalAlpha = 1;
     }
   }
   // Draw the ranges published by telemetry directly from the published pose.
   if (view.showLidar) {
     const car = view.selectedEnvId < 0
       ? undefined
-      : fleet.cars.find((c) => c.env_id === view.selectedEnvId);
+      : fleet?.cars.find((c) => c.env_id === view.selectedEnvId);
     if (
       car &&
       !car.reset &&
@@ -246,13 +252,42 @@ export function drawDynamic(
   }
 
   if (view.showFleet) {
-    for (const car of fleet.cars) {
+    for (const car of fleet?.cars ?? []) {
       if (car.reset || !car.pose) continue;
-      drawCar(ctx, car, scale, ox, oy, car.env_id === view.selectedEnvId, dpr);
+      drawCar(ctx, car, scale, ox, oy, view.selectedEnvId >= 0 && car.env_id !== view.selectedEnvId, dpr);
+    }
+    if (evaluatorCar) {
+      drawEvaluatorCar(ctx, evaluatorCar, scale, ox, oy, dpr);
     }
   }
 
-  if (staleLabel) {
+  if (ppoProgress) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const boxWidth = Math.min(280, Math.max(210, cssW - 24));
+    const boxHeight = 48;
+    ctx.fillStyle = "rgba(7, 15, 12, 0.88)";
+    ctx.fillRect(10, 10, boxWidth, boxHeight);
+    ctx.strokeStyle = "rgba(81, 118, 99, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(10.5, 10.5, boxWidth - 1, boxHeight - 1);
+    ctx.fillStyle = ppoProgress.label.startsWith("PPO updating")
+      ? "rgba(116, 218, 255, 0.98)"
+      : "rgba(77, 232, 170, 0.98)";
+    ctx.font = "11px Cascadia Code, Consolas, monospace";
+    ctx.fillText(ppoProgress.label, 18, 27);
+    ctx.fillStyle = "rgba(166, 194, 177, 0.9)";
+    ctx.font = "9px Cascadia Code, Consolas, monospace";
+    ctx.fillText(ppoProgress.detail, 18, 40);
+    const trackX = 18;
+    const trackY = 47;
+    const trackWidth = boxWidth - 16;
+    ctx.fillStyle = "rgba(49, 68, 57, 0.95)";
+    ctx.fillRect(trackX, trackY, trackWidth, 4);
+    ctx.fillStyle = ppoProgress.label.startsWith("PPO updating")
+      ? "rgba(116, 218, 255, 0.98)"
+      : "rgba(77, 232, 170, 0.98)";
+    ctx.fillRect(trackX, trackY, trackWidth * ppoProgress.progress, 4);
+  } else if (staleLabel) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = staleLabel.startsWith("PPO updating")
       ? "rgba(116, 218, 255, 0.98)"
@@ -320,7 +355,7 @@ function drawCar(
   scale: number,
   ox: number,
   oy: number,
-  selected: boolean,
+  dimmed: boolean,
   dpr: number
 ): void {
   const [wx, wz] = car.pose!;
@@ -329,6 +364,8 @@ function drawCar(
   const yaw = car.yaw ?? 0;
   const r = carRadiusPx(scale);
 
+  ctx.save();
+  ctx.globalAlpha = dimmed ? 0.14 : 1;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.translate(sx, sy);
   // Unity yaw=0 → +Z; screen angle of forward = atan2(-cos(yaw), sin(yaw))
@@ -356,6 +393,46 @@ function drawCar(
   if (car.speed != null && Number.isFinite(car.speed)) {
     ctx.fillText(`${car.speed.toFixed(1)}`, sx + r + 3, labelY + 11);
   }
+
+  ctx.restore();
+}
+
+function drawEvaluatorCar(
+  ctx: CanvasRenderingContext2D,
+  car: EvaluatorCarTelemetry,
+  scale: number,
+  ox: number,
+  oy: number,
+  dpr: number
+): void {
+  const [wx, wz] = car.pose;
+  const sx = ox + wx * scale;
+  const sy = oy - wz * scale;
+  const r = carRadiusPx(scale) + 1;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.translate(sx, sy);
+  ctx.rotate(Math.atan2(-Math.cos(car.yaw), Math.sin(car.yaw)));
+  ctx.fillStyle = "#c684ff";
+  ctx.strokeStyle = "#f4eaff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(r + 2, 0);
+  ctx.lineTo(-r, r * 0.9);
+  ctx.lineTo(-r * 0.45, 0);
+  ctx.lineTo(-r, -r * 0.9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#f4eaff";
+  ctx.font = "bold 11px Cascadia Code, Consolas, monospace";
+  ctx.fillText("EVAL", sx + r + 4, sy - r - 2);
+  if (Number.isFinite(car.speed)) {
+    ctx.font = "10px Cascadia Code, Consolas, monospace";
+    ctx.fillText(`${car.speed.toFixed(1)} m/s`, sx + r + 4, sy - r + 9);
+  }
+  ctx.restore();
 }
 
 function carColor(envId: number): string {
@@ -366,7 +443,8 @@ function carColor(envId: number): string {
 export function resolveBounds(
   map: LoadedMap | null,
   view: ViewState,
-  fleet: FleetTelemetry | null
+  fleet: FleetTelemetry | null,
+  evaluatorPose?: [number, number]
 ): { minX: number; maxX: number; minZ: number; maxZ: number } {
   const pad = 2;
 
@@ -383,6 +461,13 @@ export function resolveBounds(
   }
 
   if (fleet) expandFit(view, fleet.cars);
+  if (evaluatorPose) {
+    const [x, z] = evaluatorPose;
+    view.fitMinX = Math.min(view.fitMinX, x - 2);
+    view.fitMaxX = Math.max(view.fitMaxX, x + 2);
+    view.fitMinZ = Math.min(view.fitMinZ, z - 2);
+    view.fitMaxZ = Math.max(view.fitMaxZ, z + 2);
+  }
 
   if (
     Number.isFinite(view.fitMinX) &&

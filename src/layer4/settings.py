@@ -21,14 +21,17 @@ class Settings(BaseModel):
     # 0 means no total-step cap; the plateau callback decides when to stop.
     timesteps: int = Field(default=0, ge=0)
     max_duration_seconds: float = Field(default=0.0, ge=0)
-    stop_after_laps: int = Field(default=0, ge=0)
     plateau_min_timesteps: int = Field(default=100_000, ge=0)
-    plateau_window_timesteps: int = Field(default=25_000, ge=1)
     plateau_patience: int = Field(default=5, ge=1)
     plateau_min_improvement_pct: float = Field(default=1.0, ge=0)
-    plateau_min_successful_laps: int = Field(default=10, ge=0)
-    expert_pretrain_steps: int = Field(default=0, ge=0)
-    curriculum_single_lap_successes: int = Field(default=10, ge=0)
+    evaluation_every_timesteps: int = Field(default=50_000, ge=1)
+    evaluation_metric: Literal[
+        "frontier_speed", "reward_per_simulated_second", "total_reward"
+    ] = "total_reward"
+    exploration_std_min: float = Field(default=0.2, gt=0)
+    exploration_std_max: float = Field(default=0.8, gt=0)
+    exploration_improvement_scale: float = Field(default=0.9, gt=0, le=1)
+    exploration_plateau_scale: float = Field(default=1.1, ge=1)
     out: Optional[str] = None
     run_name: Optional[str] = None
     seed: int = 0
@@ -41,6 +44,7 @@ class Settings(BaseModel):
     connect_timeout: float = Field(default=90.0, gt=0)
     frame_skip: int = Field(default=4, ge=1)
     max_episode_steps: int = Field(default=0, ge=0)
+    laps_per_episode: int = Field(default=10, ge=0)
     stagnation_speed_threshold: float = 0.15
     stagnation_steps: int = Field(default=50, ge=0)
     frontier_stagnation_seconds: float = Field(default=5.0, ge=0)
@@ -48,12 +52,13 @@ class Settings(BaseModel):
     forward_scale: float = 0.0
     backward_speed_penalty_scale: float = Field(default=1.0, ge=0)
     route_progress_scale: float = Field(default=10.0, ge=0)
-    time_penalty_per_second: float = Field(default=1.0, ge=0)
-    collision_penalty: float = -100.0
-    episode_failure_penalty: float = -100.0
+    time_penalty_per_second: float = Field(default=5.0, ge=0)
+    collision_penalty_magnitude: float = Field(default=100.0, ge=0)
+    collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
+    episode_failure_penalty_magnitude: float = Field(default=100.0, ge=0)
+    episode_failure_reward_percent: float = Field(default=100.0, ge=0, le=100)
     slip_penalty: float = 0.2
     steer_jerk_penalty: float = 0.05
-    lap_time_reward_scale: float = Field(default=1000.0, ge=0)
 
     # Hub-only (not train argv)
     telemetry_every_n: int = Field(default=200, ge=1)
@@ -66,7 +71,14 @@ class Settings(BaseModel):
     # Mission Control map selection — locked in on Train Start (Watch underlay).
     # "none" = builtin Unity track (grid underlay only).
     map_id: str = "none"
-    laps_per_episode: int = Field(default=10, ge=0)
+
+    @field_validator("exploration_std_max")
+    @classmethod
+    def _exploration_max_gte_min(cls, value: float, info: Any) -> float:
+        minimum = info.data.get("exploration_std_min")
+        if minimum is not None and value < minimum:
+            raise ValueError("exploration_std_max must be >= exploration_std_min")
+        return value
 
     @field_validator("device", mode="before")
     @classmethod
@@ -103,22 +115,24 @@ class Settings(BaseModel):
             str(self.timesteps),
             "--max-duration-seconds",
             str(self.max_duration_seconds),
-            "--stop-after-laps",
-            str(self.stop_after_laps),
             "--plateau-min-timesteps",
             str(self.plateau_min_timesteps),
-            "--plateau-window-timesteps",
-            str(self.plateau_window_timesteps),
             "--plateau-patience",
             str(self.plateau_patience),
             "--plateau-min-improvement-pct",
             str(self.plateau_min_improvement_pct),
-            "--plateau-min-successful-laps",
-            str(self.plateau_min_successful_laps),
-            "--expert-pretrain-steps",
-            str(self.expert_pretrain_steps),
-            "--curriculum-single-lap-successes",
-            str(self.curriculum_single_lap_successes),
+            "--evaluation-every-timesteps",
+            str(self.evaluation_every_timesteps),
+            "--evaluation-metric",
+            self.evaluation_metric,
+            "--exploration-std-min",
+            str(self.exploration_std_min),
+            "--exploration-std-max",
+            str(self.exploration_std_max),
+            "--exploration-improvement-scale",
+            str(self.exploration_improvement_scale),
+            "--exploration-plateau-scale",
+            str(self.exploration_plateau_scale),
             "--out",
             str(out),
             "--seed",
@@ -131,14 +145,14 @@ class Settings(BaseModel):
             str(self.frame_skip),
             "--max-episode-steps",
             str(self.max_episode_steps),
+            "--laps-per-episode",
+            str(self.laps_per_episode),
             "--stagnation-speed-threshold",
             str(self.stagnation_speed_threshold),
             "--stagnation-steps",
             str(self.stagnation_steps),
             "--map-id",
             self.map_id,
-            "--laps-per-episode",
-            str(self.laps_per_episode),
             "--frontier-stagnation-seconds",
             str(self.frontier_stagnation_seconds),
             "--terminate-on-collision" if self.terminate_on_collision else "--no-terminate-on-collision",
@@ -150,16 +164,18 @@ class Settings(BaseModel):
             str(self.route_progress_scale),
             "--time-penalty-per-second",
             str(self.time_penalty_per_second),
-            "--collision-penalty",
-            str(self.collision_penalty),
-            "--episode-failure-penalty",
-            str(self.episode_failure_penalty),
+            "--collision-penalty-magnitude",
+            str(self.collision_penalty_magnitude),
+            "--collision-reward-percent",
+            str(self.collision_reward_percent),
+            "--episode-failure-penalty-magnitude",
+            str(self.episode_failure_penalty_magnitude),
+            "--episode-failure-reward-percent",
+            str(self.episode_failure_reward_percent),
             "--slip-penalty",
             str(self.slip_penalty),
             "--steer-jerk-penalty",
             str(self.steer_jerk_penalty),
-            "--lap-time-reward-scale",
-            str(self.lap_time_reward_scale),
         ]
         if self.resume:
             argv.extend(["--resume", str(self.resume)])

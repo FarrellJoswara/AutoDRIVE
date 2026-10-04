@@ -202,7 +202,7 @@ Two cadences:
 - **Metrics** — every `telemetry_every_n` steps (step, reward, episode).
 - **Fleet** — time-based ~`fleet_hz` (poses, yaw, collision, min-pooled LiDAR).
 
-LiDAR in the sim is **1080** beams; for the UI we **min-pool to ~120** so the browser isn’t crushed by `JSON.parse`.
+The official RoboRacer guide specifies 1080 LiDAR measurements; the live Bridge currently sends 1081 endpoint-inclusive rays. PPO retains the complete canonical scan, while the UI min-pools it to about 120 rays so the browser isn’t crushed by `JSON.parse`.
 
 ## HTTP / WebSocket API (what the UI calls)
 
@@ -266,7 +266,7 @@ If the panel says **stale**, no fresh fleet sample recently (PPO update gaps are
 
 - **Vite + React + TS**, plain **CSS** (no Tailwind/Radix/shadcn).
 - **One WebSocket**; store/refs updated without re-rendering the world every beam.
-- **Canvas 2D** for the fleet (not 1080 SVG lines).
+- **Canvas 2D** for the fleet (not thousands of SVG rays).
 - Prod: `npm run build` → static files served by FastAPI on the **same** `:8090`.
 - Dev convenience: host `npm run build` updates bind-mounted `src/layer4/web/dist`; hub **prefers** that path over a stale image bake. Hard-refresh (`Ctrl+Shift+R`) after rebuilds.
 

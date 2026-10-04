@@ -42,16 +42,19 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _min_pool_lidar(arr: np.ndarray, target_beams: int) -> List[float]:
-    """Min-pool 1080 → target beams (groups of beam_count // target)."""
+    """Min-pool the complete LiDAR scan → target beams without dropping its tail."""
     flat = np.asarray(arr, dtype=np.float32).reshape(-1)
     n = flat.shape[0]
     if n == 0 or target_beams <= 0:
         return []
     if target_beams >= n:
         return [round(float(x), 3) for x in flat.tolist()]
-    group = n // target_beams
-    usable = group * target_beams
-    pooled = flat[:usable].reshape(target_beams, group).min(axis=1)
+    # Split the entire fan, including its endpoint rays. Floor-based grouping
+    # used to silently discard the final one (or more) measurements.
+    pooled = np.asarray(
+        [group.min() for group in np.array_split(flat, target_beams)],
+        dtype=np.float32,
+    )
     return [round(float(x), 3) for x in pooled.tolist()]
 
 
@@ -60,6 +63,7 @@ def _lap_fields(info: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "lap_supported": bool(info.get("lap_supported", False)),
         "lap_count": int(info.get("lap_count", 0)),
+        "lap_times_s": list(info.get("lap_times_s", [])),
         "last_lap_time_s": info.get("last_lap_time_s"),
         "best_lap_time_s": info.get("best_lap_time_s"),
         "lap_elapsed_s": info.get("lap_elapsed_s"),
@@ -168,6 +172,9 @@ class HubTelemetryCallback(BaseCallback):
         self._completed_laps = 0
         self._clean_episode_wins = 0
         self._best_lap_time_s: Optional[float] = None
+        self._best_10_lap_time_s: Optional[float] = None
+        self._ten_lap_recent: Dict[int, List[float]] = {}
+        self._ten_lap_seen_splits: Dict[int, int] = {}
         # Unity's collision count survives environment respawns. Track its
         # per-step deltas to report contacts for the current training episode.
         self._last_collision_counts: Dict[int, int] = {}
@@ -184,6 +191,9 @@ class HubTelemetryCallback(BaseCallback):
         self._completed_laps = 0
         self._clean_episode_wins = 0
         self._best_lap_time_s = None
+        self._best_10_lap_time_s = None
+        self._ten_lap_recent = {}
+        self._ten_lap_seen_splits = {}
         self._last_pose = {}
         self._last_yaw = {}
         self._last_collision_counts = {}
@@ -199,6 +209,14 @@ class HubTelemetryCallback(BaseCallback):
                 "run_id": self.run_id,
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "_endpoint": self.hub_url.rstrip("/") + "/api/train/phase",
+            })
+
+    def publish_evaluator_live(self, payload: Dict[str, Any]) -> None:
+        """Queue high-rate evaluator pose frames to the hub WebSocket fan-out."""
+        if self._pub is not None:
+            self._pub.enqueue({
+                **payload,
+                "_endpoint": self.hub_url.rstrip("/") + "/api/evaluator/live",
             })
 
     def _on_rollout_end(self) -> None:
@@ -231,10 +249,35 @@ class HubTelemetryCallback(BaseCallback):
                             )
                     except (TypeError, ValueError):
                         pass
+                raw_lap_times = info.get("lap_times_s")
+                if isinstance(raw_lap_times, (list, tuple)):
+                    seen = self._ten_lap_seen_splits.get(i, 0)
+                    if len(raw_lap_times) < seen:
+                        seen = 0
+                        self._ten_lap_recent[i] = []
+                    recent = self._ten_lap_recent.setdefault(i, [])
+                    for raw_time in raw_lap_times[seen:]:
+                        try:
+                            completed_lap_time = float(raw_time)
+                        except (TypeError, ValueError):
+                            continue
+                        if not np.isfinite(completed_lap_time) or completed_lap_time <= 0:
+                            continue
+                        recent.append(completed_lap_time)
+                        if len(recent) >= 10:
+                            total = float(sum(recent[-10:]))
+                            self._best_10_lap_time_s = (
+                                total if self._best_10_lap_time_s is None
+                                else min(self._best_10_lap_time_s, total)
+                            )
+                            del recent[:-10]
+                    self._ten_lap_seen_splits[i] = len(raw_lap_times)
                 if dones is not None and i < len(dones) and bool(dones[i]):
                     if bool(info.get("episode_won", False)):
                         self._clean_episode_wins += 1
                     self._last_episode_laps[i] = 0
+                    self._ten_lap_recent[i] = []
+                    self._ten_lap_seen_splits[i] = 0
 
         if self.num_timesteps % self.every_n == 0:
             rewards = self.locals.get("rewards")
@@ -260,6 +303,7 @@ class HubTelemetryCallback(BaseCallback):
                 "completed_laps": int(self._completed_laps),
                 "clean_episode_wins": int(self._clean_episode_wins),
                 "best_lap_time_s": self._best_lap_time_s,
+                "best_10_lap_time_s": self._best_10_lap_time_s,
                 "checkpoint": None,
                 "run_id": self.run_id,
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -474,6 +518,7 @@ class HubTelemetryCallback(BaseCallback):
             "step": int(self.num_timesteps),
             "episode": int(self._episode_count),
             "run_id": self.run_id,
+            "best_10_lap_time_s": self._best_10_lap_time_s,
             "ts": datetime.now(timezone.utc).isoformat(),
             # RoboRacer planar LiDAR: 0.06 … 10.0 m
             "lidar_range_min": 0.06,

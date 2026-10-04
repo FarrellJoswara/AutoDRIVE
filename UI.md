@@ -256,23 +256,23 @@ Suggested fields (per sample or per-env array inside one sample):
 
 **Where the data comes from (no new IPC needed).** `n_envs >= 2` is `SubprocVecEnv`, so a callback cannot touch env internals cheaply. It does not have to:
 
-- **LiDAR is already in the callback** as `self.locals["new_obs"]["lidar"]`, shape `(n_envs, 1080)` float32, already normalised to `[0,1]` by `spaces._normalize_lidar`. It rides the existing rollout transfer — **zero marginal IPC**. Do not add LiDAR to `info` (that would pickle 1080 floats per env per step across the Subproc pipe even when we publish nothing) and do not call `env_method`.
+- **LiDAR is already in the callback** as `self.locals["new_obs"]["lidar"]`, shape `(n_envs, 1081)` float32, already normalised to `[0,1]` by `spaces._normalize_lidar`. It rides the existing rollout transfer — **zero marginal IPC**. Do not add LiDAR to `info` (that would pickle 1081 floats per env per step across the Subproc pipe even when we publish nothing) and do not call `env_method`.
 - **Pose / collision / speed** come from `self.locals["infos"][i]` (`position`, `collision`, `true_speed` already exist). Only **`yaw`** needs adding to `AutoDriveEnv._build_info`.
-- To convert display values back to metres: `m = norm * (range_max - range_min) + range_min` with defaults `0.05 … 30.0`. Publish those two bounds **once** in a meta/`status` event, not per sample.
+- To convert display values back to metres: `m = norm * (range_max - range_min) + range_min` with defaults `0.06 … 10.0`. Publish those two bounds **once** in a meta/`status` event, not per sample.
 
 **Done-step hazard:** when `dones[i]` is true, SB3's VecEnv has already auto-reset, so `infos[i]` holds the **terminal** pose while `new_obs[i]` holds the **post-reset** obs. Mixing them makes the car flash to a wrong place. **Skip publishing that env's sample on a done step** (or tag it `reset: true` and let the canvas ignore it).
 
-### LiDAR payload sizing (1080 beams is real — `src/layer2/spaces.py` `LIDAR_BEAMS = 1080`)
+### LiDAR payload sizing (1081 live Bridge beams — `src/layer2/spaces.py` `LIDAR_BEAMS = 1081`)
 
 Rough per-car, per-sample cost at 15 Hz:
 
 | Scheme | Beams | Bytes/car/sample | 1 car @15 Hz | 4 cars @15 Hz |
 | :--- | :--- | :--- | :--- | :--- |
-| Full, JSON floats | 1080 | ~8.6 KB | ~130 KB/s | ~520 KB/s |
-| Full, binary Float32 | 1080 | 4.3 KB | ~65 KB/s | ~260 KB/s |
+| Full, JSON floats | 1081 | ~8.6 KB | ~130 KB/s | ~520 KB/s |
+| Full, binary Float32 | 1081 | 4.3 KB | ~65 KB/s | ~260 KB/s |
 | **Downsampled, JSON (chosen)** | **120** | **~0.7 KB** | **~11 KB/s** | **~43 KB/s** |
 
-**Decision: downsample on the train side to ~120 beams (min-pool groups of 9), 3 decimal places, plain JSON.** Reasoning:
+**Decision: downsample on the train side to ~120 beams (min-pool into equal angular sectors), 3 decimal places, plain JSON.** Reasoning:
 
 - Bandwidth is not the real cost on a loopback/compose bridge — **main-thread `JSON.parse` + GC is**. Full res is ~86k floats/s at 4 cars; 120 beams is ~7k. Binary WS frames solve the wrong half of the problem and add framing complexity, so they are an **escape hatch**, not v1.
 - Use **min**-pool, not stride sampling: min preserves the nearest hit per sector, so obstacles never vanish between beams.
@@ -376,7 +376,7 @@ First-class Pydantic (or equivalent) model on the hub; **UI page is not buried**
 | :--- | :--- | :--- |
 | `telemetry_every_n` | Metrics publish interval, **step**-based | 200 |
 | `fleet_hz` | Sim-state publish cap, **time**-based (§6) | 15 |
-| `lidar_display_beams` | Downsample target (min-pool from 1080) | 120 |
+| `lidar_display_beams` | Downsample target (min-pool from 1081) | 120 |
 | `telemetry_lidar_max_envs` | Publish LiDAR for at most this many envs | 4 |
 | `docker_mode` | Preset: force `auto_launch=False` when true | — |
 | `stop_sims_on_train_exit` | Stop compose sims after any train exit | True |
@@ -645,8 +645,8 @@ Settings is **not** an optional late phase. Hub Settings API lands in Phase 1; t
 **Checklist:**
 
 0. [ ] Add `yaw` (`snap.heading_yaw`) to `AutoDriveEnv._build_info` — the only Layer 2 change Phase 6 needs
-1. [ ] Publish per-env sim-state on TelemetryBus from `self.locals["new_obs"]["lidar"]` + `infos` (§6) — min-pool 1080→120, time-based `fleet_hz`, skip done-steps, **no UI `step()`**
-2. [ ] **Measure / document LiDAR angles** (where beam 0 points + angular step / FOV / CW vs CCW vs yaw); commit `angle_min` / `angle_increment` / sign — **not in repo today**; until then **map + cars + collision X** still ship; **no rays** until documented
+1. [ ] Publish per-env sim-state on TelemetryBus from `self.locals["new_obs"]["lidar"]` + `infos` (§6) — min-pool 1081→120, time-based `fleet_hz`, skip done-steps, **no UI `step()`**
+2. [x] LiDAR beam order and angles validated against live poses and occupancy walls; beam 0 is −135°, scan advances CCW, and the parser reverses Bridge serialization into that order
 3. [ ] Fleet page (lazy-loaded): two canvases, `rAF` + refs, LiDAR as one filled path (§8)
 4. [ ] Background: prefer vendored occupancy under `simulator/maps/` (§6); else grid+auto-fit (6a) → breadcrumb (6b)
 5. [ ] Side panel: episode / steps / return / collision / optional speed / **stale indicator**
@@ -687,8 +687,8 @@ Locked: **later**, not day 1 — see §7. Prefer start-of-run Settings (Phase 4 
 | Two processes (hub + train) | **Solved by design** — hub is supervisor; train is child |
 | Telemetry drops if hub restarts | Best-effort POST; training continues |
 | **Telemetry POST slowing the step loop** | **Real risk, mitigated by §6**: daemon thread + bounded drop-oldest queue + hard timeouts. A *hung* (not dead) hub is the dangerous case; acceptance F6 measures it |
-| Full 1080-beam LiDAR floods the WS | Min-pool to ~120 beams on the train side; `telemetry_lidar_max_envs` budget (§6) |
-| LiDAR beam angles unknown in repo | Readings = distances only; rays need beam-0 + angular step. Phase 6: **map + cars + X first**; measure/document then rays (F7) — constants committed, not guessed |
+| Full-resolution LiDAR floods the WS | Min-pool to ~120 beams on the train side; `telemetry_lidar_max_envs` budget (§6) |
+| LiDAR beam angles | Validated against live poses and occupancy walls; canonical angle constants are in `src/layer4/web/src/fleet/lidarCalibration.ts` |
 | Map must match the live Unity scene | Official AutoDRIVE occupancy/library PNGs exist (§6); calibrate origin/yaw vs poses; fall back to 6a/6b if scene unknown |
 | WS drops / hub restart leaves UI frozen | Backoff reconnect + `GET /train/status` resync + visible stale indicator (§8) |
 | Unbounded telemetry history in browser | Fixed-capacity rings; fleet keeps last sample only (§8) |

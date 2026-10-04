@@ -49,10 +49,9 @@ Default weight is 0.0 (off).
 
 Reward priorities
 -----------------
-New best-so-far frontier distance is the only positive per-step driving reward
-on mapped tracks. Time costs reward-efficient progress; reverse travel and
-failed episode endings cost reward. The clean target-lap pace bonus remains a
-terminal reward.
+New best-so-far frontier distance is the only positive driving reward. Time
+costs reward-efficient progress; reverse travel, collisions, and failed episode
+endings cost reward. Laps are diagnostic and never change reward or episode life.
 """
 
 from __future__ import annotations
@@ -78,22 +77,20 @@ class RewardConfig:
     backward_speed_penalty_scale: float = 1.0
     backward_speed_deadband_mps: float = 0.1
 
-    # One-time clean episode completion reward: scale × average frontier speed
-    # across all target laps. Per-lap pace is telemetry only.
-    lap_time_reward_scale: float = 1000.0
-
     # Reward per metre of newly advanced high-water frontier.
     route_progress_scale: float = 10.0
 
     # Cost per simulated second, including while making progress. This makes
     # slower completion less profitable than faster completion over the same route.
-    time_penalty_per_second: float = 1.0
+    time_penalty_per_second: float = 5.0
 
-    # Collision penalty; termination is controlled independently by the env.
-    collision_penalty: float = -100.0
+    # Positive settings magnitudes; signs are applied here consistently.
+    collision_penalty_magnitude: float = 100.0
+    collision_reward_percent: float = 100.0
 
     # Applied once when a non-collision failure ends/truncates an episode.
-    episode_failure_penalty: float = -100.0
+    episode_failure_penalty_magnitude: float = 100.0
+    episode_failure_reward_percent: float = 100.0
 
     # Subtracted as: slip_penalty * abs(slip_angle). Default 0.0 = ignore slip.
     slip_penalty: float = 0.0
@@ -109,7 +106,7 @@ def compute_reward_components(
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
-    clean_run_average_frontier_speed_mps: float | None = None,
+    positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
     slip_angle: float,
@@ -160,7 +157,6 @@ def compute_reward_components(
         "time_cost": 0.0,
         "collision": 0.0,
         "episode_failure": 0.0,
-        "lap_bonus": 0.0,
         "slip": 0.0,
         "steering_change": 0.0,
     }
@@ -194,19 +190,26 @@ def compute_reward_components(
         * max(0.0, float(step_duration_s))
     )
 
-    if clean_run_average_frontier_speed_mps is not None:
-        components["lap_bonus"] = cfg.lap_time_reward_scale * max(
-            0.0, float(clean_run_average_frontier_speed_mps)
-        )
-
-    # Optional wall tax (default weight 0 → this adds nothing).
+    # A terminal failure claws back a configurable share of this life’s
+    # positive frontier reward, then applies its fixed failure cost. Successful
+    # progress remains dense and is not retroactively changed.
+    positive_frontier_return = (
+        max(0.0, float(positive_episode_return))
+        + max(0.0, float(components["route_progress"]))
+    )
     if collision_event:
-        components["collision"] = float(cfg.collision_penalty)
+        magnitude = max(0.0, float(cfg.collision_penalty_magnitude))
+        percent = max(0.0, float(cfg.collision_reward_percent))
+        components["collision"] = -(magnitude + positive_frontier_return * percent / 100.0)
 
     # Collision already receives its event penalty above. Other failed endings
     # (frontier stall, idle timeout, or step cap) receive one terminal cost.
     if episode_failure and not collision_event:
-        components["episode_failure"] = float(cfg.episode_failure_penalty)
+        magnitude = max(0.0, float(cfg.episode_failure_penalty_magnitude))
+        percent = max(0.0, float(cfg.episode_failure_reward_percent))
+        components["episode_failure"] = -(
+            magnitude + positive_frontier_return * percent / 100.0
+        )
 
     # Optional: discourage sideways sliding (default weight 0).
     components["slip"] = -float(cfg.slip_penalty) * abs(float(slip_angle))
@@ -226,7 +229,7 @@ def compute_reward(
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
-    clean_run_average_frontier_speed_mps: float | None = None,
+    positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
     slip_angle: float,
@@ -240,7 +243,7 @@ def compute_reward(
         step_duration_s=step_duration_s,
         route_progress_delta_m=route_progress_delta_m,
         frontier_advanced_m=frontier_advanced_m,
-        clean_run_average_frontier_speed_mps=clean_run_average_frontier_speed_mps,
+        positive_episode_return=positive_episode_return,
         collision_event=collision_event,
         episode_failure=episode_failure,
         slip_angle=slip_angle,

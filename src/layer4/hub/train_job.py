@@ -105,16 +105,17 @@ class TrainJob:
             try:
                 from src.layer4.hub.docker_control import reconcile_compose_sims
 
-                replicas = reconcile_compose_sims(settings.n_envs)
-                if len(replicas) != settings.n_envs:
+                simulator_count = settings.n_envs + 1  # dedicated deterministic evaluator
+                replicas = reconcile_compose_sims(simulator_count)
+                if len(replicas) != simulator_count:
                     raise RuntimeError(
                         f"Docker returned {len(replicas)} simulator replicas; "
-                        f"expected {settings.n_envs}"
+                        f"expected {simulator_count} (training plus evaluator)"
                     )
             except Exception as exc:
                 with self._lock:
                     self.state = "error"
-                    self.error = f"could not scale simulators to {settings.n_envs} environments: {exc}"
+                    self.error = f"could not scale simulators for {settings.n_envs} environments plus evaluator: {exc}"
                     self.pid = None
                     self._proc = None
                 self._broadcast()
@@ -231,12 +232,27 @@ class TrainJob:
             with self._lock:
                 self.cleanup_error = str(exc)
 
-    def stop(self, grace_s: float = 12.0) -> Dict[str, Any]:
+    def stop(
+        self, grace_s: float = 12.0, *, settings: Optional[Settings] = None
+    ) -> Dict[str, Any]:
         with self._lock:
             proc = self._proc
             if self.state not in {"starting", "running", "stopping"}:
-                return self._status_unlocked()
-            self.state = "stopping"
+                cleanup_settings = self.last_settings or settings
+                inactive = True
+            else:
+                cleanup_settings = None
+                inactive = False
+                self.state = "stopping"
+
+        # The hub may have restarted after losing its in-memory Popen handle.
+        # In that case the explicit UI Stop action still needs to clean up the
+        # Docker simulators left behind by the interrupted training process.
+        if inactive:
+            if cleanup_settings is not None and self._docker_cleanup_enabled(cleanup_settings):
+                self._cleanup_docker_services(cleanup_settings)
+                self._broadcast()
+            return self.status()
 
         self._broadcast()
 

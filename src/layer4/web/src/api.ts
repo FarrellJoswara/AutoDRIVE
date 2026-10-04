@@ -21,6 +21,69 @@ export interface TrainStatus {
   last_telemetry?: MetricsTelemetry | null;
   last_fleet?: FleetTelemetry | null;
   last_train_phase?: TrainingPhaseTelemetry | null;
+  last_evaluation?: EvaluationStatus | null;
+}
+
+export interface EvaluationResult {
+  timesteps: number;
+  simulated_seconds: number;
+  frontier_distance_m: number;
+  frontier_speed_mps: number;
+  reward_per_simulated_second: number;
+  total_reward?: number;
+  collisions: number;
+  failed_episodes: number;
+  laps_observed: number;
+  lap_times_s: number[];
+  best_10_lap_time_s: number | null;
+  selection_score?: number;
+  selection_metric?: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  improved?: boolean;
+  stale_evaluations?: number;
+  exploration_std?: number[];
+  exploration_adaptation?: string;
+  stop_reason?: string | null;
+}
+
+export function getEvaluationHistory(): Promise<EvaluationResult[]> {
+  return jsonFetch("/train/evaluations");
+}
+
+export interface EvaluationStatus {
+  state: "waiting" | "running" | "complete";
+  snapshot_timesteps?: number | null;
+  selection_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  best_selection_score?: number | null;
+  stale_evaluations: number;
+  plateau_patience: number;
+  latest_result?: EvaluationResult | null;
+  live_result?: EvaluationLiveResult | null;
+  evaluator_car?: EvaluatorCarTelemetry | null;
+  stop_reason?: string | null;
+  updated_utc: string;
+}
+
+export interface EvaluationLiveResult {
+  frontier_distance_m: number;
+  frontier_speed_mps: number;
+  simulated_seconds: number;
+  laps_observed: number;
+  lap_times_s: number[];
+  best_10_lap_time_s: number | null;
+  reward_per_simulated_second: number;
+  total_reward?: number;
+  collisions: number;
+}
+
+export interface EvaluatorCarTelemetry {
+  pose: [number, number];
+  yaw: number;
+  speed: number;
+}
+
+export interface EvaluatorLiveTelemetry extends EvaluatorCarTelemetry {
+  run_id: string;
+  snapshot_timesteps: number;
 }
 
 export interface TrainingPhaseTelemetry {
@@ -35,14 +98,17 @@ export interface Settings {
   n_envs: number;
   timesteps: number;
   max_duration_seconds: number;
-  stop_after_laps: number;
   plateau_min_timesteps: number;
-  plateau_window_timesteps: number;
   plateau_patience: number;
   plateau_min_improvement_pct: number;
-  plateau_min_successful_laps: number;
-  expert_pretrain_steps: number;
-  curriculum_single_lap_successes: number;
+  evaluation_every_timesteps: number;
+  /** Layer 3 PPO rollout length per environment; supplied by backend. */
+  ppo_n_steps?: number;
+  evaluation_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  exploration_std_min: number;
+  exploration_std_max: number;
+  exploration_improvement_scale: number;
+  exploration_plateau_scale: number;
   out: string | null;
   run_name: string | null;
   seed: number;
@@ -53,6 +119,7 @@ export interface Settings {
   connect_timeout: number;
   frame_skip: number;
   max_episode_steps: number;
+  laps_per_episode: number;
   stagnation_speed_threshold: number;
   stagnation_steps: number;
   frontier_stagnation_seconds: number;
@@ -61,11 +128,12 @@ export interface Settings {
   backward_speed_penalty_scale: number;
   route_progress_scale: number;
   time_penalty_per_second: number;
-  collision_penalty: number;
-  episode_failure_penalty: number;
+  collision_penalty_magnitude: number;
+  collision_reward_percent: number;
+  episode_failure_penalty_magnitude: number;
+  episode_failure_reward_percent: number;
   slip_penalty: number;
   steer_jerk_penalty: number;
-  lap_time_reward_scale: number;
   telemetry_every_n: number;
   fleet_hz: number;
   lidar_display_beams: number;
@@ -75,7 +143,6 @@ export interface Settings {
   stop_stack_on_train_exit: boolean;
   /** Train-selected map id; locked in on Start. "none" = builtin. */
   map_id: string;
-  laps_per_episode: number;
 }
 
 export interface ReplayStatus {
@@ -144,7 +211,6 @@ export interface FleetCar {
     time_cost?: number;
     collision?: number;
     episode_failure?: number;
-    lap_bonus?: number;
     slip?: number;
     steering_change?: number;
     total?: number;
@@ -153,9 +219,13 @@ export interface FleetCar {
   frontier_speed_mps?: number | null;
   lap_supported?: boolean;
   lap_count?: number;
+  /** Lap splits for this car's current episode. Cleared on respawn. */
+  lap_times_s?: number[];
   last_lap_time_s?: number | null;
   best_lap_time_s?: number | null;
   lap_elapsed_s?: number | null;
+  /** Best rolling ten-lap total for this fixed-model replay session. */
+  best_10_lap_time_s?: number | null;
   lidar?: number[];
   /** True on done/respawn frames — clear LiDAR; pose may be null. */
   reset?: boolean;
@@ -168,6 +238,8 @@ export interface FleetTelemetry {
   run_id: string;
   ts: string;
   cars: FleetCar[];
+  /** Fastest completed rolling ten-lap total across all cars in this train run. */
+  best_10_lap_time_s?: number | null;
   /** Metres â€” denorm for normalised lidar [0,1]. Defaults match Layer 1. */
   lidar_range_min?: number;
   lidar_range_max?: number;

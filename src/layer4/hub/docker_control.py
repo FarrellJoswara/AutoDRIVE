@@ -144,8 +144,8 @@ def _create_sim_replica(template: Dict[str, Any], index: int, expected: int) -> 
 
 def reconcile_compose_sims(desired_count: int, *, timeout_s: int = 20) -> List[str]:
     """Make the Compose simulator pool match the requested training env count."""
-    if not 1 <= int(desired_count) <= 16:
-        raise ValueError("simulator count must be between 1 and 16")
+    if not 1 <= int(desired_count) <= 17:
+        raise ValueError("simulator count must be between 1 and 17 (16 training plus evaluator)")
     desired_count = int(desired_count)
     containers = _list_compose_containers(service="sim", all_containers=True)
     if not containers:

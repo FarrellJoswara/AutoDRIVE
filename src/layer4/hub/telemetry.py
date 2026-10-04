@@ -19,6 +19,7 @@ class TelemetryBus:
     last_metrics: Optional[Dict[str, Any]] = None
     last_fleet: Optional[Dict[str, Any]] = None
     last_train_phase: Optional[Dict[str, Any]] = None
+    last_evaluator_live: Optional[Dict[str, Any]] = None
     last_replay_fleet: Optional[Dict[str, Any]] = None
     last_replay_status: Optional[Dict[str, Any]] = None
     metrics_ring: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=600))
@@ -48,6 +49,8 @@ class TelemetryBus:
                 self.last_replay_status = payload
             elif event_type == "train_phase":
                 self.last_train_phase = payload
+            elif event_type == "evaluator_live":
+                self.last_evaluator_live = payload
             clients = list(self._clients)
             loop = self._loop
 
@@ -68,6 +71,9 @@ class TelemetryBus:
 
     def publish_train_phase(self, payload: Dict[str, Any]) -> None:
         self.publish("train_phase", payload)
+
+    def publish_evaluator_live(self, payload: Dict[str, Any]) -> None:
+        self.publish("evaluator_live", payload)
 
     def publish_replay_status(self, payload: Dict[str, Any]) -> None:
         self.publish("replay_status", payload)
@@ -94,6 +100,8 @@ class TelemetryBus:
                 out.append({"type": "telemetry", "payload": self.last_fleet})
             if self.last_train_phase is not None:
                 out.append({"type": "train_phase", "payload": self.last_train_phase})
+            if self.last_evaluator_live is not None:
+                out.append({"type": "evaluator_live", "payload": self.last_evaluator_live})
             if self.last_replay_fleet is not None:
                 out.append({"type": "replay_telemetry", "payload": self.last_replay_fleet})
             if self.last_replay_status is not None:

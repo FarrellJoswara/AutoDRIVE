@@ -1,8 +1,8 @@
-"""Complete AutoDRIVE RoboRacer Telemetry Data Model, Dynamics, and CSV Logger.
+"""AutoDRIVE RoboRacer telemetry parsing, derived dynamics, and CSV logging.
 
-Captures 100% of raw simulator telemetry signals (3D kinematics, accelerations,
-wheel encoders, 1080-beam LiDAR, lap timers, collisions) and calculates derived
-vehicle dynamics (true speed, planar yaw, body-frame velocities, slip angle, lateral G).
+Captures the simulator's raw telemetry and derives dynamics using the documented
+RoboRacer body axes (X forward, Y left, Z up). The live Bridge sends 1081 LiDAR
+ranges: both endpoints of its documented -135..+135 degree, 0.25 degree scan.
 """
 
 from __future__ import annotations
@@ -35,12 +35,17 @@ def _parse_vec3(val: Any) -> Tuple[float, float, float]:
     return (0.0, 0.0, 0.0)
 
 
+def _has_value(value: Any) -> bool:
+    """Check optional Bridge values without ambiguous NumPy comparisons."""
+    return value is not None and not (isinstance(value, str) and not value.strip())
+
+
 def _bridge_position_to_unity(raw: Any) -> Tuple[float, float, float]:
     """AutoDRIVE Bridge V1 Position -> Unity world metres.
 
     Bridge space-separated triple is NOT Unity xyz. Measured vs TrackLoader spawn:
     bridge (bz, bx, by) maps to Unity (-bx, by, bz) i.e. order (z, -x, y).
-    List/tuple/dict inputs are already-Unity. Velocity is already Unity.
+    List/tuple/dict position inputs are already in the Unity world frame.
     """
     if isinstance(raw, str):
         bz, bx, by = _parse_vec3(raw)
@@ -122,11 +127,6 @@ def _quat_from_euler(roll: float, pitch: float, yaw: float) -> Tuple[float, floa
     return (x, y, z, w)
 
 
-def _quat_is_identity(quat: Tuple[float, float, float, float], eps: float = 1e-3) -> bool:
-    qx, qy, qz, qw = quat
-    return abs(qx) + abs(qy) + abs(qz) < eps and abs(abs(qw) - 1.0) < eps
-
-
 def _yaw_from_quat(quat: Tuple[float, float, float, float]) -> float:
     """Planar yaw about Unity +Y from quaternion (x, y, z, w).
 
@@ -166,11 +166,11 @@ def _bridge_orientation(
     orientation axes to Unity axes before storing or extracting yaw.
     """
     q_raw = data.get("V1 Orientation Quaternion")
-    if q_raw is not None and q_raw != "":
+    if _has_value(q_raw):
         return _bridge_quat_to_unity(_parse_quat(q_raw)), None
 
     e_raw = data.get("V1 Orientation Euler Angles")
-    if e_raw is not None and e_raw != "":
+    if _has_value(e_raw):
         rpy = _parse_euler_rpy(e_raw)
         if rpy is not None:
             roll, pitch, yaw = rpy
@@ -178,7 +178,7 @@ def _bridge_orientation(
             return unity_quat, _yaw_from_quat(unity_quat)
 
     legacy = data.get("V1 Orientation", data.get("orientation"))
-    if legacy is None or legacy == "":
+    if not _has_value(legacy):
         return (0.0, 0.0, 0.0, 1.0), None
 
     # Legacy 3-vector is treated as Bridge Euler; convert its axes like the
@@ -207,11 +207,10 @@ class TelemetrySnapshot:
     timestamp: float = 0.0
     step_id: int = 0
 
-    # Raw 3D Kinematics (Unity world: X=Right, Y=Up, Z=Forward).
-    # Angular velocity from Bridge is AutoDRIVE body frame [wx, wy, wz].
-    # Linear vel/accel are Unity world
-    # XYZ when projecting to body frame below — if a build ever sends body-frame
-    # lin_vel/accel, that projection would double-rotate (do not change without evidence).
+    # Pose is converted to Unity world XYZ (X=right, Y=up, Z=forward).
+    # RoboRacer kinematic/IMU vectors use the vehicle body frame documented by
+    # AutoDRIVE: X=forward, Y=left, Z=up. Do not rotate velocity or acceleration
+    # by world yaw a second time.
     position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     orientation_quat: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)  # (x, y, z, w)
     linear_velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -224,8 +223,11 @@ class TelemetrySnapshot:
     encoder_ticks_left: float = 0.0
     encoder_ticks_right: float = 0.0
 
-    # 1080-Beam 2D LiDAR Range Array (in meters)
-    lidar_ranges: np.ndarray = field(default_factory=lambda: np.zeros(1080, dtype=np.float32))
+    # Live Bridge includes both angular endpoints: 1081 beams at 0.25 degrees.
+    # A synthetic default is a clear max-range scan; parsed missing scans carry
+    # lidar_valid=False and are rejected before they can reach the policy.
+    lidar_ranges: np.ndarray = field(default_factory=lambda: np.full(1081, 10.0, dtype=np.float32))
+    lidar_valid: bool = True
     lidar_scan_rate: float = 40.0
     lidar_range_min: float = 0.06
     lidar_range_max: float = 10.0
@@ -264,9 +266,11 @@ class TelemetrySnapshot:
             data.get("V1 Position", data.get("position", [0, 0, 0]))
         )
         quat, euler_yaw = _bridge_orientation(data)
-        # Velocity/accel arrive as Unity XYZ (verified vs pose deltas); only Position is swizzled.
+        # Bridge's RoboRacer/IMU vectors are already vehicle-body coordinates:
+        # X forward, Y left, Z up. Position alone needs the Bridge→Unity swizzle.
         lin_vel = _parse_vec3(data.get("V1 Linear Velocity", data.get("linear_velocity", [0, 0, 0])))
-        # Body RHS: [wx, wy, wz]; planar yaw rate is wz (index 2), not wy.
+        # Bridge angular velocity is body-frame [wx, wy, wz]. Its +Z axis maps
+        # to Unity's -Y yaw convention (converted by Layer 2).
         ang_vel = _parse_vec3(data.get("V1 Angular Velocity", data.get("angular_velocity", [0, 0, 0])))
         lin_acc = _parse_vec3(data.get("V1 Linear Acceleration", data.get("linear_acceleration", [0, 0, 0])))
 
@@ -286,17 +290,26 @@ class TelemetrySnapshot:
             ticks_r = float(data.get("V1 Right Encoder Ticks", data.get("encoder_ticks_right", 0.0)))
 
         # LiDAR: may be base64-encoded gzip string or float array
-        raw_lidar = data.get("V1 LIDAR Range Array", data.get("V1 Lidar Scan", data.get("lidar_scan", [])))
+        raw_lidar = data.get("V1 LIDAR Range Array", data.get("V1 Lidar Scan", data.get("lidar_scan")))
+        lidar_valid = _has_value(raw_lidar)
         if isinstance(raw_lidar, str) and len(raw_lidar) > 0:
             try:
                 decomp = gzip.decompress(base64.b64decode(raw_lidar)).decode("utf-8")
                 lidar_arr = np.fromstring(decomp, dtype=np.float32, sep="\n")
+                lidar_valid = lidar_arr.size > 0
             except Exception:
-                lidar_arr = np.zeros(1080, dtype=np.float32)
+                lidar_arr = np.empty(0, dtype=np.float32)
+                lidar_valid = False
         elif isinstance(raw_lidar, (list, tuple, np.ndarray)) and len(raw_lidar) > 0:
-            lidar_arr = np.asarray(raw_lidar, dtype=np.float32)
+            try:
+                lidar_arr = np.asarray(raw_lidar, dtype=np.float32).reshape(-1)
+                lidar_valid = lidar_arr.size > 0
+            except (TypeError, ValueError):
+                lidar_arr = np.empty(0, dtype=np.float32)
+                lidar_valid = False
         else:
-            lidar_arr = np.zeros(1080, dtype=np.float32)
+            lidar_arr = np.empty(0, dtype=np.float32)
+            lidar_valid = False
 
         # Bridge serializes the planar scan clockwise (end angle → start
         # angle), while this stack's canonical convention is CCW from
@@ -329,43 +342,38 @@ class TelemetrySnapshot:
         # True 3D scalar speed
         speed = math.sqrt(lin_vel[0] ** 2 + lin_vel[1] ** 2 + lin_vel[2] ** 2)
 
-        # Heading from real IMU orientation keys. Velocity yaw is last resort only
-        # when quat/euler are still identity/missing AND speed is high enough —
-        # not because "Unity sends identity" (that was a wrong-key bug).
+        # Identity is a valid orientation (yaw=0), not a missing-value marker.
+        # Since linear velocity is body-frame, it cannot provide world heading.
+        orientation_provided = any(
+            _has_value(data.get(key))
+            for key in (
+                "V1 Orientation Quaternion",
+                "V1 Orientation Euler Angles",
+                "V1 Orientation",
+                "orientation",
+            )
+        )
         if euler_yaw is not None:
             yaw = float(euler_yaw)
-            orientation_ok = True
-        elif not _quat_is_identity(quat):
+        elif orientation_provided:
             yaw = _yaw_from_quat(quat)
-            orientation_ok = True
         else:
-            yaw = 0.0
-            orientation_ok = False
             explicit = data.get("V1 Yaw", data.get("yaw", None))
-            if explicit is not None and explicit != "":
-                try:
-                    yaw = float(explicit)
-                    orientation_ok = True
-                except (TypeError, ValueError):
-                    pass
-        if not orientation_ok and speed > 0.05:
-            yaw = math.atan2(lin_vel[0], lin_vel[2])
+            try:
+                yaw = float(explicit) if _has_value(explicit) else 0.0
+            except (TypeError, ValueError):
+                yaw = 0.0
 
-        # Body-frame velocities (Unity horizontal plane is X-Z):
-        vx_w, _, vz_w = lin_vel
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
-
-        # Forward (longitudinal) and sideways (lateral) velocity
-        v_long = vz_w * cos_yaw + vx_w * sin_yaw
-        v_lat = -vz_w * sin_yaw + vx_w * cos_yaw
+        # Directly use the body-frame measurements. AutoDRIVE's body Y points
+        # left, while this project's lateral-positive convention is right.
+        v_long = lin_vel[0]
+        v_lat = -lin_vel[1]
 
         # Sideslip angle beta: angle between heading vector and velocity vector
-        slip = math.atan2(v_lat, max(abs(v_long), 0.05)) if speed > 0.1 else 0.0
+        slip = math.atan2(v_lat, v_long) if speed > 0.1 else 0.0
 
-        # Lateral acceleration & G-force (assumes lin_acc is world XYZ)
-        ax_w, _, az_w = lin_acc
-        a_lat = -az_w * sin_yaw + ax_w * cos_yaw
+        # Body-frame acceleration; Y points left so lateral-right is -Y.
+        a_lat = -lin_acc[1]
         lat_g = a_lat / 9.80665
 
         return cls(
@@ -381,11 +389,16 @@ class TelemetrySnapshot:
             encoder_ticks_left=ticks_l,
             encoder_ticks_right=ticks_r,
             lidar_ranges=lidar_arr,
+            lidar_valid=lidar_valid,
             lidar_scan_rate=float(
                 data.get("V1 LIDAR Scan Rate", data.get("V1 Lidar Scan Rate", 40.0))
             ),
-            lidar_range_min=float(data.get("V1 Lidar Range Min", 0.06)),
-            lidar_range_max=float(data.get("V1 Lidar Range Max", 10.0)),
+            lidar_range_min=float(
+                data.get("V1 LIDAR Range Min", data.get("V1 Lidar Range Min", 0.06))
+            ),
+            lidar_range_max=float(
+                data.get("V1 LIDAR Range Max", data.get("V1 Lidar Range Max", 10.0))
+            ),
             throttle=th,
             steering=st,
             lap_count=lap_c,

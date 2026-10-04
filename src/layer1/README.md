@@ -90,7 +90,7 @@ Fleet of `Racer`s plus optional track geometry.
 | `TelemetrySnapshot.from_raw_dict(data, step_id)` | Parse Unity Bridge dict (lists or space-separated strings) |
 | `TrajectoryLogger` | Ring buffer → `save_to_csv` |
 
-Derived kinematics (body frame) live here so Layer 2 does not re-implement yaw math for speed / slip.
+Bridge IMU vectors are body-frame values (X forward, Y left, Z up). Layer 1 derives longitudinal/lateral speed and slip directly from those vectors; it does not rotate them by the world yaw. Position and orientation still receive the Bridge-to-Unity coordinate conversion.
 
 ---
 

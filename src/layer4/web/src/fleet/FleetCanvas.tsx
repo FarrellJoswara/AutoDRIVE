@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { FleetTelemetry } from "../api";
+import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetTelemetry } from "../api";
 import {
   DrawFrameOpts,
   ViewState,
@@ -13,9 +13,9 @@ import { loadMap } from "./mapLoader";
 import {
   getFleetHot,
   getFleetHotAgeMs,
+  getEvaluatorLiveHot,
   getReplayFleetHot,
   getReplayFleetHotAgeMs,
-  getTrainingPhaseAgeMs,
   getTrainingPhaseHot,
   getTrainingStateHot,
 } from "../store";
@@ -33,6 +33,38 @@ export interface FleetCanvasProps {
   mapYamlUrl: string | null;
   /** Side-panel sync — last React-visible fleet (throttled) */
   fleetPanel: FleetTelemetry | null;
+  evaluatorCar?: EvaluatorCarTelemetry | null;
+  evaluatorActive?: boolean;
+  evaluatorSnapshotTimesteps?: number | null;
+  trainingStep?: number;
+  rolloutSize?: number;
+}
+
+interface EvaluatorTransition {
+  from: EvaluatorCarTelemetry;
+  to: EvaluatorCarTelemetry;
+  startedAt: number;
+  durationMs: number;
+}
+
+function interpolateEvaluator(
+  transition: EvaluatorTransition,
+  now: number,
+): EvaluatorCarTelemetry {
+  const t = transition.durationMs <= 0
+    ? 1
+    : Math.max(0, Math.min(1, (now - transition.startedAt) / transition.durationMs));
+  let angleDelta = (transition.to.yaw - transition.from.yaw) % (Math.PI * 2);
+  if (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
+  if (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
+  return {
+    pose: [
+      transition.from.pose[0] + (transition.to.pose[0] - transition.from.pose[0]) * t,
+      transition.from.pose[1] + (transition.to.pose[1] - transition.from.pose[1]) * t,
+    ],
+    yaw: transition.from.yaw + angleDelta * t,
+    speed: transition.from.speed + (transition.to.speed - transition.from.speed) * t,
+  };
 }
 
 /**
@@ -48,6 +80,8 @@ export function FleetCanvas(props: FleetCanvasProps) {
   const lastFleetSeq = useRef(0);
   const mapDirty = useRef(true);
   const propsRef = useRef(props);
+  const evaluatorTransitionRef = useRef<EvaluatorTransition | null>(null);
+  const evaluatorTargetRef = useRef<{ key: string; car: EvaluatorCarTelemetry; receivedAt: number } | null>(null);
   propsRef.current = props;
 
   // Sync toggle / selection into view ref without React→canvas render storm
@@ -138,14 +172,23 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const ppoUpdating =
         trainActive &&
         phase?.phase === "ppo_update" &&
-        getTrainingPhaseAgeMs() < 60_000 &&
         phase.step >= (fleet?.step ?? 0);
-      const staleLabel = stale
-        ? ppoUpdating
-          ? "PPO updating — simulator paused"
-          : p.fleetSource === "train" && !trainActive
-            ? null
-            : `No recent ${p.fleetSource === "replay" ? "replay " : ""}fleet telemetry (${Math.max(1, Math.floor(age / 1000))}s)`
+      const currentStep = Math.max(p.trainingStep ?? 0, fleet?.step ?? 0);
+      const rolloutActive = trainActive && phase?.phase === "rollout" && (p.rolloutSize ?? 0) > 0;
+      const nextUpdateStep = rolloutActive ? phase.step + (p.rolloutSize ?? 0) : null;
+      const ppoProgress = ppoUpdating
+        ? { label: "PPO updating · simulator paused", progress: 1, detail: "Update in progress" }
+          : rolloutActive && !stale && nextUpdateStep != null
+          ? {
+            label: `${Math.max(0, nextUpdateStep - currentStep).toLocaleString()} steps until PPO update`,
+            progress: Math.max(0, Math.min(1, (currentStep - phase.step) / (p.rolloutSize ?? 1))),
+            detail: `Step ${currentStep.toLocaleString()} / ${nextUpdateStep.toLocaleString()}`,
+          }
+          : null;
+      const staleLabel = stale && !ppoUpdating
+        ? p.fleetSource === "train" && !trainActive
+          ? null
+          : `No recent ${p.fleetSource === "replay" ? "replay " : ""}fleet telemetry (${Math.max(1, Math.floor(age / 1000))}s)`
         : null;
       const view = viewRef.current;
       view.showMap = p.showMap;
@@ -159,7 +202,35 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const cssH = sc.clientHeight;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const map = mapRef.current;
-      const bounds = resolveBounds(map, view, fleet);
+      let evaluatorCar: EvaluatorCarTelemetry | null = null;
+      if (p.fleetSource !== "replay" && p.evaluatorActive) {
+        const live = getEvaluatorLiveHot();
+        const matchingLive: EvaluatorLiveTelemetry | null =
+          live && live.snapshot_timesteps === p.evaluatorSnapshotTimesteps ? live : null;
+        const target = matchingLive ?? p.evaluatorCar ?? null;
+        if (target) {
+          const now = performance.now();
+          const key = `${matchingLive ? "ws" : "poll"}:${target.pose[0]}:${target.pose[1]}:${target.yaw}:${target.speed}`;
+          const previousTarget = evaluatorTargetRef.current;
+          if (!previousTarget || previousTarget.key !== key) {
+            const current = evaluatorTransitionRef.current
+              ? interpolateEvaluator(evaluatorTransitionRef.current, now)
+              : previousTarget?.car ?? target;
+            const durationMs = previousTarget
+              ? Math.max(40, Math.min(500, now - previousTarget.receivedAt))
+              : 0;
+            evaluatorTransitionRef.current = { from: current, to: target, startedAt: now, durationMs };
+            evaluatorTargetRef.current = { key, car: target, receivedAt: now };
+          }
+          evaluatorCar = evaluatorTransitionRef.current
+            ? interpolateEvaluator(evaluatorTransitionRef.current, now)
+            : target;
+        }
+      } else {
+        evaluatorTransitionRef.current = null;
+        evaluatorTargetRef.current = null;
+      }
+      const bounds = resolveBounds(map, view, fleet, evaluatorCar?.pose);
       const boundsKey =
         bounds.minX.toFixed(2) +
         ":" +
@@ -173,6 +244,8 @@ export function FleetCanvas(props: FleetCanvasProps) {
         (fleet?.ts ?? "") +
         ":" +
         (fleet?.step ?? "") +
+        (evaluatorCar ? `${evaluatorCar.pose[0].toFixed(3)}:${evaluatorCar.pose[1].toFixed(3)}:${evaluatorCar.yaw.toFixed(3)}:${evaluatorCar.speed.toFixed(2)}` : "no-evaluator") +
+        (ppoProgress ? `${ppoProgress.label}:${ppoProgress.progress.toFixed(3)}:${ppoProgress.detail}` : "no-ppo-progress") +
         ":" +
         view.showMap +
         view.showFleet +
@@ -203,7 +276,9 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const opts: DrawFrameOpts = {
         map,
         fleet,
+        evaluatorCar,
         staleLabel,
+        ppoProgress,
         view,
         cssW,
         cssH,

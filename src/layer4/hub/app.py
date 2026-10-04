@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from os import scandir
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from src.layer4.hub.replay_job import ReplayJob
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
 from src.layer4.hub.train_job import TrainJob
 from src.layer4.settings import ROOT, Settings, load_settings, save_settings
+from src.layer3.train import _PPO_N_STEPS
 
 
 def _resolve_web_dist() -> Path:
@@ -463,7 +465,35 @@ async def train_status() -> Dict[str, Any]:
     st["last_telemetry"] = bus.last_metrics
     st["last_fleet"] = bus.last_fleet
     st["last_train_phase"] = bus.last_train_phase
+    try:
+        evaluation_path = _settings.resolve_out() / "evaluation_status.json"
+        st["last_evaluation"] = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st["last_evaluation"] = None
     return st
+
+
+@app.get("/train/evaluations")
+async def train_evaluations() -> list[Dict[str, Any]]:
+    """Return the complete persisted evaluator history for the active run output."""
+    settings = job.last_settings or _settings
+    # The training job's log file lives beside its artifacts and avoids
+    # resolving a fresh timestamped output directory when `out` is unset.
+    output_dir = Path(job.log_path).parent if job.log_path else settings.resolve_out()
+    history_path = output_dir / "evaluation_history.jsonl"
+    try:
+        lines = history_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    results: list[Dict[str, Any]] = []
+    for line in lines:
+        try:
+            result = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(result, dict):
+            results.append(result)
+    return results
 
 
 @app.post("/train/start")
@@ -483,23 +513,6 @@ async def train_start(request: Request) -> Dict[str, Any]:
             settings = Settings.model_validate(raw)
     except Exception:
         pass
-    if settings.stop_after_laps > 0 or settings.laps_per_episode > 0:
-        if settings.map_id == "none":
-            raise HTTPException(
-                status_code=400,
-                detail="lap goals require a map with a supported closed centerline",
-            )
-        from src.layer2.lap_tracker import map_lap_gate_config
-
-        gate = map_lap_gate_config(
-            settings.map_id,
-            repository_root=MAPS_DIR.resolve().parent.parent if MAPS_DIR else ROOT,
-        )
-        if not gate.get("supported"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"lap goals are unavailable: {gate.get('reason', 'unsupported map')}",
-            )
     _settings = settings
     try:
         await asyncio.to_thread(save_settings, _settings)
@@ -557,7 +570,9 @@ async def train_start(request: Request) -> Dict[str, Any]:
 async def train_stop() -> Dict[str, Any]:
     import asyncio
 
-    return await asyncio.to_thread(job.stop)
+    # Use persisted settings when the hub restarted and no TrainJob instance
+    # owns the old subprocess anymore; this lets Stop clean up orphaned sims.
+    return await asyncio.to_thread(job.stop, settings=_settings)
 
 
 @app.get("/api/replay/models")
@@ -675,7 +690,12 @@ async def replay_reset() -> Dict[str, Any]:
 
 @app.get("/settings")
 async def get_settings() -> Dict[str, Any]:
-    return _settings.model_dump(mode="json")
+    return {
+        **_settings.model_dump(mode="json"),
+        # Display-only metadata so the UI can calculate rollout-aligned
+        # evaluation snapshots using Layer 3's actual PPO configuration.
+        "ppo_n_steps": _PPO_N_STEPS,
+    }
 
 
 @app.put("/settings")
@@ -683,7 +703,14 @@ async def put_settings(body: Settings) -> Dict[str, Any]:
     global _settings
     _settings = body
     path = save_settings(_settings)
-    return {"ok": True, "path": str(path), "settings": _settings.model_dump(mode="json")}
+    return {
+        "ok": True,
+        "path": str(path),
+        "settings": {
+            **_settings.model_dump(mode="json"),
+            "ppo_n_steps": _PPO_N_STEPS,
+        },
+    }
 
 
 @app.post("/telemetry")
@@ -709,6 +736,23 @@ async def post_train_phase(request: Request) -> Dict[str, str]:
     if payload.get("phase") not in {"rollout", "ppo_update", "stopped"}:
         raise HTTPException(status_code=400, detail="invalid training phase")
     bus.publish_train_phase(payload)
+    return {"ok": "1"}
+
+
+@app.post("/api/evaluator/live")
+async def post_evaluator_live(request: Request) -> Dict[str, str]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be object")
+    pose = payload.get("pose")
+    if (not isinstance(pose, (list, tuple)) or len(pose) != 2
+            or not isinstance(payload.get("yaw"), (int, float))
+            or not isinstance(payload.get("speed"), (int, float))):
+        raise HTTPException(status_code=400, detail="invalid evaluator pose")
+    bus.publish_evaluator_live(payload)
     return {"ok": "1"}
 
 

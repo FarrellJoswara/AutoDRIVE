@@ -11,8 +11,8 @@ Contract every Gymnasium env must implement
 
 What "terminated" vs "truncated" means
 --------------------------------------
-  terminated  = episode ended because the task is over or the car failed
-                (lap goal, collision when enabled, or frontier stagnation).
+                terminated  = episode ended because the car failed
+                (collision when enabled or frontier stagnation).
   truncated   = episode ended because of an optional step / idle cutoff.
 
 1 env = 1 car
@@ -106,10 +106,9 @@ class AutoDriveEnv(gym.Env):
     stagnation_steps=200
         Consecutive idle steps before truncated=True (stuck / crashed stop).
     laps_per_episode=0
-        0 = disabled. On supported closed routes, reaching the target ends
-        this car's episode as a successful lap-goal termination.
-    collision_penalty
-        Lives on RewardConfig, default 0.0 — see rewards.py / README.
+        Optional successful episode target. Zero disables lap-based termination.
+    collision cost
+        Lives on RewardConfig; see rewards.py / README.
     """
 
     # Gymnasium metadata (no custom render modes in v1).
@@ -136,14 +135,14 @@ class AutoDriveEnv(gym.Env):
         # Consecutive idle steps → truncated.
         stagnation_steps: int = 200,
         map_id: str = "none",
-        laps_per_episode: int = 10,
+        laps_per_episode: int = 0,
         frontier_stagnation_seconds: float = 5.0,
         terminate_on_collision: bool = True,
         # Seconds to wait for Unity to connect on reset/init.
         connect_timeout: float = 60.0,
         # Reward weights. None → RewardConfig() defaults.
         reward_config: Optional[RewardConfig] = None,
-        # Must stay 1080 in v1 (no LiDAR downsampling).
+        # Must stay at the canonical full 1081-beam scan (no downsampling).
         lidar_beams: int = LIDAR_BEAMS,
         # Optional: inject an already-built Racer (tests / shared process).
         # If provided, this env will NOT kill it on close().
@@ -160,7 +159,7 @@ class AutoDriveEnv(gym.Env):
             raise ValueError(f"max_episode_steps must be >= 0, got {max_episode_steps}")
         if laps_per_episode < 0:
             raise ValueError(f"laps_per_episode must be >= 0, got {laps_per_episode}")
-        # Guard: Layer 2 v1 locks full 1080-beam LiDAR.
+        # Guard: Layer 2 locks the full canonical LiDAR scan.
         if lidar_beams != LIDAR_BEAMS:
             raise ValueError(
                 f"Layer 2 v1 requires full {LIDAR_BEAMS}-beam LiDAR "
@@ -173,6 +172,7 @@ class AutoDriveEnv(gym.Env):
         self.stagnation_speed_threshold = float(stagnation_speed_threshold)
         self.stagnation_steps = int(stagnation_steps)
         self.map_id = str(map_id or "none")
+        # Zero disables the successful lap-count episode target.
         self.laps_per_episode = int(laps_per_episode)
         self.frontier_stagnation_seconds = max(0.0, float(frontier_stagnation_seconds))
         self.terminate_on_collision = bool(terminate_on_collision)
@@ -254,6 +254,7 @@ class AutoDriveEnv(gym.Env):
 
         # Episode bookkeeping — reset() clears these each episode.
         self._episode_steps = 0          # env.step count this episode
+        self._positive_episode_return = 0.0
         self._idle_steps = 0             # consecutive |v_long| < threshold
         self._prev_throttle = 0.0        # last throttle (for obs + rewards)
         self._prev_steering = 0.0        # last steering (for obs + jerk term)
@@ -296,7 +297,7 @@ class AutoDriveEnv(gym.Env):
         Returns
         -------
         obs : dict
-            {"lidar": (1080,), "state": (8,)} float32 arrays.
+            {"lidar": (1081,), "state": (9,)} float32 arrays.
         info : dict
             Diagnostics (NOT fed into the policy network). See _build_info.
         """
@@ -337,6 +338,7 @@ class AutoDriveEnv(gym.Env):
 
         # Clear episode counters / history.
         self._episode_steps = 0
+        self._positive_episode_return = 0.0
         self._idle_steps = 0
         self._prev_throttle = 0.0
         self._prev_steering = 0.0
@@ -414,28 +416,13 @@ class AutoDriveEnv(gym.Env):
                 float(snap.position[0]), float(snap.position[2]), self._progress_time(snap)
             )
 
-        previous_lap_count = int(getattr(self.lap_tracker, "lap_count", 0))
-        lap_sample = self.lap_tracker.update(
+        lap_state = self.lap_tracker.update(
             progress["progress_m"] if progress is not None else None,
             self._progress_time(snap),
         )
-        completed_laps = max(
-            0,
-            int(getattr(self.lap_tracker, "lap_count", previous_lap_count))
-            - previous_lap_count,
-        )
         lap_target_reached = (
-            completed_laps > 0
-            and getattr(self, "laps_per_episode", 0) > 0
-            and bool(getattr(self.lap_tracker, "supported", False))
-            and int(getattr(self.lap_tracker, "lap_count", 0))
-            >= getattr(self, "laps_per_episode", 0)
-        )
-        clean_episode_win = lap_target_reached and not collision_event
-        average_frontier_speed_mps = (
-            lap_sample.get("completed_attempt_average_frontier_speed_mps")
-            if clean_episode_win and isinstance(lap_sample, dict)
-            else None
+            self.laps_per_episode > 0
+            and int(lap_state.get("lap_count", 0)) >= self.laps_per_episode
         )
 
         # Bookkeeping for truncation rules.
@@ -447,7 +434,8 @@ class AutoDriveEnv(gym.Env):
 
         # A terminal collision or a stalled frontier causes the vector worker
         # to reset this car alone; reset() reinitializes its frontier at spawn.
-        terminated = clean_episode_win or bool(self.terminate_on_collision and collision_event)
+        terminated = bool(self.terminate_on_collision and collision_event)
+        episode_won = False
         if progress is not None:
             no_push_s = progress["time_since_push_s"] or 0.0
             hit_frontier_stagnation = (
@@ -465,9 +453,12 @@ class AutoDriveEnv(gym.Env):
         # from the failed episode while the vector environment respawns it.
         termination_reason = (
             "collision" if self.terminate_on_collision and collision_event
-            else "lap_target" if clean_episode_win
             else None
         )
+        if not terminated and lap_target_reached:
+            terminated = True
+            episode_won = True
+            termination_reason = "lap_target"
         if not terminated and hit_frontier_stagnation:
             terminated = True
             termination_reason = "frontier_stagnation"
@@ -482,7 +473,7 @@ class AutoDriveEnv(gym.Env):
 
         # A failed terminal step receives one episode-level cost. A collision
         # already has its own event penalty, so rewards.py avoids charging both.
-        episode_failure = bool((terminated or truncated) and not clean_episode_win)
+        episode_failure = bool((terminated and not episode_won) or truncated)
 
         # Reward only newly advanced frontier distance, plus time cost and
         # failure costs. Current route movement is telemetry, never a second
@@ -491,15 +482,16 @@ class AutoDriveEnv(gym.Env):
             v_long=float(snap.v_long),
             step_duration_s=self.frame_skip / SIMULATION_HZ,
             frontier_advanced_m=(progress["advanced_m"] if progress is not None else None),
-            clean_run_average_frontier_speed_mps=average_frontier_speed_mps,
             collision_event=collision_event,
             episode_failure=episode_failure,
+            positive_episode_return=self._positive_episode_return,
             slip_angle=float(snap.slip_angle),
             prev_steering=self._prev_steering,
             steering=steering,
             cfg=self.reward_config,
         )
         reward = reward_components["total"]
+        self._positive_episode_return += max(0.0, float(reward_components["route_progress"]))
 
         obs = snapshot_to_obs(
             snap,
@@ -516,14 +508,8 @@ class AutoDriveEnv(gym.Env):
         )
         info["reward_components"] = reward_components
         info["laps_per_episode"] = getattr(self, "laps_per_episode", 0)
-        info["episode_won"] = bool(clean_episode_win)
-        info["lap_reward"] = float(
-            self.reward_config.lap_time_reward_scale * average_frontier_speed_mps
-            if average_frontier_speed_mps is not None else 0.0
-        )
-        if clean_episode_win and isinstance(lap_sample, dict):
-            info["completed_attempt_elapsed_s"] = lap_sample.get("completed_attempt_elapsed_s")
-            info["average_frontier_speed_mps"] = average_frontier_speed_mps
+        info["episode_won"] = episode_won
+        info["positive_episode_return"] = self._positive_episode_return
         if progress is not None:
             info.update({
                 "frontier_line": progress["line"],

@@ -18,7 +18,7 @@ services:
     ports:
       # Wide Socket.IO range for many parallel envs (widen both sides together).
       # Example for 32 envs: "4567-4598:4567-4598"
-      - "4567-4582:4567-4582"
+      - "4567-4583:4567-4583"
       # Mission Control (hub API + Vite static)
       - "8090:8090"
       # Optional in-B Vite HMR during Layer 4 dev:

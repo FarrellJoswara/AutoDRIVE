@@ -192,7 +192,7 @@ Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) c
 | :--- | :--- |
 | Env ↔ car | **Strict 1 Gym env = 1 racer.** We are **not** putting multiple cars inside one env. Parallelism later = many env *processes*, each with its own headless sim (e.g. SB3 `SubprocVecEnv`) |
 | Default launch | **Headless** (watching is Mission Control UI later, not the Unity window) |
-| LiDAR | **Full 1080 beams**, normalized; **no downsampling** for now |
+| LiDAR | **Full live scan**, normalized; no downsampling for PPO |
 | Waypoints / Frenet progress reward | **Deferred** — reward Phase 2; v1 does not require a centerline map |
 | Crash policy | **Do not end the episode on collision.** Keep `collision_penalty` in config but **default `0.0`**. Pressure comes from lost forward progress + stagnation truncation. Wall tax is optional later |
 | Episode end | **Stagnation truncation** (no meaningful forward progress for a configured idle window). Optional hard **max-steps** cap (`max_episode_steps`; **default `0` = disabled**). Not a fixed “one lap timer” |
@@ -220,8 +220,8 @@ Layer 2 wraps Layer 1 so a learning algorithm (e.g. PPO via Stable-Baselines3) c
 ### Observation / action (v1)
 
 * **Observation** (`Dict`):
-  * `"lidar"`: shape `(1080,)`, values in \([0, 1]\)
-  * `"state"`: e.g. \([v_{\text{long}}, v_{\text{lat}}, \omega_z, a_{\text{long}}, a_{\text{lat}}, \beta, \text{prev\_throttle}, \text{prev\_steering}]\)
+  * `"lidar"`: shape `(1081,)` for current Bridge packets, values in \([0, 1]\); 1080-beam documented packets are resampled to this canonical shape
+  * `"state"`: shape `(9,)`: individually scaled body velocity, yaw rate, acceleration, measured actuators, and previous commands
 * **Action**: `Box(-1, 1, shape=(2,))` → `[throttle, steering]`
 
 ### Reward sketch (v1, no waypoints)

@@ -53,11 +53,14 @@ def test_telemetry_snapshot_parsing():
     assert snap.step_id == 42
     assert snap.position == pytest.approx((7.535, 0.0861, -1.39))
     assert pytest.approx(snap.true_speed, 0.001) == 5.0
+    assert pytest.approx(snap.v_long, 0.001) == 3.0
+    assert pytest.approx(snap.v_lat, 0.001) == 0.0
     assert pytest.approx(snap.encoder_left, 0.001) == 12.5
     assert pytest.approx(snap.encoder_right, 0.001) == 12.8
     assert pytest.approx(snap.encoder_ticks_left, 0.001) == 100.0
     assert pytest.approx(snap.encoder_ticks_right, 0.001) == 102.0
     assert len(snap.lidar_ranges) == 1080
+    assert snap.lidar_valid
     assert snap.lidar_ranges[0] == 1.5
     assert snap.lidar_scan_rate == 40.0
     assert snap.throttle == 0.8
@@ -84,16 +87,16 @@ def test_orientation_euler_and_collision_keys():
     assert snap.lidar_scan_rate == 20.0
 
 
-def test_velocity_yaw_only_when_orientation_missing():
-    """Velocity heading is last resort — not used when quat is valid (incl. yaw≈0)."""
-    # Identity + high speed → velocity yaw (atan2(vx, vz)).
+def test_identity_orientation_is_valid_and_body_velocity_never_infers_yaw():
+    """A valid identity quaternion means yaw=0, even while moving in reverse."""
     q_identity = {
         "V1 Position": [0.0, 0.0, 0.0],
         "V1 Orientation Quaternion": [0.0, 0.0, 0.0, 1.0],
-        "V1 Linear Velocity": [3.0, 0.0, 4.0],
+        "V1 Linear Velocity": [-3.0, 0.0, 0.0],
     }
-    snap_fallback = TelemetrySnapshot.from_raw_dict(q_identity, step_id=1)
-    assert pytest.approx(snap_fallback.heading_yaw, 0.01) == math.atan2(3.0, 4.0)
+    snap_identity = TelemetrySnapshot.from_raw_dict(q_identity, step_id=1)
+    assert pytest.approx(snap_identity.heading_yaw, 1e-6) == 0.0
+    assert pytest.approx(snap_identity.v_long, 1e-6) == -3.0
 
     # Euler yaw=0 with sideways velocity must keep IMU yaw (not velocity).
     euler_zero = {
@@ -117,7 +120,78 @@ def test_yaw_rate_converts_bridge_z_to_unity_y():
         linear_acceleration=(0.0, 0.0, 0.0),
     )
     obs = snapshot_to_obs(snap, prev_throttle=0.0, prev_steering=0.0)
-    assert pytest.approx(float(obs["state"][2]), 1e-6) == -0.75
+    assert pytest.approx(float(obs["state"][2]), 1e-6) == -0.075
+
+
+def test_body_kinematics_are_not_rotated_again_and_observation_is_scaled():
+    from src.layer2.spaces import make_observation_space, snapshot_to_obs
+
+    raw = {
+        "V1 Orientation Euler Angles": f"0.0 0.0 {math.pi / 2:.8f}",
+        "V1 Linear Velocity": [11.44, -2.288, 0.0],
+        "V1 Linear Acceleration": [4.903325, -4.903325, 0.0],
+        "V1 Angular Velocity": [0.0, 0.0, 7.5],
+        "V1 Throttle": 0.4,
+        "V1 Steering": 0.18326,
+        "V1 LIDAR Range Array": [10.0] * 1081,
+    }
+    snap = TelemetrySnapshot.from_raw_dict(raw)
+    assert pytest.approx(snap.heading_yaw, abs=1e-5) == -math.pi / 2
+    assert snap.v_long == pytest.approx(11.44)
+    assert snap.v_lat == pytest.approx(2.288)
+    assert snap.lateral_g == pytest.approx(0.5)
+
+    obs = snapshot_to_obs(snap, prev_throttle=0.2, prev_steering=-0.4)
+    assert obs["state"].shape == (9,)
+    assert obs["state"] == pytest.approx(
+        [0.5, 0.1, -0.75, 0.5, 0.5, 0.4, 0.35, 0.2, -0.4], abs=1e-5
+    )
+    assert make_observation_space().contains(obs)
+
+
+def test_lidar_keeps_all_1081_rays_and_maps_positive_infinity_to_no_hit():
+    from src.layer2.spaces import snapshot_to_obs
+
+    raw = np.full(1081, 5.0, dtype=np.float32)
+    raw[0], raw[540], raw[700], raw[-1] = 0.06, np.inf, 0.03, 10.0
+    snap = TelemetrySnapshot(lidar_ranges=raw)
+    lidar = snapshot_to_obs(snap, 0.0, 0.0)["lidar"]
+    assert lidar.shape == (1081,)
+    assert lidar[0] == pytest.approx(0.0)
+    assert lidar[540] == pytest.approx(1.0)
+    assert lidar[700] == pytest.approx(1.0)
+    assert lidar[-1] == pytest.approx(1.0)
+
+
+def test_documented_1080_lidar_scan_is_resampled_to_canonical_shape():
+    from src.layer2.spaces import snapshot_to_obs
+
+    snap = TelemetrySnapshot(lidar_ranges=np.linspace(0.06, 10.0, 1080, dtype=np.float32))
+    lidar = snapshot_to_obs(snap, 0.0, 0.0)["lidar"]
+    assert lidar.shape == (1081,)
+    assert lidar[0] == pytest.approx(0.0)
+    assert lidar[-1] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("bad_ranges", [
+    np.full(1081, np.nan, dtype=np.float32),
+    np.full(1081, -np.inf, dtype=np.float32),
+    np.zeros(1081, dtype=np.float32),
+    np.full(1079, 1.0, dtype=np.float32),
+])
+def test_invalid_lidar_fails_clearly_instead_of_becoming_fake_obstacles(bad_ranges):
+    from src.layer2.spaces import snapshot_to_obs
+
+    with pytest.raises(ValueError, match="LiDAR"):
+        snapshot_to_obs(TelemetrySnapshot(lidar_ranges=bad_ranges), 0.0, 0.0)
+
+
+def test_missing_or_corrupt_lidar_is_marked_invalid_by_parser():
+    missing = TelemetrySnapshot.from_raw_dict({"V1 LIDAR Range Array": None})
+    corrupt = TelemetrySnapshot.from_raw_dict({"V1 LIDAR Range Array": "not-a-gzip-packet"})
+    assert not missing.lidar_valid
+    assert not corrupt.lidar_valid
+    assert missing.lidar_ranges.size == 0
 
 
 def test_bridge_lidar_scan_is_canonicalized_to_ccw_order():

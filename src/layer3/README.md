@@ -10,8 +10,8 @@ Layer 3 is the **brain trainer**: it uses Layer 2’s Gym env and teaches a neur
 
 Every step, the car gives us two piles of numbers:
 
-1. **LiDAR** — 1080 distance readings in a fan around the car (“how far is stuff in each direction?”).
-2. **State** — 8 other numbers (speed, slip, last throttle/steer, etc.).
+1. **LiDAR** — 1081 distance readings in a fan around the car (“how far is stuff in each direction?”).
+2. **State** — 9 normalized sensor/control values (body speeds, yaw rate, acceleration, actuator feedback, and previous commands).
 
 We need the computer to turn that into:
 
@@ -27,15 +27,15 @@ A **neural net** does that. While **training**, we also keep score (reward from 
 
 Think of the net as a **two-input gadget** that outputs one summary, then another gadget that picks the pedals.
 
-### Input A — LiDAR (1080 numbers in a row)
+### Input A — LiDAR (1081 numbers in a row)
 
-Imagine standing in a circle and measuring distance every fraction of a degree. That’s a **line of 1080 numbers**, left → right around the car.
+Imagine standing in a circle and measuring distance every fraction of a degree. That’s a **line of 1081 numbers**, left → right around the car, including both edges of the 270° scan.
 
 A **1D-CNN** is a small sliding window that looks at **nearby beams together** (e.g. “these 5 beams next to each other look like a wall / a gap”). It slides along the strip and builds a shorter summary that means something like “shape of the free space.”
 
-Why not dump all 1080 into a normal dense net? You *can*, but then every beam is mixed with every other beam with no built-in idea that beam 50 is next to beam 51. The CNN is a cheat sheet: “neighbors matter.”
+Why not dump all 1081 into a normal dense net? You *can*, but then every beam is mixed with every other beam with no built-in idea that beam 50 is next to beam 51. The CNN is a cheat sheet: “neighbors matter.”
 
-### Input B — State (8 numbers)
+### Input B — State (9 numbers)
 
 Speed, sideways slip, last controls, etc. There’s no “strip of space” here — just a small bag of facts. A plain **MLP** (stack of fully connected layers: numbers in → mix → numbers out) is enough.
 
@@ -49,9 +49,9 @@ We now have:
 **Fuse** = glue them into **one longer list of numbers** (e.g. 256 floats). That list is the car’s situation in a form the rest of the net likes.
 
 ```text
-  lidar[1080] ──▶ 1D-CNN ──▶ summary_A ─┐
+  lidar[1081] ──▶ 1D-CNN ──▶ summary_A ─┐
                                          ├─▶ glue ──▶ one feature vector (e.g. 256)
-  state[8]    ──▶ MLP    ──▶ summary_B ─┘
+  state[9]    ──▶ MLP    ──▶ summary_B ─┘
                                               │
                                               ▼
                                     “what should I do?” heads
@@ -72,8 +72,8 @@ That glue module is what we call the **feature extractor** (`extractors.py`).
 | Env / VecEnv factory | `src/layer3/envs.py` | 1 env, or **N envs via SubprocVecEnv** |
 | Demonstration driver | `src/layer3/expert.py` | Optional map-aware teacher for action labels; disabled by default |
 | Behavior cloning | `src/layer3/behavior_cloning.py` | Warm-start PPO actor from LiDAR/state demonstrations |
-| **Training** | `src/layer3/train.py` | One-lap curriculum, PPO fine-tuning, clean-lap checkpoint selection, plateau gate |
-| **Evaluation** | `src/layer3/evaluate.py` | Repeatable deterministic lap-success and pace report |
+| **Training** | `src/layer3/train.py` | PPO training, deterministic evaluation, best-checkpoint selection, evaluation plateau and bounded exploration |
+| **Evaluation** | `src/layer3/evaluate.py` | Fixed simulated-time deterministic frontier, pace, crash, stall and lap diagnostics |
 | **Playback** | `src/layer3/play.py` | Load `.zip`, drive — **no learning** (always 1 env) |
 | Thin CLI | `scripts/demo.py train` / `play` | Flags → calls into `layer3` |
 | Extractor unit test | `scripts/test_layer3_extractor.py` | Fake tensors; no Unity |
@@ -99,9 +99,10 @@ Implemented in `envs.py` / `train.py`. Full detail: [`LAYER3.md` §5](../../LAYE
 1. Start one or more Gym envs (each talks to its own sim via Layers 1–2).
 2. Optional: on closed centerline maps, a cautious teacher can label LiDAR/state samples with throttle and steering. This warm-up is disabled by default. Route pose is used for labels only; it is not added to the policy observation.
 3. If teacher labels were collected, behavior cloning can initialize the PPO actor from them. Otherwise PPO starts from its own initialization (or the checkpoint selected with Resume).
-4. On supported closed routes, PPO starts with one-lap episodes; after repeated clean finishes, Layer 3 promotes each env to the configured lap target.
-5. PPO learns from Layer 2 rewards. After at least three clean PPO wins, the fastest-lap checkpoint can replace the initial policy. If there are no three wins, a teacher-initialized or resumed trusted policy is retained when available; scratch training keeps its latest PPO policy. The Unity pause callback always resumes physics when training exits.
-6. `python -m src.layer3.evaluate --model logs/rl/<run>/final_model.zip --map-id porto` evaluates deterministic clean-lap success and pace over independent resets.
+4. A lap crossing never ends an episode. Cars continue until a collision, stalled frontier, or configured safety termination; lap counts and times remain measurements.
+5. A separate simulator evaluates an immutable policy snapshot in the background until a collision, frontier stall, or ten completed laps, while the training simulators continue collecting experience. Frontier pace is the default selection score and drives checkpoint selection, exploration changes, and plateau stopping; reward per simulated second remains an optional selection score. Frontier distance and pace, collisions, failures, and lap data are recorded separately. If an evaluation is still running at the next interval, one request for the latest policy is queued; evaluations never overlap.
+6. PPO exploration standard deviation is clamped to settings-defined bounds, reduced after evaluation improvements, and raised modestly after repeated stale evaluations. The Unity pause callback resumes physics when training exits.
+7. `python -m src.layer3.evaluate --model logs/rl/<run>/final_model.zip --map-id porto` runs the same failure-or-ten-lap evaluation outside training.
 
 Playback skips 3–4: load zip → only look → act (single car).
 

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import {
   ConnState,
+  EvaluatorLiveTelemetry,
   FleetTelemetry,
   MetricsTelemetry,
   ReplayStatus,
@@ -55,6 +56,12 @@ let replayFleetReceivedAt = 0;
 let lastReplayUiEmit = 0;
 
 let trainingPhaseHot: TrainingPhaseTelemetry | null = null;
+let evaluatorLiveHot: EvaluatorLiveTelemetry | null = null;
+
+/** Latest evaluator pose for the animation-frame canvas path. */
+export function getEvaluatorLiveHot(): EvaluatorLiveTelemetry | null {
+  return evaluatorLiveHot;
+}
 
 const listeners = new Set<Listener>();
 let ws: WebSocket | null = null;
@@ -209,6 +216,8 @@ function connect() {
         if (status.state === "starting") ingestTrainingPhase(null);
       } else if (msg.type === "train_phase") {
         ingestTrainingPhase(msg.payload as TrainingPhaseTelemetry);
+      } else if (msg.type === "evaluator_live") {
+        evaluatorLiveHot = msg.payload as EvaluatorLiveTelemetry;
       } else if (msg.type === "replay_status") {
         setState({ replayStatus: msg.payload as ReplayStatus });
       } else if (msg.type === "replay_telemetry") {

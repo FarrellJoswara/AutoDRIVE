@@ -69,7 +69,16 @@ class ReplayPublisher:
         self.thread.join(timeout=1.0)
 
 
-def _telemetry(obs: dict, info: dict, *, step: int, episode: int, run_id: str, episode_return: float) -> dict:
+def _telemetry(
+    obs: dict,
+    info: dict,
+    *,
+    step: int,
+    episode: int,
+    run_id: str,
+    episode_return: float,
+    best_10_lap_time_s: Optional[float] = None,
+) -> dict:
     position = info.get("position")
     pose = [float(position[0]), float(position[2])] if position is not None and len(position) >= 3 else None
     lidar = []
@@ -101,8 +110,10 @@ def _telemetry(obs: dict, info: dict, *, step: int, episode: int, run_id: str, e
         "frontier_speed_mps": info.get("frontier_speed_mps"),
         "lap_supported": bool(info.get("lap_supported", False)),
         "lap_count": int(info.get("lap_count", 0)),
+        "lap_times_s": list(info.get("lap_times_s", [])),
         "last_lap_time_s": info.get("last_lap_time_s"),
         "best_lap_time_s": info.get("best_lap_time_s"),
+        "best_10_lap_time_s": best_10_lap_time_s,
         "lap_elapsed_s": info.get("lap_elapsed_s"),
         "lidar": lidar,
         "reset": False,
@@ -162,6 +173,10 @@ def rollout(
         i = 0
         episode = 0
         episode_return = 0.0
+        lap_times_this_episode: list[float] = []
+        observed_laps_this_episode = 0
+        observed_episode = -1
+        best_10_lap_time_s: Optional[float] = None
         while steps <= 0 or i < steps:
             if getattr(env, "_replay_stop_requested", False) or (stop_file and stop_file.exists()):
                 stop_requested = True
@@ -170,8 +185,36 @@ def rollout(
             obs, reward, terminated, truncated, info = env.step(action)
             i += 1
             episode_return += float(reward)
+            if episode != observed_episode:
+                observed_episode = episode
+                lap_times_this_episode = []
+                observed_laps_this_episode = 0
+            raw_lap_times = info.get("lap_times_s")
+            if isinstance(raw_lap_times, (list, tuple)):
+                for raw_time in raw_lap_times[observed_laps_this_episode:]:
+                    try:
+                        lap_time = float(raw_time)
+                    except (TypeError, ValueError):
+                        continue
+                    if lap_time > 0.0:
+                        lap_times_this_episode.append(lap_time)
+                        if len(lap_times_this_episode) >= 10:
+                            total = sum(lap_times_this_episode[-10:])
+                            best_10_lap_time_s = (
+                                total if best_10_lap_time_s is None
+                                else min(best_10_lap_time_s, total)
+                            )
+                observed_laps_this_episode = len(raw_lap_times)
             if publisher is not None:
-                publisher.enqueue(_telemetry(obs, info, step=i, episode=episode, run_id=run_id, episode_return=episode_return))
+                publisher.enqueue(_telemetry(
+                    obs,
+                    info,
+                    step=i,
+                    episode=episode,
+                    run_id=run_id,
+                    episode_return=episode_return,
+                    best_10_lap_time_s=best_10_lap_time_s,
+                ))
             if i == 0 or (i + 1) % 50 == 0:
                 print(
                     f"  step {i + 1}: v_long={info.get('v_long', float('nan')):.3f} "

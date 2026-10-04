@@ -4,7 +4,21 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
+
 from src.layer3.hub_callback import HubTelemetryCallback
+from src.layer3.hub_callback import _min_pool_lidar
+
+
+class LidarDownsampleTests(unittest.TestCase):
+    def test_min_pool_preserves_the_final_endpoint_ray(self) -> None:
+        scan = np.full(1081, 10.0, dtype=np.float32)
+        scan[-1] = 0.06
+
+        pooled = _min_pool_lidar(scan, 360)
+
+        self.assertEqual(len(pooled), 360)
+        self.assertAlmostEqual(pooled[-1], 0.06, places=3)
 
 
 class CollisionMarkerTelemetryTests(unittest.TestCase):

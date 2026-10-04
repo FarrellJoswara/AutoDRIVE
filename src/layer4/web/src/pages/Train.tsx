@@ -10,54 +10,9 @@ import {
 } from "../api";
 import { useHubStore } from "../store";
 
-const empty: Settings = {
-  n_envs: 1,
-  timesteps: 0,
-  max_duration_seconds: 0,
-  stop_after_laps: 0,
-  plateau_min_timesteps: 100000,
-  plateau_window_timesteps: 25000,
-  plateau_patience: 5,
-  plateau_min_improvement_pct: 1,
-  plateau_min_successful_laps: 10,
-  expert_pretrain_steps: 0,
-  curriculum_single_lap_successes: 10,
-  out: null,
-  run_name: null,
-  seed: 0,
-  device: "auto",
-  resume: null,
-  headless: true,
-  auto_launch: true,
-  connect_timeout: 90,
-  frame_skip: 4,
-  max_episode_steps: 0,
-  stagnation_speed_threshold: 0.15,
-  stagnation_steps: 50,
-  frontier_stagnation_seconds: 5,
-  terminate_on_collision: true,
-  forward_scale: 0,
-  backward_speed_penalty_scale: 1,
-  route_progress_scale: 10,
-  time_penalty_per_second: 1,
-  collision_penalty: -100,
-  episode_failure_penalty: -100,
-  slip_penalty: 0.2,
-  steer_jerk_penalty: 0.05,
-  lap_time_reward_scale: 1000,
-  telemetry_every_n: 200,
-  fleet_hz: 15,
-  lidar_display_beams: 120,
-  telemetry_lidar_max_envs: 4,
-  docker_mode: false,
-  stop_sims_on_train_exit: true,
-  stop_stack_on_train_exit: false,
-  map_id: "none",
-  laps_per_episode: 10,
-};
-
 type NumKey = {
-  [K in keyof Settings]: Settings[K] extends number ? K : never;
+  [K in keyof Settings]-?:
+    Settings[K] extends number ? K : never;
 }[keyof Settings];
 
 function runnableMaps(list: MapCatalogEntry[]): MapCatalogEntry[] {
@@ -92,11 +47,13 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   ref
 ) {
   const { status } = useHubStore();
-  const [form, setForm] = useState<Settings>(empty);
+  // All defaults come from the backend settings model.
+  const [form, setForm] = useState<Settings>({} as Settings);
   const [mapChoices, setMapChoices] = useState<MapCatalogEntry[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const state = status?.state ?? "idle";
@@ -104,6 +61,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     state === "running" || state === "starting" || state === "stopping";
   const selectedTrainMap =
     mapChoices.find((m) => m.id === form.map_id) ?? null;
+  // Older hubs don't send ppo_n_steps yet; this fallback matches Layer 3's
+  // current PPO default until the backend is safely restarted.
+  const ppoStepsPerEnv = form.ppo_n_steps ?? 1024;
+  const rolloutSize = Math.max(1, form.n_envs * ppoStepsPerEnv);
+  const firstEvaluationStep = Math.ceil(form.evaluation_every_timesteps / rolloutSize) * rolloutSize;
+  const secondEvaluationStep = Math.ceil((form.evaluation_every_timesteps * 2) / rolloutSize) * rolloutSize;
 
   useEffect(() => {
     let cancelled = false;
@@ -112,12 +75,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
         if (cancelled) return;
         const choices = runnableMaps(maps);
         setMapChoices(choices);
-        const merged = { ...empty, ...s };
+        const merged = { ...s };
         if (!choices.some((m) => m.id === merged.map_id)) {
           merged.map_id = "none";
         }
-        if (merged.map_id === "none") merged.laps_per_episode = 0;
         setForm(merged);
+        setSettingsLoaded(true);
       })
       .catch((e: Error) => {
         if (!cancelled) setErr(e.message);
@@ -131,8 +94,8 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   }, []);
 
   useEffect(() => {
-    if (!loading) onReadyChange?.(true);
-  }, [loading, onReadyChange]);
+    if (!loading) onReadyChange?.(settingsLoaded);
+  }, [loading, settingsLoaded, onReadyChange]);
 
   function num(key: NumKey, v: string) {
     const n = Number(v);
@@ -149,7 +112,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setErr(null);
     try {
       const res = await putSettings(form);
-      setForm({ ...empty, ...res.settings });
+      setForm(res.settings);
       setMsg("Settings saved");
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
@@ -173,7 +136,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     onBusyChange?.(true);
     try {
       const res = await putSettings(form);
-      const saved = { ...empty, ...res.settings };
+      const saved = res.settings;
       setForm(saved);
       await startTrain(saved);
       setMsg(`Started — map locked: ${saved.map_id || "none"}`);
@@ -190,7 +153,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setBusy(true);
     onBusyChange?.(true);
     try {
-      await stopTrain();
+      const result = await stopTrain();
+      if (result.stopped_containers.length > 0) {
+        setMsg(`Stopped simulators: ${result.stopped_containers.join(", ")}`);
+      } else if (!running) {
+        setMsg("No running training job or simulator containers to stop.");
+      }
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
@@ -199,13 +167,13 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     }
   }
 
-  useImperativeHandle(ref, () => ({ start: onStart, stop: onStop }), [form, onBusyChange, busy]);
+  useImperativeHandle(ref, () => ({ start: onStart, stop: onStop }), [form, onBusyChange, busy, running]);
 
-  if (loading) {
+  if (loading || !settingsLoaded) {
     return (
       <section className="panel">
         <h2>Train</h2>
-        <p className="lede">Loading…</p>
+        <p className={err ? "error" : "lede"}>{err ?? "Loading settings…"}</p>
       </section>
     );
   }
@@ -264,9 +232,6 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
                     const next = {
                       ...f,
                       map_id,
-                      laps_per_episode: map_id === "none"
-                        ? 0
-                        : (f.laps_per_episode || 10),
                     };
                     // Persist immediately so Watch underlay follows without waiting for Start.
                     void putSettings(next)
@@ -447,6 +412,15 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <label className="field">
+            Successful laps per car episode (0 disables)
+            <input
+              type="number"
+              min={0}
+              value={form.laps_per_episode}
+              onChange={(e) => num("laps_per_episode", e.target.value)}
+            />
+          </label>
+          <label className="field">
             Idle speed threshold (builtin map)
             <input
               type="number"
@@ -463,17 +437,6 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               onChange={(e) => num("stagnation_steps", e.target.value)}
             />
           </label>
-          <label className="field">
-            Laps to complete a car’s life (0 disables; success after target)
-            <input
-              type="number"
-              min={0}
-              step={1}
-              disabled={form.map_id === "none"}
-              value={form.laps_per_episode}
-              onChange={(e) => num("laps_per_episode", e.target.value)}
-            />
-          </label>
           <div className="section-title">Run stopping (0 disables optional limits)</div>
           <label className="field">
             Maximum training duration (seconds)
@@ -486,16 +449,6 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <label className="field">
-            Stop the entire training run at this cumulative lap count (optional)
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={form.stop_after_laps}
-              onChange={(e) => num("stop_after_laps", e.target.value)}
-            />
-          </label>
-          <label className="field">
             Minimum training steps before plateau can stop
             <input
               type="number"
@@ -505,16 +458,33 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <label className="field">
-            Steps per improvement measurement window
+            Minimum training steps between evaluations
             <input
               type="number"
               min={1}
-              value={form.plateau_window_timesteps}
-              onChange={(e) => num("plateau_window_timesteps", e.target.value)}
+              value={form.evaluation_every_timesteps}
+              onChange={(e) => num("evaluation_every_timesteps", e.target.value)}
             />
+            <small className="meta">
+              With {form.n_envs} environments × {ppoStepsPerEnv.toLocaleString()} PPO steps per rollout, snapshots align to rollout boundaries. The first two nominal snapshot points are {firstEvaluationStep.toLocaleString()} and {secondEvaluationStep.toLocaleString()} steps; a still-running evaluation can delay the next one.
+            </small>
           </label>
           <label className="field">
-            Consecutive windows without improvement before stopping
+            Evaluation score for checkpoint selection and plateau stopping
+            <select
+              value={form.evaluation_metric}
+              onChange={(e) => setForm((f) => ({
+                ...f,
+                evaluation_metric: e.target.value as Settings["evaluation_metric"],
+              }))}
+            >
+              <option value="frontier_speed">Frontier pace</option>
+              <option value="reward_per_simulated_second">Reward per simulated second</option>
+              <option value="total_reward">Total reward per attempt</option>
+            </select>
+          </label>
+          <label className="field">
+            Consecutive evaluations without improvement before stopping
             <input
               type="number"
               min={1}
@@ -532,49 +502,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               onChange={(e) => num("plateau_min_improvement_pct", e.target.value)}
             />
           </label>
-          <label className="field">
-            Successful laps required before plateau stopping can end the run
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={form.plateau_min_successful_laps}
-              onChange={(e) => num("plateau_min_successful_laps", e.target.value)}
-            />
-          </label>
           <p className="meta run-stop-help">
-            Plateau stopping compares the best measured progress rate against each new
-            window and waits for this many completed laps on closed centerline maps.
-            Collision and frontier stagnation reset only the affected car’s episode.
-          </p>
-          <div className="section-title">Learning warm-up</div>
-          <label className="field">
-            Optional centerline-teacher warm-up steps per car (0 disables)
-            <input
-              type="number"
-              min={0}
-              step={1000}
-              value={form.expert_pretrain_steps}
-              disabled={form.map_id === "none"}
-              onChange={(e) => num("expert_pretrain_steps", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Clean one-lap episodes before training the full lap target
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={form.curriculum_single_lap_successes}
-              disabled={form.map_id === "none" || form.laps_per_episode <= 1}
-              onChange={(e) => num("curriculum_single_lap_successes", e.target.value)}
-            />
-          </label>
-          <p className="meta run-stop-help">
-            Teacher warm-up is disabled by default. When enabled, the map-aware
-            driver supplies labels only; the learned policy still receives LiDAR
-            and vehicle-state inputs. Closed tracks begin with one-lap episodes and
-            advance to the configured target after repeated clean finishes.
+            A separate simulator evaluates a fixed policy snapshot in parallel until
+            it crashes, stalls, or completes 10 laps. Total attempt reward includes
+            frontier progress, time and reverse costs, and any terminal failure cost.
+            The selected score chooses the best checkpoint and drives exploration
+            and plateau stopping. Evaluations do not overlap.
           </p>
           <label className="field">
             End episode after no frontier progress (centerline maps; 0 disables)
@@ -627,39 +560,78 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <label className="field">
-            Clean target-lap bonus (scale × average frontier speed across all target laps)
+            Fixed collision cost (positive magnitude)
             <input
               type="number"
               min={0}
               step="any"
-              value={form.lap_time_reward_scale}
-              onChange={(e) => num("lap_time_reward_scale", e.target.value)}
+              value={form.collision_penalty_magnitude}
+              onChange={(e) => num("collision_penalty_magnitude", e.target.value)}
             />
           </label>
           <label className="field">
-            Collision penalty (charged once when a collision is detected)
+            Positive frontier reward clawed back on collision (%)
             <input
               type="number"
+              min={0}
+              max={100}
               step="any"
-              value={form.collision_penalty}
-              onChange={(e) => num("collision_penalty", e.target.value)}
+              value={form.collision_reward_percent}
+              onChange={(e) => num("collision_reward_percent", e.target.value)}
             />
           </label>
           <label className="field">
-            Failed episode penalty (stall or timeout)
+            Failed episode cost (positive magnitude; stall or timeout)
             <input
               type="number"
+              min={0}
               step="any"
-              value={form.episode_failure_penalty}
-              onChange={(e) => num("episode_failure_penalty", e.target.value)}
+              value={form.episode_failure_penalty_magnitude}
+              onChange={(e) => num("episode_failure_penalty_magnitude", e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Positive frontier reward clawed back on stall/timeout (%)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step="any"
+              value={form.episode_failure_reward_percent}
+              onChange={(e) => num("episode_failure_reward_percent", e.target.value)}
             />
           </label>
           <p className="meta run-stop-help">
             Only new frontier advances earn progress reward; retracing ground and raw
             speed earn nothing. Simulated time has a running cost, and reversing has
-            an additional body-relative cost. A crash receives the collision penalty;
-            stalls and timeouts receive the failed-episode penalty. Clean completion
-            still earns the configured target-lap pace bonus.
+            an additional body-relative cost. Crashes and other failed episodes claw
+            back the configured share of positive frontier reward earned during that
+            car’s life, then pay their fixed failure cost. Ten-lap completion ends an
+            episode successfully without a failure deduction.
+          </p>
+          <label className="field">
+            Minimum action standard deviation
+            <input type="number" min={0.01} step="any" value={form.exploration_std_min}
+              onChange={(e) => num("exploration_std_min", e.target.value)} />
+          </label>
+          <label className="field">
+            Maximum action standard deviation
+            <input type="number" min={0.01} step="any" value={form.exploration_std_max}
+              onChange={(e) => num("exploration_std_max", e.target.value)} />
+          </label>
+          <label className="field">
+            Exploration scale after an evaluation improvement
+            <input type="number" min={0.01} max={1} step="any" value={form.exploration_improvement_scale}
+              onChange={(e) => num("exploration_improvement_scale", e.target.value)} />
+          </label>
+          <label className="field">
+            Exploration scale after repeated plateau evaluations
+            <input type="number" min={1} step="any" value={form.exploration_plateau_scale}
+              onChange={(e) => num("exploration_plateau_scale", e.target.value)} />
+          </label>
+          <p className="meta run-stop-help">
+            Evaluation improvement gently reduces policy randomness. Repeated flat
+            evaluations raise it modestly, always within the configured bounds.
           </p>
           <label className="field">
             slip_penalty

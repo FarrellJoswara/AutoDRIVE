@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import unittest
-from pathlib import Path
+import importlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,8 +15,6 @@ from src.layer2.autodrive_env import AutoDriveEnv
 from src.layer2.rewards import RewardConfig
 from src.layer3.envs import env_kwargs_from_args
 from src.layer3.train import (
-    CleanLapCheckpointCallback,
-    LapCurriculumCallback,
     RunStopCallback,
     SimulatorPauseCallback,
     build_arg_parser,
@@ -25,236 +23,60 @@ from src.layer4.settings import Settings
 
 
 class RunStopCallbackTests(unittest.TestCase):
-    def test_clean_lap_checkpoint_ignores_failures_and_keeps_faster_wins(self) -> None:
-        callback = CleanLapCheckpointCallback(Path("best_clean_lap_model"))
-        fake_model = SimpleNamespace(save=unittest.mock.Mock())
-        callback.model = fake_model
+    def test_main_passes_lap_episode_setting_into_training(self) -> None:
+        train_module = importlib.import_module("src.layer3.train")
+        with patch.object(train_module, "train", return_value="checkpoint.zip") as run:
+            result = train_module.main(
+                ["--n-envs", "1", "--laps-per-episode", "7", "--device", "cpu"]
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(run.call_args.kwargs["laps_per_episode"], 7)
 
-        callback.update_locals({
-            "infos": [{"episode_won": False, "best_lap_time_s": None}],
-            "dones": [True],
-        })
-        self.assertTrue(callback._on_step())
-        self.assertEqual(callback.successful_episodes, 0)
-        fake_model.save.assert_not_called()
-
-        for lap_time in (31.0, 32.0):
-            callback.update_locals({
-                "infos": [{"episode_won": True, "best_lap_time_s": lap_time}],
-                "dones": [True],
-            })
-            self.assertTrue(callback._on_step())
-        self.assertEqual(fake_model.save.call_count, 0)
-        callback.update_locals({
-            "infos": [{"episode_won": True, "best_lap_time_s": 30.5}],
-            "dones": [True],
-        })
-        self.assertTrue(callback._on_step())
-        callback.update_locals({
-            "infos": [{"episode_won": True, "best_lap_time_s": 30.0}],
-            "dones": [True],
-        })
-        self.assertTrue(callback._on_step())
-        self.assertEqual(callback.successful_episodes, 4)
-        self.assertEqual(callback.best_lap_time_s, 30.0)
-        self.assertEqual(fake_model.save.call_count, 2)
-
-    def test_default_train_settings_disable_the_total_step_cap(self) -> None:
+    def test_training_settings_have_no_lap_targets_or_evaluation_time_cap(self) -> None:
         settings = Settings()
         argv = settings.to_train_argv()
-
+        args = build_arg_parser().parse_args(argv)
         self.assertEqual(settings.timesteps, 0)
-        self.assertEqual(settings.max_episode_steps, 0)
-        self.assertEqual(argv[argv.index("--timesteps") + 1], "0")
-        self.assertIn("--plateau-min-timesteps", argv)
-        self.assertIn("--plateau-min-successful-laps", argv)
-        self.assertIn("--expert-pretrain-steps", argv)
-        self.assertIn("--curriculum-single-lap-successes", argv)
-        args = build_arg_parser().parse_args([])
-        self.assertEqual(args.timesteps, 0)
-        self.assertEqual(args.max_episode_steps, 0)
+        self.assertEqual(settings.time_penalty_per_second, 5.0)
+        self.assertEqual(args.evaluation_every_timesteps, 50_000)
+        self.assertEqual(settings.evaluation_metric, "total_reward")
+        self.assertEqual(args.evaluation_metric, "total_reward")
         self.assertEqual(settings.laps_per_episode, 10)
-        self.assertEqual(settings.expert_pretrain_steps, 0)
-        self.assertEqual(settings.curriculum_single_lap_successes, 10)
-        self.assertEqual(settings.plateau_min_successful_laps, 10)
         self.assertEqual(args.laps_per_episode, 10)
-        self.assertTrue(args.terminate_on_collision)
-        self.assertEqual(args.forward_scale, 0.0)
-        self.assertEqual(args.backward_speed_penalty_scale, 1.0)
-        self.assertEqual(args.route_progress_scale, 10.0)
-        self.assertEqual(args.time_penalty_per_second, 1.0)
-        self.assertEqual(args.collision_penalty, -100.0)
-        self.assertEqual(args.episode_failure_penalty, -100.0)
+        self.assertFalse(hasattr(args, "evaluation_duration_seconds"))
+        self.assertEqual(args.collision_penalty_magnitude, 100.0)
+        self.assertEqual(args.collision_reward_percent, 100.0)
+        self.assertEqual(args.episode_failure_reward_percent, 100.0)
+        self.assertEqual(args.episode_failure_penalty_magnitude, 100.0)
+        self.assertNotIn('--stop-after-laps', argv)
+        self.assertNotIn('--lap-time-reward-scale', argv)
+        self.assertIn('--laps-per-episode', argv)
 
-        configured = Settings(map_id="porto")
-        parsed = build_arg_parser().parse_args(configured.to_train_argv())
-        env_kwargs = env_kwargs_from_args(parsed)
-        self.assertEqual(env_kwargs["laps_per_episode"], 10)
-        self.assertEqual(env_kwargs["lap_time_reward_scale"], 1000.0)
-        self.assertEqual(env_kwargs["forward_scale"], 0.0)
-        self.assertEqual(env_kwargs["backward_speed_penalty_scale"], 1.0)
-        self.assertEqual(env_kwargs["route_progress_scale"], 10.0)
-        self.assertEqual(env_kwargs["time_penalty_per_second"], 1.0)
-        self.assertEqual(env_kwargs["collision_penalty"], -100.0)
-        self.assertEqual(env_kwargs["episode_failure_penalty"], -100.0)
-        self.assertTrue(env_kwargs["terminate_on_collision"])
+    def test_settings_and_env_kwargs_are_backend_driven(self) -> None:
+        configured = Settings(map_id='porto', n_envs=4,
+                              collision_penalty_magnitude=250,
+                              collision_reward_percent=35,
+                              episode_failure_reward_percent=40)
+        args = build_arg_parser().parse_args(configured.to_train_argv())
+        env_kwargs = env_kwargs_from_args(args)
+        self.assertEqual(env_kwargs['map_id'], 'porto')
+        self.assertEqual(env_kwargs['laps_per_episode'], 10)
+        self.assertEqual(env_kwargs['time_penalty_per_second'], 5.0)
+        self.assertEqual(env_kwargs['collision_penalty_magnitude'], 250.0)
+        self.assertEqual(env_kwargs['collision_reward_percent'], 35.0)
+        self.assertEqual(env_kwargs['episode_failure_penalty_magnitude'], 100.0)
+        self.assertEqual(env_kwargs['episode_failure_reward_percent'], 40.0)
 
-    @staticmethod
-    def _plateau_step(callback, progress_m: float, timesteps: int) -> bool:
-        callback.model = SimpleNamespace(num_timesteps=timesteps)
-        callback.update_locals({
-            "infos": [{"frontier_advanced_m": progress_m}],
-            "rewards": [progress_m * 10.0],
-            "dones": [False],
-        })
-        return callback._on_step()
-
-    def test_progress_plateau_stops_after_patience_windows(self) -> None:
-        callback = RunStopCallback(
-            plateau_min_timesteps=0,
-            plateau_window_timesteps=2,
-            plateau_patience=2,
-            plateau_min_improvement_pct=1.0,
-            plateau_min_successful_laps=0,
-        )
-
-        self.assertTrue(self._plateau_step(callback, 1.0, 1))
-        self.assertTrue(self._plateau_step(callback, 1.0, 2))  # baseline window
-        self.assertTrue(self._plateau_step(callback, 0.99, 3))
-        self.assertTrue(self._plateau_step(callback, 0.99, 4))  # first stale window
-        self.assertTrue(self._plateau_step(callback, 0.99, 5))
-        self.assertFalse(self._plateau_step(callback, 0.99, 6))
-        self.assertEqual(callback.stop_reason, "progress_plateau")
-        self.assertEqual(callback.plateau_summary["metric"], "frontier_m_per_env_step")
-
-    def test_material_improvement_resets_plateau_patience(self) -> None:
-        callback = RunStopCallback(
-            plateau_min_timesteps=0,
-            plateau_window_timesteps=2,
-            plateau_patience=2,
-            plateau_min_improvement_pct=1.0,
-            plateau_min_successful_laps=0,
-        )
-
-        self.assertTrue(self._plateau_step(callback, 1.0, 1))
-        self.assertTrue(self._plateau_step(callback, 1.0, 2))
-        self.assertTrue(self._plateau_step(callback, 0.99, 3))
-        self.assertTrue(self._plateau_step(callback, 0.99, 4))
-        self.assertTrue(self._plateau_step(callback, 1.02, 5))  # material gain
-        self.assertTrue(self._plateau_step(callback, 1.02, 6))
-        self.assertTrue(self._plateau_step(callback, 1.02, 7))
-        self.assertTrue(self._plateau_step(callback, 1.02, 8))
-        self.assertEqual(callback.stop_reason, None)
-
-    def test_plateau_warmup_blocks_early_stop(self) -> None:
-        callback = RunStopCallback(
-            plateau_min_timesteps=10,
-            plateau_window_timesteps=2,
-            plateau_patience=1,
-            plateau_min_improvement_pct=1.0,
-            plateau_min_successful_laps=0,
-        )
-
-        self.assertTrue(self._plateau_step(callback, 1.0, 1))
-        self.assertTrue(self._plateau_step(callback, 1.0, 2))
-        self.assertTrue(self._plateau_step(callback, 0.99, 3))
-        self.assertTrue(self._plateau_step(callback, 0.99, 4))
-        self.assertEqual(callback.stop_reason, None)
-
-    def test_builtin_map_uses_reward_rate_when_frontier_data_is_absent(self) -> None:
-        callback = RunStopCallback(
-            plateau_min_timesteps=0,
-            plateau_window_timesteps=2,
-            plateau_patience=1,
-            plateau_min_improvement_pct=1.0,
-            plateau_min_successful_laps=0,
-        )
-        callback.model = SimpleNamespace(num_timesteps=1)
-        callback.update_locals({"infos": [{}, {}], "rewards": [1.0, 1.0]})
-        self.assertTrue(callback._on_step())
-        self.assertEqual(callback.plateau_summary["metric"], "reward_per_env_step")
-
-        callback.model.num_timesteps = 3
-        callback.update_locals({"infos": [{}, {}], "rewards": [0.99, 0.99]})
-        self.assertFalse(callback._on_step())
-        self.assertEqual(callback.stop_reason, "progress_plateau")
-
-    def test_plateau_does_not_stop_before_minimum_lap_successes(self) -> None:
-        callback = RunStopCallback(
-            plateau_min_timesteps=0,
-            plateau_window_timesteps=2,
-            plateau_patience=1,
-            plateau_min_successful_laps=1,
-        )
-        self.assertTrue(self._plateau_step(callback, 1.0, 1))
-        self.assertTrue(self._plateau_step(callback, 1.0, 2))
-        self.assertTrue(self._plateau_step(callback, 0.99, 3))
-        self.assertTrue(self._plateau_step(callback, 0.99, 4))
-        callback.update_locals({
-            "infos": [{"lap_count": 1}],
-            "rewards": [0.99],
-            "dones": [True],
-        })
-        self.assertTrue(callback._on_step())
-        self.assertEqual(callback._completed_laps, 1)
-
-    def test_curriculum_promotes_only_after_clean_one_lap_finishes(self) -> None:
-        class FakeEnv:
-            def __init__(self):
-                self.targets = []
-
-            def env_method(self, name, value):
-                self.targets.append((name, value))
-                return [None]
-
-        callback = LapCurriculumCallback(target_laps=10, successful_single_laps=2)
-        fake_env = FakeEnv()
-        callback.model = SimpleNamespace(num_timesteps=100, get_env=lambda: fake_env)
-        callback.update_locals({"infos": [{"episode_won": False}], "dones": [True]})
-        self.assertTrue(callback._on_step())
-        self.assertFalse(callback.promoted)
-        callback.model.num_timesteps = 200
-        callback.update_locals({"infos": [{"episode_won": True}], "dones": [True]})
-        self.assertTrue(callback._on_step())
-        self.assertFalse(callback.promoted)
-        callback.model.num_timesteps = 300
-        callback.update_locals({"infos": [{"episode_won": True}], "dones": [True]})
-        self.assertTrue(callback._on_step())
-        self.assertTrue(callback.promoted)
-        self.assertEqual(fake_env.targets, [("set_laps_per_episode", 10)])
-
-    def test_lap_target_stops_when_any_env_reaches_target(self) -> None:
-        callback = RunStopCallback(stop_after_laps=3)
-        callback.update_locals({"infos": [{"lap_count": 2}, {"lap_count": 3}]})
-
-        self.assertFalse(callback._on_step())
-        self.assertEqual(callback.stop_reason, "lap_target")
-
-    def test_lap_target_accumulates_across_car_episodes(self) -> None:
-        callback = RunStopCallback(stop_after_laps=3)
-        callback.update_locals(
-            {"infos": [{"lap_count": 2}, {"lap_count": 0}], "dones": [True, False]}
-        )
-        self.assertTrue(callback._on_step())
-
-        callback.update_locals(
-            {"infos": [{"lap_count": 1}, {"lap_count": 0}], "dones": [False, False]}
-        )
-        self.assertFalse(callback._on_step())
-        self.assertEqual(callback.stop_reason, "lap_target")
-
-    def test_duration_limit_stops_training(self) -> None:
+    def test_wall_clock_stop_remains_optional(self) -> None:
         callback = RunStopCallback(max_duration_seconds=1)
         callback._started_at = time.monotonic() - 2
-        callback.update_locals({"infos": []})
-
+        callback.update_locals({})
         self.assertFalse(callback._on_step())
-        self.assertEqual(callback.stop_reason, "max_duration")
+        self.assertEqual(callback.stop_reason, 'max_duration')
 
-    def test_zero_optional_limits_leave_run_active(self) -> None:
+    def test_zero_wall_clock_limit_keeps_training_active(self) -> None:
         callback = RunStopCallback()
-        callback.update_locals({"infos": [{"lap_count": 50}]})
-
+        callback.update_locals({})
         self.assertTrue(callback._on_step())
         self.assertIsNone(callback.stop_reason)
 
@@ -329,6 +151,7 @@ class CollisionTerminationTests(unittest.TestCase):
         env.racer = SimpleNamespace(step=lambda *_: snap)
         env._last_snap = None
         env._episode_steps = 0
+        env._positive_episode_return = 0.0
         env._idle_steps = 0
         env._prev_steering = 0.0
         env._prev_throttle = 0.0
@@ -351,7 +174,7 @@ class CollisionTerminationTests(unittest.TestCase):
         env.frontier_stagnation_seconds = frontier_stagnation_seconds
         env.terminate_on_collision = terminate_on_collision
         env.lap_tracker = lap_tracker or SimpleNamespace(
-            update=lambda *_: None,
+            update=lambda *_: {"lap_count": 0},
             sample=lambda *_: {"lap_supported": False},
         )
         env.laps_per_episode = laps_per_episode
@@ -578,69 +401,78 @@ class CollisionTerminationTests(unittest.TestCase):
         self.assertFalse(truncated)
         self.assertNotIn("termination_reason", info)
 
-    def test_tenth_lap_awards_one_bonus_for_average_speed_across_whole_run(self) -> None:
+    def test_lap_crossing_never_ends_life_or_awards_terminal_bonus(self) -> None:
         class CompletingLapTracker:
             supported = True
             length_m = 120.0
             lap_count = 9
-
             def update(self, *_args):
                 self.lap_count = 10
-                return {
-                    "completed_lap_frontier_speed_mps": 3.5,
-                    "completed_attempt_elapsed_s": 400.0,
-                    "completed_attempt_average_frontier_speed_mps": 3.0,
-                }
-
+                return {"completed_attempt_average_frontier_speed_mps": 3.0}
             def sample(self, *_args):
                 return {"lap_supported": True, "lap_count": self.lap_count}
 
         snap = SimpleNamespace(
-            collision_count=0,
-            timestamp=10.0,
-            position=(1.0, 0.0, 1.0),
-            v_long=2.0,
-            true_speed=2.0,
-            collision=False,
-            heading_yaw=0.0,
-            slip_angle=0.0,
-            lidar=np.ones(1080),
+            collision_count=0, timestamp=10.0, position=(1.0, 0.0, 1.0),
+            v_long=2.0, true_speed=2.0, collision=False, heading_yaw=0.0,
+            slip_angle=0.0, lidar=np.ones(1080),
         )
         progress = {
-            "progress_m": 120.0,
-            "advanced_m": 0.0,
-            "time_since_push_s": 0.0,
-            "line": [[0.0, 0.0], [1.0, 0.0]],
+            "progress_m": 120.0, "advanced_m": 0.0,
+            "time_since_push_s": 0.0, "line": [[0.0, 0.0], [1.0, 0.0]],
             "speed_mps": 0.0,
         }
-
         _, reward, terminated, truncated, info = self._step_with_collision(
-            snap,
-            False,
-            progress=progress,
-            lap_tracker=CompletingLapTracker(),
+            snap, False, progress=progress, lap_tracker=CompletingLapTracker(),
+            laps_per_episode=0,
+        )
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info["lap_count"], 10)
+        self.assertFalse(info["episode_won"])
+        self.assertNotIn("lap_reward", info)
+        self.assertEqual(reward, -0.125)
+
+    def test_ten_lap_target_ends_episode_as_success_without_failure_deduction(self) -> None:
+        class CompletingLapTracker:
+            supported = True
+            length_m = 120.0
+            lap_count = 9
+            def update(self, *_args):
+                self.lap_count = 10
+                return {"lap_count": self.lap_count}
+            def sample(self, *_args):
+                return {"lap_supported": True, "lap_count": self.lap_count}
+
+        snap = SimpleNamespace(
+            collision_count=0, timestamp=10.0, position=(1.0, 0.0, 1.0),
+            v_long=2.0, true_speed=2.0, collision=False, heading_yaw=0.0,
+            slip_angle=0.0, lidar=np.ones(1080),
+        )
+        progress = {
+            "progress_m": 120.0, "advanced_m": 0.0,
+            "time_since_push_s": 0.0, "line": [[0.0, 0.0], [1.0, 0.0]],
+            "speed_mps": 0.0,
+        }
+        _, reward, terminated, truncated, info = self._step_with_collision(
+            snap, False, progress=progress, lap_tracker=CompletingLapTracker(),
             laps_per_episode=10,
         )
-
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual(info["termination_reason"], "lap_target")
         self.assertTrue(info["episode_won"])
-        self.assertEqual(info["lap_count"], 10)
-        self.assertEqual(info["lap_reward"], 3000.0)
-        self.assertEqual(info["reward_components"]["lap_bonus"], info["lap_reward"])
-        self.assertLess(reward, info["lap_reward"])  # the per-step time cost still applies
+        self.assertEqual(info["reward_components"]["episode_failure"], 0.0)
+        self.assertEqual(reward, -0.125)
 
-    def test_collision_on_target_lap_invalidates_clean_win_and_bonus(self) -> None:
+    def test_collision_remains_episode_end_even_on_lap_crossing(self) -> None:
         class CollidingLapTracker:
             supported = True
             length_m = 120.0
             lap_count = 9
-
             def update(self, *_args):
                 self.lap_count = 10
                 return {"completed_attempt_average_frontier_speed_mps": 3.0}
-
             def sample(self, *_args):
                 return {"lap_supported": True, "lap_count": self.lap_count}
 
@@ -655,13 +487,12 @@ class CollisionTerminationTests(unittest.TestCase):
         }
         _, reward, terminated, truncated, info = self._step_with_collision(
             snap, True, progress=progress, lap_tracker=CollidingLapTracker(),
-            laps_per_episode=10,
+            laps_per_episode=1,
         )
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual(info["termination_reason"], "collision")
         self.assertFalse(info["episode_won"])
-        self.assertEqual(info["lap_reward"], 0.0)
         self.assertLess(reward, 0.0)
 
     def test_frontier_stall_ends_with_explicit_failure_cost(self) -> None:
@@ -704,8 +535,8 @@ class CollisionTerminationTests(unittest.TestCase):
             snap, True, progress=progress,
         )
         self.assertEqual(info["reward_components"]["route_progress"], 0.0)
-        self.assertEqual(info["reward_components"]["time_cost"], -0.025)
-        self.assertAlmostEqual(reward, -0.025)
+        self.assertEqual(info["reward_components"]["time_cost"], -0.125)
+        self.assertAlmostEqual(reward, -0.125)
 
         progress["advanced_m"] = 0.02
         progress["current_delta_m"] = 0.0
@@ -713,37 +544,7 @@ class CollisionTerminationTests(unittest.TestCase):
             snap, True, progress=progress,
         )
         self.assertAlmostEqual(info["reward_components"]["route_progress"], 0.2)
-        self.assertAlmostEqual(reward, 0.175)
-
-
-class LapPaceRewardTests(unittest.TestCase):
-    def test_faster_clean_target_finish_receives_larger_reward(self) -> None:
-        from src.layer2.rewards import compute_reward
-
-        cfg = RewardConfig(lap_time_reward_scale=1000.0)
-        common = dict(
-            v_long=0.0,
-            route_progress_delta_m=0.0,
-            collision_event=False,
-            slip_angle=0.0,
-            prev_steering=0.0,
-            steering=0.0,
-            cfg=cfg,
-        )
-        slow = compute_reward(**common, clean_run_average_frontier_speed_mps=2.0)
-        fast = compute_reward(**common, clean_run_average_frontier_speed_mps=4.0)
-
-        self.assertEqual(slow, 2000.0)
-        self.assertEqual(fast, 4000.0)
-
-    def test_no_clean_target_finish_means_no_pace_reward(self) -> None:
-        from src.layer2.rewards import compute_reward
-
-        reward = compute_reward(
-            v_long=20.0, route_progress_delta_m=0.0, collision_event=False,
-            slip_angle=0.0, prev_steering=0.0, steering=0.0, cfg=RewardConfig(),
-        )
-        self.assertEqual(reward, 0.0)
+        self.assertAlmostEqual(reward, 0.075)
 
 
 if __name__ == "__main__":

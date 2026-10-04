@@ -99,10 +99,10 @@ export function App() {
           <button
             type="button"
             className="btn danger header-run-btn"
-            disabled={!trainReady || trainBusy || !running || status?.state === "stopping"}
+            disabled={!trainReady || trainBusy || status?.state === "stopping"}
             onClick={() => void trainRef.current?.stop()}
           >
-            Stop
+            {running ? "Stop" : "Stop simulators"}
           </button>
           <div className="conn" data-state={conn}>
             {conn}
