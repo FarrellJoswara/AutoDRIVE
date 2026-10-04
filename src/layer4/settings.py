@@ -55,6 +55,7 @@ class Settings(BaseModel):
     forward_scale: float = 0.0
     backward_speed_penalty_scale: float = Field(default=1.0, ge=0)
     route_progress_scale: float = Field(default=10.0, ge=0)
+    frontier_pace_target_mps: float = Field(default=6.0, gt=0)
     time_penalty_per_second: float = Field(default=5.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
     collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
@@ -136,11 +137,16 @@ class Settings(BaseModel):
         if self.simulator_mode == "legacy":
             return {
                 "AICAR_ACTION_INTERVAL_SECONDS": "",
+                "AICAR_ACTION_IDLE_TARGET_FPS": "",
                 "AICAR_DISABLE_CAMERA_STREAM": "",
                 "AICAR_SIMULATOR_PATH": legacy_path,
             }
         return {
             "AICAR_ACTION_INTERVAL_SECONDS": f"{self.effective_action_interval():.17g}",
+            # Fixed-action mode spends substantial time waiting for the next
+            # policy action. Capping only that idle polling reduces CPU without
+            # changing the fixed physics-tick batch for each action.
+            "AICAR_ACTION_IDLE_TARGET_FPS": "30",
             "AICAR_DISABLE_CAMERA_STREAM": "1" if self.simulator_mode == "fixed_camera_off" else "0",
             "AICAR_SIMULATOR_PATH": fixed_path,
         }
@@ -203,6 +209,8 @@ class Settings(BaseModel):
             str(self.backward_speed_penalty_scale),
             "--route-progress-scale",
             str(self.route_progress_scale),
+            "--frontier-pace-target-mps",
+            str(self.frontier_pace_target_mps),
             "--time-penalty-per-second",
             str(self.time_penalty_per_second),
             "--collision-penalty-magnitude",

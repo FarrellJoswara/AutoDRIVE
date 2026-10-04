@@ -16,6 +16,7 @@ namespace AiCar
     {
         const float PauseTimeScale = 0.001f;
         const string IntervalVariable = "AICAR_ACTION_INTERVAL_SECONDS";
+        const string IdleTargetFrameRateVariable = "AICAR_ACTION_IDLE_TARGET_FPS";
         const string PauseEvent = "AICAR_SIMULATION_PAUSE";
         const string ResumeEvent = "AICAR_SIMULATION_RESUME";
         const string PauseAckEvent = "AICAR_SIMULATION_PAUSE_ACK";
@@ -40,6 +41,7 @@ namespace AiCar
         double _simulatedSeconds;
         string _configurationError;
         bool _debugSteps;
+        int _idleTargetFrameRate = 120;
         SocketIOComponent _socket;
         Action<int, double, int, string> _completed;
 
@@ -68,7 +70,24 @@ namespace AiCar
             _normalTargetFrameRate = Application.targetFrameRate;
             _debugSteps = Environment.GetEnvironmentVariable("AICAR_ACTION_STEP_DEBUG") == "1";
             string value = Environment.GetEnvironmentVariable(IntervalVariable);
-            if (!string.IsNullOrWhiteSpace(value)) ConfigureActionStepMode(value);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                ConfigureActionStepMode(value);
+                ConfigureIdleTargetFrameRate();
+            }
+        }
+
+        void ConfigureIdleTargetFrameRate()
+        {
+            string value = Environment.GetEnvironmentVariable(IdleTargetFrameRateVariable);
+            int requested;
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out requested) || requested < 1)
+            {
+                Debug.LogWarning("[AiCar.SimulationGate] invalid " + IdleTargetFrameRateVariable + "; keeping 120 FPS");
+                return;
+            }
+            _idleTargetFrameRate = requested;
         }
 
         void ConfigureActionStepMode(string value)
@@ -107,7 +126,7 @@ namespace AiCar
             Time.timeScale = 0f;
             _paused = true;
             // Bound Update polling while waiting for Python without sleeping a Unity thread.
-            Application.targetFrameRate = 120;
+            Application.targetFrameRate = _idleTargetFrameRate;
             Debug.Log("[AiCar.SimulationGate] explicit mode: " + ticks + " fixed ticks/action");
         }
 
@@ -226,14 +245,14 @@ namespace AiCar
             else
             {
                 Time.timeScale = 0f;
-                Application.targetFrameRate = 120;
+                Application.targetFrameRate = _idleTargetFrameRate;
             }
         }
 
         void Complete(int ticks, string error)
         {
             if (_debugSteps) Debug.Log("[AiCar.SimulationGate] complete step " + _activeStepId + " ticks=" + ticks + " sim=" + _simulatedSeconds.ToString("R", CultureInfo.InvariantCulture) + " error=" + (error ?? ""));
-            Application.targetFrameRate = 120;
+            Application.targetFrameRate = _idleTargetFrameRate;
             var cb = _completed;
             _completed = null;
             cb?.Invoke(_activeStepId, _simulatedSeconds, ticks, error);
@@ -242,7 +261,7 @@ namespace AiCar
         void Fail(string error)
         {
             _configurationError = error;
-            Application.targetFrameRate = 120;
+            Application.targetFrameRate = _idleTargetFrameRate;
             Time.timeScale = 0f;
             _paused = true;
             _stepping = false;

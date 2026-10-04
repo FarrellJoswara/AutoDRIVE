@@ -101,6 +101,14 @@ control-timing migration; it cannot exactly recreate the legacy mode's
 load-dependent timing. Existing checkpoints need driving evaluation at the
 chosen interval before resuming training. Defaults remain in legacy mode.
 
+The fixed-step staging build sets Unity's `job-worker-count=1` in its Linux
+`boot.config`, and the fixed-camera training settings cap `Application.Update`
+polling at 30 FPS only while waiting for the next action. During an action,
+Unity remains uncapped and runs the same fixed-tick batch. Legacy simulator
+mode does not set either optimization. Set
+`AICAR_ACTION_IDLE_TARGET_FPS` to override the idle cap when launching the
+fixed-step player directly; it must be a positive integer.
+
 Prepare the local vendor project first with
 `python simulator/unity/scripts/prepare_action_step_project.py`. This applies
 the Bridge hooks and copies the tracked gate, Socket.IO, and build overrides.

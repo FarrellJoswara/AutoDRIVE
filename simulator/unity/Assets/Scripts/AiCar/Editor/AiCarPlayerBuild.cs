@@ -48,8 +48,30 @@ namespace AiCar.Editor
 
         public static void BuildLinuxFixedStepStagingOnly()
         {
+            var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-experiment");
             BuildLinux(publish: false, stagingName: "linux-fixed-step-experiment");
+            SetJobWorkerCount(staging, 1);
             Debug.Log("[AiCar] Linux fixed-step player staged without replacing the active simulator");
+        }
+
+        static void SetJobWorkerCount(string staging, int workerCount)
+        {
+            var bootConfig = Path.Combine(staging, "AutoDRIVE Simulator_Data", "boot.config");
+            if (!File.Exists(bootConfig))
+                throw new FileNotFoundException("Linux player boot.config not found", bootConfig);
+
+            var lines = new System.Collections.Generic.List<string>(File.ReadAllLines(bootConfig));
+            var setting = "job-worker-count=" + workerCount;
+            var found = false;
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (!lines[i].StartsWith("job-worker-count=", StringComparison.Ordinal)) continue;
+                lines[i] = setting;
+                found = true;
+            }
+            if (!found) lines.Add(setting);
+            File.WriteAllLines(bootConfig, lines);
+            Debug.Log("[AiCar] Set fixed-step Unity job workers to " + workerCount);
         }
 
         public static void PublishStagedLinuxOnly()
