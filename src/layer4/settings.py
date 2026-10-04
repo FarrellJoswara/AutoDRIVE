@@ -143,10 +143,13 @@ class Settings(BaseModel):
             }
         return {
             "AICAR_ACTION_INTERVAL_SECONDS": f"{self.effective_action_interval():.17g}",
-            # Fixed-action mode spends substantial time waiting for the next
-            # policy action. Capping only that idle polling reduces CPU without
-            # changing the fixed physics-tick batch for each action.
-            "AICAR_ACTION_IDLE_TARGET_FPS": "30",
+            # Lower idle polling only when the camera-free mode is scaling to a
+            # larger pool. The cap applies while physics is paused between
+            # actions; the fixed-tick action batch remains uncapped.
+            "AICAR_ACTION_IDLE_TARGET_FPS": (
+                "10" if self.simulator_mode == "fixed_camera_off" and self.n_envs >= 8
+                else "30"
+            ),
             "AICAR_DISABLE_CAMERA_STREAM": "1" if self.simulator_mode == "fixed_camera_off" else "0",
             "AICAR_SIMULATOR_PATH": fixed_path,
         }

@@ -102,11 +102,11 @@ load-dependent timing. Existing checkpoints need driving evaluation at the
 chosen interval before resuming training. Defaults remain in legacy mode.
 
 The fixed-step staging build sets Unity's `job-worker-count=1` in its Linux
-`boot.config`, and the fixed-camera training settings cap `Application.Update`
-polling at 30 FPS only while waiting for the next action. During an action,
-Unity remains uncapped and runs the same fixed-tick batch. Legacy simulator
-mode does not set either optimization. Set
-`AICAR_ACTION_IDLE_TARGET_FPS` to override the idle cap when launching the
+`boot.config`. Fixed-camera training caps `Application.Update` polling only
+while waiting for the next action: normally 30 FPS, or 10 FPS for camera-off
+pools of eight or more. During an action, Unity remains uncapped and runs the
+same fixed-tick batch. Legacy simulator mode does not set either optimization.
+Set `AICAR_ACTION_IDLE_TARGET_FPS` to override the idle cap when launching the
 fixed-step player directly; it must be a positive integer.
 
 Prepare the local vendor project first with
@@ -191,6 +191,46 @@ subtarget after Linux Dedicated Server Build Support is installed. The Unity
 CLI module inventory may still show that module as available even when the
 server player variants are present; a successful staged build is the check used
 here.
+
+## Idle action-polling cap evaluation (October 4, 2026)
+
+The fixed-step player caps `Application.Update` only while it is paused between
+actions. Each action still runs the same uncapped fixed-tick batch. Lowering
+`AICAR_ACTION_IDLE_TARGET_FPS` therefore saves idle-loop CPU but adds wait time
+for the next Bridge action. It leaves the action interval, physics timestep,
+LiDAR, and vehicle scripts unchanged.
+
+The A/B used the same staged player, camera disabled, Porto map, 0.086-second
+actions, deterministic controls, and a separate seed per worker. Probes ran at
+low process priority while the user's six-environment training run stayed
+active. Across three 20-simulated-second repeats, four environments at 30 FPS
+delivered 2.625 aggregate simulated environment-seconds per wall second and
+used 1.856 Unity CPU cores on average. Eight environments at 10 FPS delivered
+3.064 environment-seconds per wall second (+16.7%) and used 1.871 Unity CPU
+cores (+0.8%). Unity CPU per simulated second fell from 0.707 to 0.611 (-13.6%).
+
+All 24 paired worker traces matched exactly: actions, protocol IDs, physics
+ticks, simulated time, vehicle telemetry, full 1081-beam LiDAR, observations,
+and rewards. No simulator payload hash changed. The raw report and per-step
+traces are in `logs/diagnostics/idle_action_fps_4x30_vs_8x10_long.json` and
+`.npz`. The experiment is reproducible with
+`scripts/test_idle_action_fps.py`.
+
+This is a CPU-for-parallelism tradeoff, not a free speedup. With the same eight
+environments, 30 FPS delivered 4.929 environment-seconds per wall second;
+10 FPS delivered 3.068 (-37.8%) while using about half the Unity CPU per wall
+second. Keep 30 FPS for a fixed-size pool when CPU headroom exists. For the
+camera-off training mode, the hub now selects 10 FPS at eight or more training
+environments and retains 30 FPS below eight. That threshold is based on the
+measured four-versus-eight pool comparison and does not affect legacy or
+camera-on modes. It only changes how quickly an idle Unity player notices the
+next action; it does not alter physics or the response to a given action trace.
+
+The pool test measures simulator collection, not complete PPO throughput. The
+training run's policy inference, rollout/update cost, and longer-term contention
+can change the end-to-end result. Recheck training FPS and learning progress
+when scaling above the current environment count. The settings regression is
+covered by `scripts/test_simulator_idle_fps_settings.py`.
 
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
