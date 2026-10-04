@@ -54,6 +54,26 @@ namespace AiCar.Editor
             Debug.Log("[AiCar] Linux fixed-step player staged without replacing the active simulator");
         }
 
+        public static void BuildLinuxFixedStepProfilerStagingOnly()
+        {
+            EnsureSceneInBuild();
+            PlayerSettings.SetScriptingBackend(BuildTargetGroup.Standalone, ScriptingImplementation.IL2CPP);
+            var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-profiler-experiment");
+            WipeDir(staging);
+            Directory.CreateDirectory(staging);
+            var options = new BuildPlayerOptions
+            {
+                scenes = new[] { ScenePath },
+                locationPathName = Path.Combine(staging, "AutoDRIVE Simulator.x86_64"),
+                target = BuildTarget.StandaloneLinux64,
+                options = BuildOptions.Development,
+            };
+            var report = BuildPipeline.BuildPlayer(options);
+            FailIfBad(report, "Linux profiler Development");
+            SetJobWorkerCount(staging, 1);
+            Debug.Log("[AiCar] Linux fixed-step profiler Development player staged without replacing the active simulator");
+        }
+
         public static void BuildLinuxFixedStepServerStagingOnly()
         {
             var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-server-experiment");
