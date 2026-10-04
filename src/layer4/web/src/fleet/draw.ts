@@ -374,6 +374,8 @@ function drawLidarPolygon(
 
   // Clip each beam to occupancy walls so rays cannot paint through the underlay.
   const outline = new Path2D();
+  const hitRays = new Path2D();
+  const clearRays = new Path2D();
   outline.moveTo(sx0, sy0);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.lineWidth = 1;
@@ -386,13 +388,14 @@ function drawLidarPolygon(
     const sy = oy - hz * scale;
     outline.lineTo(sx, sy);
     const hit = maxSpan > 1e-6 ? (dist - rMin) / maxSpan : 1;
-    const a = hit < 0.95 ? 0.55 : 0.18;
-    ctx.strokeStyle = `rgba(62, 207, 142, ${a})`;
-    ctx.beginPath();
-    ctx.moveTo(sx0, sy0);
-    ctx.lineTo(sx, sy);
-    ctx.stroke();
+    const rays = hit < 0.95 ? hitRays : clearRays;
+    rays.moveTo(sx0, sy0);
+    rays.lineTo(sx, sy);
   }
+  ctx.strokeStyle = "rgba(62, 207, 142, 0.55)";
+  ctx.stroke(hitRays);
+  ctx.strokeStyle = "rgba(62, 207, 142, 0.18)";
+  ctx.stroke(clearRays);
   outline.closePath();
   ctx.fillStyle = "rgba(62, 207, 142, 0.10)";
   ctx.fill(outline);
