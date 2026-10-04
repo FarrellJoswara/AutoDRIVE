@@ -232,6 +232,43 @@ can change the end-to-end result. Recheck training FPS and learning progress
 when scaling above the current environment count. The settings regression is
 covered by `scripts/test_simulator_idle_fps_settings.py`.
 
+## CPU Profiler capture (October 4, 2026)
+
+`BuildLinuxFixedStepProfilerStagingOnly` creates a Unity Development player in
+`simulator/_build/linux-fixed-step-profiler-experiment/` and never publishes it
+over the training simulator. `scripts/capture_unity_cpu_timeline.py` records a
+bounded fixed-step run with Unity's `-profiler-log-file` option. Load the `.raw`
+capture into the Editor Profiler to inspect the CPU Timeline; the accompanying
+`AiCarProfilerExport.ExportLoadedProfile` method exports the CPU hierarchy to
+JSON for repeatable, headless summaries. These Development-build timings are
+for locating hot paths, not for estimating release-player throughput.
+
+The startup capture covered 300 frames, 93 actions, and 7,998 physics ticks over
+8 simulated seconds. During the first 12 seconds, `TrackLoader.Update` used
+2.91 seconds of main-thread self time and allocated frequently while its
+15-second baked-track suppression loop repeatedly searched scene objects. Its
+per-frame cost fell to 0.1 ms total in the later capture, after that one-time
+window ended; it is therefore a startup cost rather than a sustained per-step
+cost for long runs.
+
+The later capture covered the final 300 frames of a 25-simulated-second run.
+The main thread spent 2.11 seconds inclusive in `Physics.Simulate` across those
+frames. `LIDAR.FixedUpdate` took 308 ms inclusive, including 110 ms in 137,287
+raycasts. This makes the physics engine the main persistent simulator hot path;
+the current LiDAR raycast workload is measurable but smaller. Compression
+methods do not appear as individual CPU samples in this non-deep capture, so
+telemetry serialization still needs marker-based inspection before drawing a
+conclusion about its share.
+
+The Development player was compared with the normal fixed-step player in three
+20-simulated-second pairs (233 actions per run). All compared actions, physics
+ticks, protocol IDs, simulated-time deltas, vehicle and LiDAR telemetry,
+observations, and rewards matched exactly (zero value mismatches). The
+Development player's measured throughput varied between pairs and is not a
+performance result. Raw captures and exports are local under
+`logs/diagnostics/unity_cpu_timeline*`; they are intentionally not source
+artifacts because raw captures exceed 300 MB.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while

@@ -6,6 +6,7 @@ using System.Linq;
 using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal;
+using UnityEngine;
 
 namespace AiCar.Editor
 {
@@ -44,9 +45,18 @@ namespace AiCar.Editor
             if (string.IsNullOrWhiteSpace(input) || string.IsNullOrWhiteSpace(output))
                 throw new InvalidOperationException("Set AICAR_PROFILER_RAW and AICAR_PROFILER_JSON.");
 
-            ProfilerDriver.profileLoaded += () => Export(input, output);
+            Action onLoaded = null;
+            onLoaded = () =>
+            {
+                ProfilerDriver.profileLoaded -= onLoaded;
+                Export(input, output);
+            };
+            ProfilerDriver.profileLoaded += onLoaded;
             if (!ProfilerDriver.LoadProfile(input, false))
+            {
+                ProfilerDriver.profileLoaded -= onLoaded;
                 throw new InvalidOperationException("Unity could not load profiler capture: " + input);
+            }
         }
 
         static void Export(string input, string output)
