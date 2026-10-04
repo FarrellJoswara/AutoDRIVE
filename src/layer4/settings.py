@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -41,6 +42,8 @@ class Settings(BaseModel):
     # Env kwargs — match train.py CLI defaults for a usable first policy
     headless: bool = True
     auto_launch: bool = True
+    simulator_mode: Literal["legacy", "fixed_camera_on", "fixed_camera_off"] = "legacy"
+    action_interval_s: Optional[float] = Field(default=None, gt=0)
     connect_timeout: float = Field(default=90.0, gt=0)
     frame_skip: int = Field(default=4, ge=1)
     max_episode_steps: int = Field(default=0, ge=0)
@@ -103,6 +106,44 @@ class Settings(BaseModel):
         if self.docker_mode:
             return False
         return self.auto_launch
+
+    def effective_action_interval(self) -> Optional[float]:
+        if self.simulator_mode == "legacy":
+            return None
+        return self.action_interval_s or 0.086
+
+    def simulator_env(self, *, containerized: Optional[bool] = None) -> Dict[str, str]:
+        """Environment for the selected simulator mode.
+
+        Docker replicas need the volume-mounted path, while a host-launched
+        simulator needs the repository path. Callers may override detection
+        when the hub is managing containers from outside Docker.
+        """
+        if containerized is None:
+            containerized = os.environ.get("AICAR_IN_DOCKER", "").strip().lower() in {
+                "1", "true", "yes", "on"
+            }
+        legacy_path = (
+            "/app/simulator/AutoDRIVE Simulator.x86_64"
+            if containerized
+            else str(ROOT / "simulator" / "AutoDRIVE Simulator.x86_64")
+        )
+        fixed_path = (
+            "/app/simulator/_build/linux-fixed-step-experiment/AutoDRIVE Simulator.x86_64"
+            if containerized
+            else str(ROOT / "simulator" / "_build" / "linux-fixed-step-experiment" / "AutoDRIVE Simulator.x86_64")
+        )
+        if self.simulator_mode == "legacy":
+            return {
+                "AICAR_ACTION_INTERVAL_SECONDS": "",
+                "AICAR_DISABLE_CAMERA_STREAM": "",
+                "AICAR_SIMULATOR_PATH": legacy_path,
+            }
+        return {
+            "AICAR_ACTION_INTERVAL_SECONDS": f"{self.effective_action_interval():.17g}",
+            "AICAR_DISABLE_CAMERA_STREAM": "1" if self.simulator_mode == "fixed_camera_off" else "0",
+            "AICAR_SIMULATOR_PATH": fixed_path,
+        }
 
     def to_train_argv(self) -> List[str]:
         """Build argv list for `python -m src.layer3.train` (flags only, no module)."""
@@ -177,6 +218,9 @@ class Settings(BaseModel):
             "--steer-jerk-penalty",
             str(self.steer_jerk_penalty),
         ]
+        action_interval = self.effective_action_interval()
+        if action_interval is not None:
+            argv.extend(["--action-interval-s", str(action_interval)])
         if self.resume:
             argv.extend(["--resume", str(self.resume)])
         argv.append("--headless" if self.headless else "--no-headless")
@@ -190,6 +234,7 @@ class Settings(BaseModel):
             "AICAR_FLEET_HZ": str(self.fleet_hz),
             "AICAR_LIDAR_DISPLAY_BEAMS": str(self.lidar_display_beams),
             "AICAR_TELEMETRY_LIDAR_MAX_ENVS": str(self.telemetry_lidar_max_envs),
+            **self.simulator_env(),
         }
 
 

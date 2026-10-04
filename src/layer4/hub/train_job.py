@@ -106,7 +106,9 @@ class TrainJob:
                 from src.layer4.hub.docker_control import reconcile_compose_sims
 
                 simulator_count = settings.n_envs + 1  # dedicated deterministic evaluator
-                replicas = reconcile_compose_sims(simulator_count)
+                replicas = reconcile_compose_sims(
+                    simulator_count, env_overrides=settings.simulator_env(containerized=True)
+                )
                 if len(replicas) != simulator_count:
                     raise RuntimeError(
                         f"Docker returned {len(replicas)} simulator replicas; "

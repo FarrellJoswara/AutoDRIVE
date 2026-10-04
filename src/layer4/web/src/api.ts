@@ -116,6 +116,8 @@ export interface Settings {
   resume: string | null;
   headless: boolean;
   auto_launch: boolean;
+  simulator_mode: "legacy" | "fixed_camera_on" | "fixed_camera_off";
+  action_interval_s: number | null;
   connect_timeout: number;
   frame_skip: number;
   max_episode_steps: number;

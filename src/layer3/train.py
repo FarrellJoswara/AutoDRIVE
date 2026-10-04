@@ -668,6 +668,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--connect-timeout", type=float, default=90.0)
     # ~10 Hz decisions at 40 Hz physics — easier credit assignment than 40 Hz.
     p.add_argument("--frame-skip", type=int, default=4)
+    p.add_argument(
+        "--action-interval-s", type=float, default=None,
+        help="Opt-in simulated seconds per Bridge action; requires fixed-step player",
+    )
     # Hard cap so stuck-but-wiggling episodes still reset (~100 s @ frame_skip=4).
     p.add_argument("--max-episode-steps", type=int, default=0)
     p.add_argument("--stagnation-speed-threshold", type=float, default=0.15)

@@ -384,6 +384,46 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
             auto_launch {form.docker_mode ? "(forced off by docker_mode)" : ""}
           </label>
+          <div className="section-title">Simulator</div>
+          <label className="field">
+            Simulator mode
+            <select
+              value={form.simulator_mode}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  simulator_mode: e.target.value as Settings["simulator_mode"],
+                }))
+              }
+            >
+              <option value="legacy">Legacy simulator</option>
+              <option value="fixed_camera_on">Fixed-duration simulator · camera on</option>
+              <option value="fixed_camera_off">Optimized simulator · camera off</option>
+            </select>
+          </label>
+          <p className="meta run-stop-help">
+            Optimized mode uses the validated fixed-duration player and removes unused
+            camera readback. It keeps the full physics timestep and LiDAR scan. The
+            default interval is 0.086 simulated seconds per action.
+          </p>
+          {form.simulator_mode !== "legacy" && (
+            <label className="field">
+              Simulated seconds per action
+              <input
+                type="number"
+                min={0.001}
+                step={0.001}
+                value={form.action_interval_s ?? 0.086}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setForm((f) => ({
+                    ...f,
+                    action_interval_s: Number.isFinite(n) && n > 0 ? n : f.action_interval_s,
+                  }));
+                }}
+              />
+            </label>
+          )}
           <label className="field">
             connect_timeout
             <input

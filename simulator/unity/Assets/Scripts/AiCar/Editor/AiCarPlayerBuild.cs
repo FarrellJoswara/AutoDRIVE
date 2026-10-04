@@ -42,8 +42,14 @@ namespace AiCar.Editor
 
         public static void BuildLinuxStagingOnly()
         {
-            BuildLinux(publish: false);
+            BuildLinux(publish: false, stagingName: "linux-cpu-experiment");
             Debug.Log("[AiCar] Linux player staged without replacing the active simulator");
+        }
+
+        public static void BuildLinuxFixedStepStagingOnly()
+        {
+            BuildLinux(publish: false, stagingName: "linux-fixed-step-experiment");
+            Debug.Log("[AiCar] Linux fixed-step player staged without replacing the active simulator");
         }
 
         public static void PublishStagedLinuxOnly()
@@ -92,13 +98,13 @@ namespace AiCar.Editor
             BuildLinux(publish: true);
         }
 
-        static void BuildLinux(bool publish)
+        static void BuildLinux(bool publish, string stagingName = "linux")
         {
             EnsureSceneInBuild();
             // Linux Mono nondevelopment player is often missing on Windows Editor installs;
             // go straight to IL2CPP. If postprocess NREs (incomplete sysroot), retry Development.
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Standalone, ScriptingImplementation.IL2CPP);
-            var staging = Path.Combine(SimulatorRoot, "_build", "linux");
+            var staging = Path.Combine(SimulatorRoot, "_build", stagingName);
             WipeDir(staging);
             Directory.CreateDirectory(staging);
             var exe = Path.Combine(staging, "AutoDRIVE Simulator.x86_64");

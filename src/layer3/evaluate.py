@@ -41,8 +41,12 @@ def evaluate_until_episode_end(
         action, _ = model.predict(obs, deterministic=True)
         obs, rewards, dones, infos = env.step(action)
         total_reward += float(rewards[0])
-        simulated_seconds += step_seconds
         info = infos[0] if infos else {}
+        duration = info.get("step_duration_s", step_seconds) if isinstance(info, dict) else step_seconds
+        duration = float(duration)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Evaluation step_duration_s must be finite and positive")
+        simulated_seconds += duration
         if not isinstance(info, dict):
             continue
         frontier_distance += max(0.0, float(info.get("frontier_advanced_m", 0.0) or 0.0))
@@ -121,6 +125,7 @@ def evaluate_policy(
     auto_launch: bool = False,
     connect_timeout: float = 90.0,
     output_path: Optional[Path] = None,
+    action_interval_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run a deterministic policy until failure or ten laps, then save metrics."""
     from stable_baselines3 import PPO
@@ -137,6 +142,7 @@ def evaluate_policy(
         map_id=map_id,
         laps_per_episode=0,
         frame_skip=frame_skip,
+        action_interval_s=action_interval_s,
         max_episode_steps=0,
         frontier_stagnation_seconds=5.0,
         terminate_on_collision=True,
@@ -156,6 +162,7 @@ def evaluate_policy(
             "map_id": map_id,
             "lap_target": 10,
             "frame_skip": frame_skip,
+            "action_interval_s": action_interval_s,
             "deterministic": True,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "summary": summary,
@@ -176,6 +183,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--map-id", required=True)
     parser.add_argument("--frame-skip", type=int, default=4)
+    parser.add_argument("--action-interval-s", type=float, default=None)
     parser.add_argument("--port-start", type=int, default=4567)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--connect-timeout", type=float, default=90.0)
@@ -187,6 +195,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.model,
         map_id=args.map_id,
         frame_skip=args.frame_skip,
+        action_interval_s=args.action_interval_s,
         port_start=args.port_start,
         device=args.device,
         headless=args.headless,

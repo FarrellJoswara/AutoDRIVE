@@ -91,7 +91,10 @@ def _container_name(container: Dict[str, Any]) -> str:
     return str(names[0]).lstrip("/")
 
 
-def _create_sim_replica(template: Dict[str, Any], index: int, expected: int) -> str:
+def _create_sim_replica(
+    template: Dict[str, Any], index: int, expected: int,
+    env_overrides: Optional[Dict[str, str]] = None,
+) -> str:
     """Create a Compose-compatible sim replica cloned from an existing one."""
     config = template["Config"]
     labels = dict(config.get("Labels") or {})
@@ -110,6 +113,10 @@ def _create_sim_replica(template: Dict[str, Any], index: int, expected: int) -> 
     ]
     env.append(f"AICAR_EXPECTED_SIMS={expected}")
     env.append(f"PORT={4566 + index}")
+    for key, value in (env_overrides or {}).items():
+        env = [item for item in env if not item.startswith(f"{key}=")]
+        if value:
+            env.append(f"{key}={value}")
     config["Env"] = env
     config["Labels"] = labels
     config["Hostname"] = f"{COMPOSE_PROJECT}-sim-{index}"
@@ -142,7 +149,10 @@ def _create_sim_replica(template: Dict[str, Any], index: int, expected: int) -> 
     return name
 
 
-def reconcile_compose_sims(desired_count: int, *, timeout_s: int = 20) -> List[str]:
+def reconcile_compose_sims(
+    desired_count: int, *, timeout_s: int = 20,
+    env_overrides: Optional[Dict[str, str]] = None,
+) -> List[str]:
     """Make the Compose simulator pool match the requested training env count."""
     if not 1 <= int(desired_count) <= 17:
         raise ValueError("simulator count must be between 1 and 17 (16 training plus evaluator)")
@@ -168,7 +178,7 @@ def reconcile_compose_sims(desired_count: int, *, timeout_s: int = 20) -> List[s
 
     names: List[str] = []
     for index in range(1, desired_count + 1):
-        names.append(_create_sim_replica(template, index, desired_count))
+        names.append(_create_sim_replica(template, index, desired_count, env_overrides))
     return names
 
 

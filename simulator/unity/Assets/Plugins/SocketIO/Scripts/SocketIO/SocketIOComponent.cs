@@ -53,6 +53,8 @@ namespace SocketIO
 		public float ackExpirationTime = 1800f;
 		public float pingInterval = 25f;
 		public float pingTimeout = 60f;
+		// Set by AiCarSimulationGate so Bridge events remain pumpable at timeScale=0.
+		public static bool PumpInUpdate;
 
 		public WebSocket socket { get { return ws; } }
 		public string sid { get; set; }
@@ -140,7 +142,18 @@ namespace SocketIO
 			Close();
         }
 
+		public void Update()
+		{
+			if (PumpInUpdate) PumpEvents();
+		}
+
 		public void FixedUpdate()
+		{
+			if (PumpInUpdate) return;
+			PumpEvents();
+		}
+
+		private void PumpEvents()
 		{
 			lock(eventQueueLock){
 				while(eventQueue.Count > 0){

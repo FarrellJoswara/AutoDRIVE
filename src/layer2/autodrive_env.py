@@ -50,6 +50,8 @@ from .lap_tracker import LapTracker, map_lap_gate_config
 from .route_progress import RouteProgressTracker, map_centerline_path
 from .spaces import LIDAR_BEAMS, make_action_space, make_observation_space, snapshot_to_obs
 
+# Nominal control rate used to scale reward/route time by frame_skip. This is
+# not a guarantee of Unity physics steps or simulated seconds per Bridge return.
 SIMULATION_HZ = 40.0
 
 # Type alias: observation is always a dict with "lidar" and "state" arrays.
@@ -93,10 +95,11 @@ class AutoDriveEnv(gym.Env):
     headless=True
         Launch Unity without a visible window (needed for Docker / servers).
     frame_skip=1
-        Apply the SAME action for 1 physics tick per env.step().
-        This is NOT "skip frames off". 1 = act every tick (~40 Hz bridge).
-        frame_skip cannot be 0 (that would mean "do zero physics" — invalid).
-        Raise to 2/4 later if you want coarser control (same action repeated).
+        Request one Bridge response per env.step(), repeating the same action
+        for each response. Legacy mode has no fixed action duration. With
+        action_interval_s set, each response advances that simulated duration.
+        frame_skip cannot be 0.
+        Raise to 2/4 to repeat the same action across more Bridge responses.
     max_episode_steps=0
         0 = DISABLED (no hard step cap). Episode only truncates on stagnation
         (or if you set a positive limit).
@@ -125,8 +128,8 @@ class AutoDriveEnv(gym.Env):
         auto_launch: bool = True,
         # If True, Unity -batchmode / no visible window (Docker-friendly).
         headless: bool = True,
-        # How many sim ticks reuse the same action per env.step(). MUST be >= 1.
-        # Default 1 = every physics tick. NOT zero — zero is invalid.
+        # How many Bridge responses reuse the same action per env.step(). MUST be >= 1.
+        # Default 1 = one Bridge response. NOT zero — zero is invalid.
         frame_skip: int = 1,
         # Hard episode length in env steps. 0 = no hard cap (stagnation only).
         max_episode_steps: int = 0,
@@ -147,11 +150,13 @@ class AutoDriveEnv(gym.Env):
         # Optional: inject an already-built Racer (tests / shared process).
         # If provided, this env will NOT kill it on close().
         racer: Optional[Racer] = None,
+        # Opt-in acknowledged simulation interval; None preserves legacy timing.
+        action_interval_s: Optional[float] = None,
     ) -> None:
         # Required Gymnasium base init (seeding hooks, etc.).
         super().__init__()
 
-        # Guard: frame_skip=0 would run zero physics per step — nonsense.
+        # Guard: frame_skip=0 would wait for no Bridge responses.
         if frame_skip < 1:
             raise ValueError(f"frame_skip must be >= 1, got {frame_skip}")
         # Guard: max_episode_steps < 0 is meaningless; 0 means "unlimited".
@@ -168,6 +173,20 @@ class AutoDriveEnv(gym.Env):
 
         # Store knobs as instance attributes (used every step).
         self.frame_skip = int(frame_skip)
+        injected_interval = getattr(racer, "action_interval_s", None)
+        if racer is not None and action_interval_s is not None:
+            if injected_interval is None or not np.isclose(
+                float(injected_interval), float(action_interval_s), rtol=0, atol=1e-6
+            ):
+                raise ValueError("Injected Racer must use the requested action_interval_s")
+        self.action_interval_s = (
+            float(injected_interval) if injected_interval is not None
+            else (float(action_interval_s) if action_interval_s is not None else None)
+        )
+        if self.action_interval_s is not None and (
+            not np.isfinite(self.action_interval_s) or self.action_interval_s <= 0
+        ):
+            raise ValueError("action_interval_s must be finite and positive")
         self.max_episode_steps = int(max_episode_steps)
         self.stagnation_speed_threshold = float(stagnation_speed_threshold)
         self.stagnation_steps = int(stagnation_steps)
@@ -187,9 +206,12 @@ class AutoDriveEnv(gym.Env):
         if centerline_path is not None:
             try:
                 # Keep route projection continuous when frame_skip is raised.
-                # A fixed 0.5 m reverse window is enough at 40 Hz, but can reject
-                # valid signed motion when one Gym action spans several ticks.
-                max_action_distance = 15.0 * self.frame_skip / SIMULATION_HZ
+                # Use the explicit duration when available, otherwise retain
+                # the legacy nominal 40 Hz estimate.
+                max_action_distance = 15.0 * self.frame_skip * (
+                    self.action_interval_s if self.action_interval_s is not None
+                    else 1.0 / SIMULATION_HZ
+                )
                 self.route_progress = RouteProgressTracker.from_csv(
                     centerline_path,
                     max_forward_m=max(2.0, max_action_distance),
@@ -244,6 +266,7 @@ class AutoDriveEnv(gym.Env):
                 simulator_path=sim_path if auto_launch else None,
                 auto_launch=auto_launch and sim_path.exists(),
                 headless=headless,
+                action_interval_s=self.action_interval_s,
             )
             if auto_launch and not sim_path.exists():
                 raise FileNotFoundError(
@@ -375,7 +398,7 @@ class AutoDriveEnv(gym.Env):
         self, action: np.ndarray
     ) -> Tuple[ObsType, SupportsFloat, bool, bool, Dict[str, Any]]:
         """
-        Apply one action for `frame_skip` physics ticks; return Gym 5-tuple.
+        Repeat one action across `frame_skip` Bridge responses; return Gym 5-tuple.
 
         Parameters
         ----------
@@ -391,11 +414,26 @@ class AutoDriveEnv(gym.Env):
         throttle = float(np.clip(action[0], -1.0, 1.0))
         steering = float(np.clip(action[1], -1.0, 1.0))
 
-        # Frame skip: repeat the SAME action for N Layer 1 ticks.
-        # frame_skip=1 → one tick (default, full ~40 Hz control).
+        # Frame skip: repeat the SAME action for N Layer 1 Bridge responses.
+        # Explicit mode acknowledges the same simulated interval per response.
         snap = self._last_snap
+        sim_time_before = (
+            float(self.racer.simulation_time())
+            if getattr(self, "action_interval_s", None) is not None else None
+        )
         for _ in range(self.frame_skip):
             snap = self.racer.step(throttle, steering)
+        step_duration_s = self.frame_skip / SIMULATION_HZ
+        if sim_time_before is not None:
+            step_duration_s = float(self.racer.simulation_time()) - sim_time_before
+            expected_duration_s = self.frame_skip * self.action_interval_s
+            if not np.isfinite(step_duration_s) or not np.isclose(
+                step_duration_s, expected_duration_s, rtol=0, atol=1e-6
+            ):
+                raise RuntimeError(
+                    f"Invalid acknowledged simulation duration: {step_duration_s}; "
+                    f"expected {expected_duration_s}"
+                )
 
         # Prefer Unity's cumulative counter, but also accept a rising edge on
         # the collision flag for Bridge builds that only transmit a boolean.
@@ -480,7 +518,7 @@ class AutoDriveEnv(gym.Env):
         # positive reward for recovering ground already pushed before.
         reward_components = compute_reward_components(
             v_long=float(snap.v_long),
-            step_duration_s=self.frame_skip / SIMULATION_HZ,
+            step_duration_s=step_duration_s,
             frontier_advanced_m=(progress["advanced_m"] if progress is not None else None),
             collision_event=collision_event,
             episode_failure=episode_failure,
@@ -507,6 +545,7 @@ class AutoDriveEnv(gym.Env):
             steering_command=steering,
         )
         info["reward_components"] = reward_components
+        info["step_duration_s"] = step_duration_s
         info["laps_per_episode"] = getattr(self, "laps_per_episode", 0)
         info["episode_won"] = episode_won
         info["positive_episode_return"] = self._positive_episode_return
@@ -519,7 +558,7 @@ class AutoDriveEnv(gym.Env):
                 "current_progress_m": progress["current_progress_m"],
                 "signed_route_delta_m": progress["current_delta_m"],
                 "current_route_speed_mps": (
-                    progress["current_delta_m"] / (self.frame_skip / SIMULATION_HZ)
+                    progress["current_delta_m"] / step_duration_s
                 ),
                 "route_projection_valid": progress["current_projection_valid"],
                 "time_since_frontier_push_s": progress["time_since_push_s"],
