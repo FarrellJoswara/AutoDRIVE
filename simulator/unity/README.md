@@ -269,6 +269,28 @@ performance result. Raw captures and exports are local under
 `logs/diagnostics/unity_cpu_timeline*`; they are intentionally not source
 artifacts because raw captures exceed 300 MB.
 
+## Unity job-worker count A/B (October 4, 2026)
+
+The staged fixed-step Linux player defaults to one Unity job worker. The
+`scripts/test_simulator_job_workers.py` harness changes only the staged
+player's `boot.config`, restores it in a `finally` block, and compares complete
+fixed-step traces for a serial pool of environments. At both four environments
+(three 20-simulated-second paired repeats) and eight environments (two
+12-second paired repeats), raising the Unity job-worker count from one to two
+preserved actions, physics ticks, protocol step IDs, simulated time, all
+vehicle/LiDAR telemetry, observations, and rewards exactly. The staged player
+payload hashes remained unchanged and its original boot configuration was
+restored.
+
+The change did not improve pool throughput: at four environments the median
+throughput ratio (two workers / one) was 0.989, while Unity CPU per simulated
+second rose 17.1%. At eight environments the median throughput ratio was 0.997
+and CPU per simulated second rose 9.6%. This knob therefore does not reduce
+CPU per training interval or increase collection throughput on the measured
+machine. Keep the one-worker setting. Reports and traces are in
+`logs/diagnostics/job_worker_1_vs_2_4env.json` and
+`logs/diagnostics/job_worker_1_vs_2_8env.json`.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
