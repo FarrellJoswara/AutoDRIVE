@@ -316,6 +316,38 @@ are local at `logs/diagnostics/unity_cpu_timeline_telemetry_steady.raw` and
 `.json`; the exact-trace report is
 `logs/diagnostics/telemetry_profiler_exact_behavior_ab.json`.
 
+## LiDAR allocation candidate A/B (October 4, 2026)
+
+An isolated release IL2CPP candidate reused the per-scan ray-direction and
+hit arrays and formatted the constant intensity once per scan. It left the
+ray-angle formula, raycast order, mask, range, physics calls, and serialized
+sensor values unchanged. The temporary edit was restored from backup after
+the build; only the staged player and test harness remain. The candidate
+matched the baseline exactly across all compared LiDAR beams, vehicle
+telemetry, observations, rewards, actions, physics ticks, protocol IDs, and
+simulated time: 12 paired environment traces at four environments (three
+20-second repeats) and 16 traces at eight environments (two 12-second
+repeats). Player payload hashes were unchanged.
+
+The candidate did not improve performance. At four environments its median
+pool throughput was 2.6% lower and CPU per simulated second was 2.1% higher;
+at eight environments throughput was 4.0% lower and CPU per simulated second
+was 5.5% higher. All five paired throughput comparisons favored the baseline.
+This allocation/formatting change should not be adopted. The results are
+simulator-pool measurements under the live training workload, not a claim
+about PPO update throughput. Reports and per-step traces are in
+`logs/diagnostics/lidar_allocation_4env.json` / `.npz` and
+`logs/diagnostics/lidar_allocation_8env.json` / `.npz`.
+
+The next low-risk simulator avenue is a separate experiment with Unity 2022.3's
+`RaycastCommand.ScheduleBatch` for the existing 1,081 LiDAR rays. Keep every
+direction, mask, range, and ray count identical, complete the batch before
+formatting telemetry, and accept the candidate only if exact trace equality
+holds and release-pool CPU per simulated second improves repeatably. Unity
+documents that these commands run asynchronously in parallel and their result
+buffers cannot be read before the returned `JobHandle` completes; timing and
+result ordering therefore require direct measurement rather than assumption.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
