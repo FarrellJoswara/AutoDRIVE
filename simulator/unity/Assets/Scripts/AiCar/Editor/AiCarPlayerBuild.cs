@@ -91,6 +91,34 @@ namespace AiCar.Editor
             }
         }
 
+        public static void BuildLinuxFixedStepExplicitSyncStagingOnly()
+        {
+            var project = Directory.GetParent(Application.dataPath)?.FullName;
+            var settingsPath = Path.Combine(project ?? throw new InvalidOperationException(
+                "Could not locate the Unity project root"), "ProjectSettings", "DynamicsManager.asset");
+            var originalSettings = File.ReadAllText(settingsPath);
+            const string enabled = "m_AutoSyncTransforms: 1";
+            const string disabled = "m_AutoSyncTransforms: 0";
+            if (originalSettings.IndexOf(enabled, StringComparison.Ordinal) < 0 ||
+                originalSettings.IndexOf(enabled, StringComparison.Ordinal) !=
+                originalSettings.LastIndexOf(enabled, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Expected exactly one enabled m_AutoSyncTransforms setting in " + settingsPath);
+
+            try
+            {
+                File.WriteAllText(settingsPath, originalSettings.Replace(enabled, disabled));
+                var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-explicit-sync-experiment");
+                BuildLinux(publish: false, stagingName: "linux-fixed-step-explicit-sync-experiment");
+                SetJobWorkerCount(staging, 1);
+                Debug.Log("[AiCar] Linux fixed-step explicit-sync candidate staged without replacing the active simulator");
+            }
+            finally
+            {
+                File.WriteAllText(settingsPath, originalSettings);
+            }
+        }
+
         public static void BuildLinuxFixedStepLidarBatchStagingOnly()
         {
             var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-lidar-batch-experiment");
