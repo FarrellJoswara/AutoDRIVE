@@ -407,6 +407,22 @@ if any behavior differs or the CPU reduction does not repeat. Do not modify the
 active training players. If it fails, test batched LiDAR raycasts next. Neither
 candidate has been adopted based on this profile alone.
 
+The Auto Sync-off candidate was tested in three four-environment, 20-simulated-
+second paired runs after the training simulator containers had stopped. Actions,
+physics-step counts, protocol IDs, and simulated-time deltas matched, but vehicle
+positions and velocities diverged and 249,813 LiDAR beam values per environment
+differed across the captured traces; observations differed as a result. Rewards
+happened to match in this scripted route, which does not make the differing
+observations acceptable. The candidate used a median 4.7% less Unity CPU per
+simulated second, while median pool throughput changed by only +0.7%. Reject it:
+the saved CPU came with changed query/sensor and vehicle data. The staged player
+and full trace report are local at
+`simulator/_build/linux-fixed-step-autosync-off-experiment/` and
+`logs/diagnostics/autosync_off_4env.json` / `.npz`; active training players were
+not changed. This confirms that Auto Sync Transforms is required for the current
+raycast and vehicle-update sequence unless explicit synchronization points are
+introduced and separately verified.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
