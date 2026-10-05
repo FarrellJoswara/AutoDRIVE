@@ -291,6 +291,31 @@ machine. Keep the one-worker setting. Reports and traces are in
 `logs/diagnostics/job_worker_1_vs_2_4env.json` and
 `logs/diagnostics/job_worker_1_vs_2_8env.json`.
 
+## Telemetry serialization profiling (October 4, 2026)
+
+Temporary `ProfilerMarker`s around `DataCompressor.CompressArray` and the
+main-thread telemetry callback were compiled into a separate Development
+player. The original ignored AutoDRIVE source files were restored immediately
+after the staged build; the training players were not rebuilt or restarted.
+The instrumented player matched the normal fixed-step player exactly in two
+12-simulated-second pairs (140 actions and 12,040 physics ticks per pair):
+vehicle telemetry, full LiDAR, observations, rewards, actions, protocol IDs,
+and simulated time had zero mismatches. The instrumented build is diagnostic
+only; its timing is not a release performance benchmark.
+
+The capture recorded the final 300 frames after the startup scan window. Over
+10 simulated seconds and 6,450 physics ticks, `Physics.Simulate` used 1.21 s
+self time / 2.09 s inclusive. `LIDAR.FixedUpdate` used 176 ms self / 320 ms
+inclusive. Telemetry callbacks used 55 ms self / 102 ms inclusive across 75
+calls. The 150 range and intensity gzip calls used 32 ms self / 34.6 ms total.
+Compression is therefore about 1.7% of Physics.Simulate inclusive time; even
+caching the constant intensity payload could save only a small fraction of
+total per-environment CPU. Telemetry serialization is not a promising next
+optimization for the current workload. The raw capture and hierarchy export
+are local at `logs/diagnostics/unity_cpu_timeline_telemetry_steady.raw` and
+`.json`; the exact-trace report is
+`logs/diagnostics/telemetry_profiler_exact_behavior_ab.json`.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
