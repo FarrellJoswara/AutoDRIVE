@@ -423,6 +423,30 @@ not changed. This confirms that Auto Sync Transforms is required for the current
 raycast and vehicle-update sequence unless explicit synchronization points are
 introduced and separately verified.
 
+The first batched LiDAR candidate used the unchanged 12 m direction vectors;
+Unity's job-query path interpreted their magnitude differently and produced
+invalid sensor data, so that version was discarded. Normalizing the same rays
+restored their effective directions and ranges, but it still changed 8,708 of
+151,340 LiDAR values and 8,662 observation values per 12-second trace. The
+largest finite range discrepancy was only about 0.000002 m, but exact input
+data did not match. Across two paired single-environment repeats while the
+training pool was active, median CPU per simulated second was about 0.9% higher
+for the batch candidate and throughput was effectively unchanged. The result is
+both behaviorally unacceptable under the exact-data requirement and not a
+repeatable speedup. The strict JSON comparison harness now encodes infinite
+error metrics as strings so LiDAR miss transitions are still reported rather
+than aborting serialization. Reports and full traces are local at
+`logs/diagnostics/lidar_batch_behavior_ab.json` / `.npz`; neither batch build is
+published.
+
+The next worthwhile test is to keep Auto Sync Transforms disabled but add one
+explicit `Physics.SyncTransforms()` after all four wheel poses are written in
+`VehicleController.FixedUpdate`. The stale-query regression above indicates a
+sync is needed before LiDAR's physics queries; grouping all wheel transform
+changes before one sync could retain the final collider state while removing
+repeated sync work. This is only a hypothesis: compare all vehicle and sensor
+outputs exactly, including reset and collision cases, before measuring CPU.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
