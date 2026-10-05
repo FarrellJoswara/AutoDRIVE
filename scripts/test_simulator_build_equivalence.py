@@ -62,6 +62,17 @@ def compare(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def json_safe(value: Any) -> Any:
+    """Represent non-finite diff metrics as strings in strict JSON reports."""
+    if isinstance(value, float) and not np.isfinite(value):
+        return "Infinity" if value > 0 else "-Infinity" if value < 0 else "NaN"
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference-simulator-path", type=Path, required=True)
@@ -134,7 +145,7 @@ def main() -> int:
         "median_throughput_ratio": float(np.median([c["throughput_ratio"] for c in comparisons])),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+    args.output.write_text(json.dumps(json_safe(report), indent=2, allow_nan=False), encoding="utf-8")
     arrays = {}
     for run in runs:
         prefix = run["label"].replace("-", "_")
