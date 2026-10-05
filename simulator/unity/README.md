@@ -439,13 +439,23 @@ than aborting serialization. Reports and full traces are local at
 `logs/diagnostics/lidar_batch_behavior_ab.json` / `.npz`; neither batch build is
 published.
 
-The next worthwhile test is to keep Auto Sync Transforms disabled but add one
-explicit `Physics.SyncTransforms()` after all four wheel poses are written in
-`VehicleController.FixedUpdate`. The stale-query regression above indicates a
-sync is needed before LiDAR's physics queries; grouping all wheel transform
-changes before one sync could retain the final collider state while removing
-repeated sync work. This is only a hypothesis: compare all vehicle and sensor
-outputs exactly, including reset and collision cases, before measuring CPU.
+An explicit-sync candidate disabled Auto Sync Transforms and called
+`Physics.SyncTransforms()` once after `VehicleController` updated all four wheel
+poses. It still failed the exact behavior check in both 12-second paired traces:
+vehicle pose, velocity, encoders, and 149,651 LiDAR values per environment
+differed. Median CPU per simulated second was 1.3% higher and throughput was
+0.5% lower than baseline. A single explicit synchronization therefore does not
+preserve the current query/physics ordering and is rejected. The local full-trace
+report is `logs/diagnostics/explicit_sync_behavior_ab.json`; the staged player
+is under `simulator/_build/linux-fixed-step-explicit-sync-experiment/`.
+
+These tests rule out the most visible synchronization and raycast batching
+changes under the exact-data requirement. The remaining largest PhysX stages
+are collision detection/contact generation and vehicle solving; changing
+collision geometry, solver iterations, physics timestep, or query count would
+change simulation results and is outside this optimization goal. Small
+data-path opportunities can still be measured separately, such as avoiding
+repeated compression of an unchanged LiDAR intensity array.
 
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
