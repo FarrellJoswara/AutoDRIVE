@@ -130,6 +130,14 @@ namespace AiCar.Editor
             Debug.Log("[AiCar] Linux fixed-step LiDAR batch candidate staged without replacing the active simulator");
         }
 
+        public static void BuildLinuxFixedStepIntensityCacheStagingOnly()
+        {
+            var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-intensity-cache-experiment");
+            BuildLinux(publish: false, stagingName: "linux-fixed-step-intensity-cache-experiment");
+            SetJobWorkerCount(staging, 1);
+            Debug.Log("[AiCar] Linux fixed-step intensity-cache candidate staged without replacing the active simulator");
+        }
+
         public static void BuildLinuxFixedStepProfilerStagingOnly()
         {
             EnsureSceneInBuild();
