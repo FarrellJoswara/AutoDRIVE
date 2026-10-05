@@ -182,6 +182,8 @@ class HubTelemetryCallback(BaseCallback):
         # Pose / yaw history — refreshed every env step (not only fleet_hz).
         self._last_pose: Dict[int, tuple] = {}
         self._last_yaw: Dict[int, float] = {}
+        self._latest_ppo_diagnostics: Dict[str, float] = {}
+        self._latest_ppo_step: Optional[int] = None
 
     def _on_training_start(self) -> None:
         self._pub = _Publisher(self.hub_url)
@@ -223,7 +225,47 @@ class HubTelemetryCallback(BaseCallback):
         self._publish_phase("ppo_update")
 
     def _on_rollout_start(self) -> None:
+        # SB3 writes train/* scalars after an update and before the next
+        # rollout starts. Capture that completed update once, then include it
+        # in regular telemetry so the UI can chart genuine PPO diagnostics.
+        diagnostics = self._read_ppo_diagnostics()
+        if diagnostics:
+            self._latest_ppo_diagnostics = diagnostics
+            self._latest_ppo_step = int(self.num_timesteps)
         self._publish_phase("rollout")
+
+    def _read_ppo_diagnostics(self) -> Dict[str, float]:
+        names = {
+            "fps": "time/fps",
+            "approx_kl": "train/approx_kl",
+            "clip_fraction": "train/clip_fraction",
+            "entropy_loss": "train/entropy_loss",
+            "explained_variance": "train/explained_variance",
+            "learning_rate": "train/learning_rate",
+            "loss": "train/loss",
+            "policy_gradient_loss": "train/policy_gradient_loss",
+            "std": "train/std",
+            "value_loss": "train/value_loss",
+        }
+        try:
+            values = self.model.logger.name_to_value
+        except Exception:
+            return {}
+        result: Dict[str, float] = {}
+        for output_name, logger_name in names.items():
+            try:
+                # SB3 uses a defaultdict here; indexing a metric before it has
+                # been recorded inserts a value without its exclusion metadata,
+                # which makes the next logger.dump() fail its key alignment.
+                raw_value = values.get(logger_name)
+                if raw_value is None:
+                    continue
+                value = float(raw_value)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                result[output_name] = value
+        return result
 
     def _on_step(self) -> bool:
         if self._pub is None:
@@ -300,6 +342,8 @@ class HubTelemetryCallback(BaseCallback):
                 "reward": mean_r,
                 "episode": int(self._episode_count),
                 "loss": loss,
+                "ppo_step": self._latest_ppo_step,
+                "ppo": self._latest_ppo_diagnostics,
                 "completed_laps": int(self._completed_laps),
                 "clean_episode_wins": int(self._clean_episode_wins),
                 "best_lap_time_s": self._best_lap_time_s,

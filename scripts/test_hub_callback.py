@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from collections import defaultdict
+from io import StringIO
+from types import SimpleNamespace
 
 import numpy as np
+from stable_baselines3.common.logger import HumanOutputFormat, Logger
 
 from src.layer3.hub_callback import HubTelemetryCallback
 from src.layer3.hub_callback import _min_pool_lidar
@@ -19,6 +23,41 @@ class LidarDownsampleTests(unittest.TestCase):
 
         self.assertEqual(len(pooled), 360)
         self.assertAlmostEqual(pooled[-1], 0.06, places=3)
+
+
+class PpoDiagnosticsLoggerTests(unittest.TestCase):
+    def test_missing_metrics_do_not_corrupt_sb3_logger_bookkeeping(self) -> None:
+        logger = Logger(
+            folder=None,
+            output_formats=[HumanOutputFormat(StringIO())],
+        )
+        logger.record("rollout/ep_rew_mean", 1.0)
+        callback = HubTelemetryCallback(
+            hub_url="http://127.0.0.1:8090",
+            run_id="test",
+            lidar_max_envs=0,
+        )
+        callback.model = SimpleNamespace(logger=logger)
+
+        self.assertEqual(callback._read_ppo_diagnostics(), {})
+        self.assertEqual(set(logger.name_to_value), {"rollout/ep_rew_mean"})
+        self.assertEqual(set(logger.name_to_value), set(logger.name_to_excluded))
+
+        # This was the first PPO logging point that crashed in the failed run.
+        logger.dump(step=1)
+
+    def test_available_metrics_are_captured_without_mutating_logger(self) -> None:
+        values = defaultdict(float, {"train/approx_kl": 0.125})
+        logger = SimpleNamespace(name_to_value=values)
+        callback = HubTelemetryCallback(
+            hub_url="http://127.0.0.1:8090",
+            run_id="test",
+            lidar_max_envs=0,
+        )
+        callback.model = SimpleNamespace(logger=logger)
+
+        self.assertEqual(callback._read_ppo_diagnostics(), {"approx_kl": 0.125})
+        self.assertEqual(set(values), {"train/approx_kl"})
 
 
 class CollisionMarkerTelemetryTests(unittest.TestCase):

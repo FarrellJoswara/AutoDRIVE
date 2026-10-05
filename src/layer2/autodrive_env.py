@@ -139,7 +139,7 @@ class AutoDriveEnv(gym.Env):
         stagnation_steps: int = 200,
         map_id: str = "none",
         laps_per_episode: int = 0,
-        frontier_stagnation_seconds: float = 5.0,
+        frontier_stagnation_seconds: float = 10.0,
         terminate_on_collision: bool = True,
         # Seconds to wait for Unity to connect on reset/init.
         connect_timeout: float = 60.0,
@@ -278,6 +278,8 @@ class AutoDriveEnv(gym.Env):
         # Episode bookkeeping — reset() clears these each episode.
         self._episode_steps = 0          # env.step count this episode
         self._positive_episode_return = 0.0
+        self._episode_frontier_distance_m = 0.0
+        self._episode_simulated_seconds = 0.0
         self._idle_steps = 0             # consecutive |v_long| < threshold
         self._prev_throttle = 0.0        # last throttle (for obs + rewards)
         self._prev_steering = 0.0        # last steering (for obs + jerk term)
@@ -362,6 +364,8 @@ class AutoDriveEnv(gym.Env):
         # Clear episode counters / history.
         self._episode_steps = 0
         self._positive_episode_return = 0.0
+        self._episode_frontier_distance_m = 0.0
+        self._episode_simulated_seconds = 0.0
         self._idle_steps = 0
         self._prev_throttle = 0.0
         self._prev_steering = 0.0
@@ -454,6 +458,21 @@ class AutoDriveEnv(gym.Env):
                 float(snap.position[0]), float(snap.position[2]), self._progress_time(snap)
             )
 
+        frontier_advanced_m = (
+            max(0.0, float(progress["advanced_m"])) if progress is not None else 0.0
+        )
+        self._episode_frontier_distance_m = (
+            getattr(self, "_episode_frontier_distance_m", 0.0) + frontier_advanced_m
+        )
+        self._episode_simulated_seconds = (
+            getattr(self, "_episode_simulated_seconds", 0.0)
+            + max(0.0, float(step_duration_s))
+        )
+        average_frontier_speed_mps = (
+            self._episode_frontier_distance_m / self._episode_simulated_seconds
+            if self._episode_simulated_seconds > 0.0 else 0.0
+        )
+
         lap_state = self.lap_tracker.update(
             progress["progress_m"] if progress is not None else None,
             self._progress_time(snap),
@@ -509,9 +528,15 @@ class AutoDriveEnv(gym.Env):
             (hit_idle_stagnation or hit_max_steps) and not terminated
         )
 
-        # A failed terminal step receives one episode-level cost. A collision
-        # already has its own event penalty, so rewards.py avoids charging both.
-        episode_failure = bool((terminated and not episode_won) or truncated)
+        # Frontier stalls are reset after their timer, but do not receive an
+        # extra terminal failure deduction: the per-second time cost already
+        # penalizes waiting. Keep the configurable failure cost for other
+        # failed endings (for example, an idle timeout or step cap).
+        episode_failure = bool(
+            ((terminated and not episode_won)
+             and termination_reason != "frontier_stagnation")
+            or truncated
+        )
 
         # Reward only newly advanced frontier distance, plus time cost and
         # failure costs. Current route movement is telemetry, never a second
@@ -520,6 +545,7 @@ class AutoDriveEnv(gym.Env):
             v_long=float(snap.v_long),
             step_duration_s=step_duration_s,
             frontier_advanced_m=(progress["advanced_m"] if progress is not None else None),
+            frontier_average_speed_mps=average_frontier_speed_mps,
             collision_event=collision_event,
             episode_failure=episode_failure,
             positive_episode_return=self._positive_episode_return,
@@ -563,6 +589,7 @@ class AutoDriveEnv(gym.Env):
                 "route_projection_valid": progress["current_projection_valid"],
                 "time_since_frontier_push_s": progress["time_since_push_s"],
                 "frontier_speed_mps": progress["speed_mps"],
+                "average_frontier_speed_mps": average_frontier_speed_mps,
             })
         if truncated:
             info["truncate_reason"] = (

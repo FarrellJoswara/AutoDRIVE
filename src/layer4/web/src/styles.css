@@ -509,6 +509,124 @@ label.check {
   background: var(--bg1);
 }
 
+.ppo-diagnostics-panel {
+  padding: 1rem;
+}
+
+.ppo-update-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.ppo-diagnostics-note {
+  margin: 0.75rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.ppo-metric-group + .ppo-metric-group {
+  margin-top: 1rem;
+}
+
+.ppo-metric-group h4 {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ppo-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 0.6rem;
+}
+
+.ppo-metric-card {
+  position: relative;
+  min-width: 0;
+  padding: 0.65rem 0.7rem 0.5rem;
+  border: 1px solid var(--line);
+  background: var(--bg0);
+  font-family: var(--font-mono);
+}
+
+.ppo-metric-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.ppo-metric-card > strong {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.ppo-metric-unit {
+  margin-left: 0.35rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.ppo-sparkline {
+  display: block;
+  width: 100%;
+  height: 2.5rem;
+  margin-top: 0.15rem;
+  overflow: visible;
+}
+
+.ppo-sparkline line {
+  stroke: var(--line);
+  stroke-width: 0.7;
+}
+
+.ppo-sparkline polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.ppo-sparkline circle {
+  fill: var(--accent);
+}
+
+.ppo-metric-card small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.ppo-sparkline-empty {
+  display: grid;
+  height: 2.65rem;
+  place-items: center;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.62rem;
+}
+
+@media (max-width: 600px) {
+  .ppo-diagnostics-panel {
+    padding: 0.75rem;
+  }
+
+  .ppo-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .training-progress-heading {
   display: flex;
   flex-wrap: wrap;
@@ -601,6 +719,46 @@ label.check {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.75rem;
+}
+
+.evaluator-attempt-progress {
+  margin: 0.35rem 0;
+  color: var(--accent);
+}
+
+.evaluator-aggregate-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+  margin: 0.5rem 0;
+  padding: 0.55rem 0.65rem;
+  border-left: 2px solid var(--accent);
+  background: var(--bg0);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.evaluator-aggregate-summary strong {
+  color: var(--text);
+}
+
+.evaluator-attempts-details {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.evaluator-attempts-details summary {
+  cursor: pointer;
+}
+
+.evaluator-attempts-details ol {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
 }
 
 .reward-chart-labels {
@@ -1035,6 +1193,215 @@ label.check {
 .run-stop-help {
   grid-column: 1 / -1;
   margin: 0;
+}
+
+.reward-heading {
+  grid-column: 1 / -1;
+  margin: 0.45rem 0 -0.2rem;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.reward-model {
+  grid-column: 1 / -1;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.reward-equations {
+  display: grid;
+  gap: 0.3rem;
+  overflow-x: auto;
+  padding: 0.85rem 1rem;
+  background: var(--bg0);
+}
+
+.reward-equation {
+  display: flex;
+  align-items: center;
+  gap: 0.32rem;
+  width: max-content;
+  min-width: 100%;
+  color: var(--text);
+  font-family: "Cambria Math", "STIX Two Math", Cambria, Georgia, serif;
+  font-size: 1.25rem;
+  white-space: nowrap;
+}
+
+.reward-equation:first-child {
+  color: var(--accent);
+  font-size: 1.4rem;
+}
+
+.reward-equation-secondary {
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.math-var {
+  font-style: italic;
+}
+
+.math-var sub,
+.reward-equation sub {
+  margin-left: 0.03em;
+  font-size: 0.62em;
+  font-style: normal;
+}
+
+.reward-equation sup {
+  align-self: flex-start;
+  margin-left: -0.28rem;
+  font-size: 0.62em;
+}
+
+.math-fraction {
+  display: inline-grid;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-items: center;
+  margin: 0 0.08rem;
+  line-height: 1.05;
+  vertical-align: middle;
+}
+
+.math-fraction > span:first-child {
+  min-width: 100%;
+  padding: 0 0.22rem 0.08rem;
+  border-bottom: 1px solid currentColor;
+  text-align: center;
+}
+
+.math-fraction > span:last-child {
+  padding-top: 0.08rem;
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.math-spacer {
+  display: inline-block;
+  width: 1.3rem;
+}
+
+.reward-notation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  padding-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.reward-notation strong {
+  color: var(--text);
+  font-family: "Cambria Math", Cambria, Georgia, serif;
+  font-weight: 600;
+}
+
+.reward-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.reward-examples span {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.reward-examples small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.reward-examples strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.reward-controls {
+  margin-top: 0.7rem;
+}
+
+.reward-controls summary {
+  width: fit-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.reward-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 0.65rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.reward-controls-grid label.field {
+  font-size: 0.75rem;
+}
+
+.reward-field-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.reward-field-name i {
+  color: var(--text);
+  font-family: "Cambria Math", Cambria, Georgia, serif;
+  font-size: 0.95rem;
+}
+
+.reward-tip {
+  position: relative;
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: help;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.reward-tip::after {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 0.45rem);
+  left: 0;
+  width: max-content;
+  max-width: min(18rem, 78vw);
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  box-shadow: 0 0.4rem 1rem #0008;
+  color: var(--text);
+  content: attr(data-tooltip);
+  cursor: auto;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0.15rem);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: normal;
+}
+
+.reward-tip:hover::after,
+.reward-tip:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .maps-lap-gate-line {

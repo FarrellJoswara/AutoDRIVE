@@ -16,6 +16,7 @@ class EvaluationSummaryTests(unittest.TestCase):
         callback._live_pose = None
         callback._active_snapshot_steps = 50_000
         callback._last_live_status_write = 0.0
+        callback.runs_per_snapshot = 3
         callback._write_status = Mock()
 
         callback._on_evaluation_step({
@@ -29,7 +30,7 @@ class EvaluationSummaryTests(unittest.TestCase):
                 "reward_per_simulated_second": 3.0,
                 "collisions": 0,
             },
-        })
+        }, attempt_index=1)
 
         self.assertEqual(callback._live_result["frontier_distance_m"], 12.5)
         callback._write_status.assert_called_once_with(

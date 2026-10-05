@@ -1,4 +1,4 @@
-"""In-process TelemetryBus + WebSocket fan-out (drop-oldest per client)."""
+"""In-process TelemetryBus + WebSocket fan-out with latest-state fleet delivery."""
 
 from __future__ import annotations
 
@@ -110,34 +110,51 @@ class TelemetryBus:
 
 
 class WSClient:
-    """One browser WebSocket with a bounded send queue (drop-oldest)."""
+    """One browser WebSocket with latest-state fleet delivery.
 
-    def __init__(self, ws: WebSocket, maxsize: int = 8) -> None:
+    Fleet frames are complete snapshots, so only the newest pending snapshot
+    for each stream is useful. Other events stay ordered in the event queue.
+    """
+
+    def __init__(self, ws: WebSocket) -> None:
         self.ws = ws
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._queue: Deque[Dict[str, Any]] = deque()
+        self._latest_fleet: Dict[str, Dict[str, Any]] = {}
+        self._wake = asyncio.Event()
         self._alive = True
+        self.fleet_frames_coalesced = 0
 
     def enqueue(self, event: Dict[str, Any]) -> None:
         if not self._alive:
             return
-        try:
-            self._queue.put_nowait(event)
-        except asyncio.QueueFull:
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                self._queue.put_nowait(event)
-            except asyncio.QueueFull:
-                # Client too slow — mark for disconnect
-                self._alive = False
+        event_type = event.get("type", "")
+        payload = event.get("payload")
+        is_fleet = (
+            event_type in {"telemetry", "replay_telemetry"}
+            and isinstance(payload, dict)
+            and payload.get("kind") == "fleet"
+        )
+        if is_fleet:
+            if event_type in self._latest_fleet:
+                self.fleet_frames_coalesced += 1
+            self._latest_fleet[event_type] = event
+        else:
+            self._queue.append(event)
+        self._wake.set()
 
     async def sender(self) -> None:
         try:
             while self._alive:
-                event = await self._queue.get()
-                await self.ws.send_text(json.dumps(event, default=str))
+                await self._wake.wait()
+                while self._alive:
+                    if self._queue:
+                        event = self._queue.popleft()
+                    elif self._latest_fleet:
+                        _, event = self._latest_fleet.popitem()
+                    else:
+                        self._wake.clear()
+                        break
+                    await self.ws.send_text(json.dumps(event, default=str))
         except Exception:
             self._alive = False
         finally:
@@ -145,3 +162,4 @@ class WSClient:
 
     def close(self) -> None:
         self._alive = False
+        self._wake.set()

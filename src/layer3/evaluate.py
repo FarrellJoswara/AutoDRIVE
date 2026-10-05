@@ -144,7 +144,7 @@ def evaluate_policy(
         frame_skip=frame_skip,
         action_interval_s=action_interval_s,
         max_episode_steps=0,
-        frontier_stagnation_seconds=5.0,
+        frontier_stagnation_seconds=10.0,
         terminate_on_collision=True,
         headless=headless,
         auto_launch=auto_launch,

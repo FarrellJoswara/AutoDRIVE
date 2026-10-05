@@ -49,9 +49,11 @@ Default weight is 0.0 (off).
 
 Reward priorities
 -----------------
-New best-so-far frontier distance is the only positive driving reward. Time
-costs reward-efficient progress; reverse travel, collisions, and failed episode
-endings cost reward. Laps are diagnostic and never change reward or episode life.
+New best-so-far frontier distance is the only positive driving reward, with a
+quadratic episode-average pace multiplier capped at 2x. Time costs penalize
+elapsed time; reverse travel, collisions, and non-stall failed episode endings
+cost reward. Frontier stalls reset after their timeout without an extra
+terminal cost. Laps are diagnostic and never change reward or episode life.
 """
 
 from __future__ import annotations
@@ -65,8 +67,8 @@ class RewardConfig:
     Tunable weights for compute_reward.
 
     Change these numbers to reshape what "good driving" means.
-    Defaults favor validated route progress; pace is rewarded only at a clean
-    configured lap target.
+    Defaults reward validated frontier progress more strongly as the car's
+    episode-average frontier pace approaches the configured target.
     """
 
     # Deprecated compatibility field. Raw velocity never earns reward.
@@ -79,6 +81,8 @@ class RewardConfig:
 
     # Reward per metre of newly advanced high-water frontier.
     route_progress_scale: float = 10.0
+    # Average frontier pace at which the progress reward reaches its 2x cap.
+    frontier_pace_target_mps: float = 6.0
 
     # Cost per simulated second, including while making progress. This makes
     # slower completion less profitable than faster completion over the same route.
@@ -106,6 +110,7 @@ def compute_reward_components(
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
+    frontier_average_speed_mps: float = 0.0,
     positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
@@ -127,6 +132,10 @@ def compute_reward_components(
         Newly pushed high-water frontier distance; the only per-step positive
         driving signal. ``route_progress_delta_m`` is retained for callers that
         still pass it, but is not used for reward.
+    frontier_average_speed_mps:
+        Episode-to-date average new-frontier distance divided by simulated time.
+        It scales the per-metre progress reward, capped at 2x at the configured
+        target pace.
     collision_event:
         True if this step counted as a new collision (env-detected).
     slip_angle:
@@ -176,7 +185,14 @@ def compute_reward_components(
     # retracing route distance must not pay a second time. Raw forward speed is
     # also never a reward, including on maps without route geometry.
     if frontier_advanced_m is not None:
-        route_reward = cfg.route_progress_scale * max(0.0, float(frontier_advanced_m))
+        advanced_m = max(0.0, float(frontier_advanced_m))
+        target_pace = max(1e-6, float(cfg.frontier_pace_target_mps))
+        normalized_pace = min(
+            1.0,
+            max(0.0, float(frontier_average_speed_mps)) / target_pace,
+        )
+        pace_multiplier = 1.0 + normalized_pace * normalized_pace
+        route_reward = cfg.route_progress_scale * pace_multiplier * advanced_m
         reverse_deadband = max(0.0, float(cfg.backward_speed_deadband_mps))
         if route_reward > 0.0 and float(v_long) < -reverse_deadband:
             # Do not pay a new frontier push when the body-frame sensor says
@@ -190,9 +206,9 @@ def compute_reward_components(
         * max(0.0, float(step_duration_s))
     )
 
-    # A terminal failure claws back a configurable share of this life’s
-    # positive frontier reward, then applies its fixed failure cost. Successful
-    # progress remains dense and is not retroactively changed.
+    # A charged terminal failure claws back a configurable share of this life’s
+    # positive frontier reward, then applies its fixed failure cost. Frontier
+    # stalls are excluded by AutoDriveEnv; their time cost still applies.
     positive_frontier_return = (
         max(0.0, float(positive_episode_return))
         + max(0.0, float(components["route_progress"]))
@@ -202,8 +218,8 @@ def compute_reward_components(
         percent = max(0.0, float(cfg.collision_reward_percent))
         components["collision"] = -(magnitude + positive_frontier_return * percent / 100.0)
 
-    # Collision already receives its event penalty above. Other failed endings
-    # (frontier stall, idle timeout, or step cap) receive one terminal cost.
+    # Collision already receives its event penalty above. Other charged failed
+    # endings (idle timeout or step cap) receive one terminal cost.
     if episode_failure and not collision_event:
         magnitude = max(0.0, float(cfg.episode_failure_penalty_magnitude))
         percent = max(0.0, float(cfg.episode_failure_reward_percent))
@@ -229,6 +245,7 @@ def compute_reward(
     step_duration_s: float = 0.0,
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
+    frontier_average_speed_mps: float = 0.0,
     positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
@@ -243,6 +260,7 @@ def compute_reward(
         step_duration_s=step_duration_s,
         route_progress_delta_m=route_progress_delta_m,
         frontier_advanced_m=frontier_advanced_m,
+        frontier_average_speed_mps=frontier_average_speed_mps,
         positive_episode_return=positive_episode_return,
         collision_event=collision_event,
         episode_failure=episode_failure,

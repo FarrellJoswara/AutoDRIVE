@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import math
 from os import scandir
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -494,6 +495,67 @@ async def train_evaluations() -> list[Dict[str, Any]]:
         if isinstance(result, dict):
             results.append(result)
     return results
+
+
+@app.get("/train/ppo-diagnostics")
+async def train_ppo_diagnostics() -> Dict[str, Any]:
+    """Read durable PPO scalar history from this run's TensorBoard event files."""
+    import asyncio
+
+    output_dir = Path(job.log_path).parent if job.log_path else _settings.resolve_out()
+    if not output_dir.is_dir():
+        # If the hub restarted, its TrainJob no longer remembers the child
+        # process path. Recover the latest run directory written by the hub.
+        runs_root = ROOT / "logs" / "rl"
+        candidates = [path for path in runs_root.glob("*") if path.is_dir() and (path / "hub_train.log").is_file()]
+        if candidates:
+            output_dir = max(candidates, key=lambda path: (path / "hub_train.log").stat().st_mtime)
+
+    def read_events() -> list[Dict[str, Any]]:
+        try:
+            from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+        except ImportError as exc:
+            raise RuntimeError("TensorBoard is not installed in the Mission Control environment") from exc
+
+        scalar_names = {
+            "fps": "time/fps",
+            "approx_kl": "train/approx_kl",
+            "clip_fraction": "train/clip_fraction",
+            "entropy_loss": "train/entropy_loss",
+            "explained_variance": "train/explained_variance",
+            "learning_rate": "train/learning_rate",
+            "loss": "train/loss",
+            "policy_gradient_loss": "train/policy_gradient_loss",
+            "std": "train/std",
+            "value_loss": "train/value_loss",
+        }
+        updates: Dict[int, Dict[str, tuple[float, float]]] = {}
+        tensorboard_root = output_dir / "tb"
+        event_dirs = {item.parent for item in tensorboard_root.rglob("events.out.tfevents.*")} if tensorboard_root.is_dir() else set()
+        for event_dir in sorted(event_dirs):
+            accumulator = EventAccumulator(str(event_dir), size_guidance={"scalars": 0})
+            accumulator.Reload()
+            available = set(accumulator.Tags().get("scalars", []))
+            for key, tag in scalar_names.items():
+                if tag not in available:
+                    continue
+                for event in accumulator.Scalars(tag):
+                    if math.isfinite(event.value):
+                        scalar_values = updates.setdefault(int(event.step), {})
+                        previous = scalar_values.get(key)
+                        if previous is None or event.wall_time >= previous[0]:
+                            scalar_values[key] = (float(event.wall_time), float(event.value))
+        return [
+            {"step": step, "values": {key: value for key, (_wall_time, value) in values.items()}}
+            for step, values in sorted(updates.items())
+            if values
+        ]
+
+    try:
+        updates = await asyncio.to_thread(read_events)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"run_id": output_dir.name, "updates": updates}
 
 
 @app.post("/train/start")

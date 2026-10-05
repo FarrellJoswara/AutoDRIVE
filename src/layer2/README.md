@@ -77,7 +77,9 @@ Live scans contain 1081 rays: both endpoints of the -135°..+135° fan at 0.25°
 Default formula:
 
 ```text
-r  = route_progress_scale * new_frontier_metres
+r  = route_progress_scale
+     * (1 + min(average_frontier_speed / pace_target, 1)^2)
+     * new_frontier_metres
 r -= time_penalty_per_second * simulated_seconds # default 5 per second
 r -= backward_speed_penalty_scale * reverse_distance_m
 r -= collision_penalty_magnitude       # default 100 on collision
@@ -97,14 +99,19 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 
 On mapped tracks, Layer 2 projects each pose onto the route. Only a new
 high-water frontier advance earns positive per-step reward; recovering or
-repeating already-travelled route distance does not. A cost of 5 reward units
-per simulated second favors faster progress and makes stalling accumulate cost.
+repeating already-travelled route distance does not. The per-metre reward rises
+quadratically with episode-average frontier speed and reaches a 2x cap at the
+configurable pace target (6 m/s by default). A cost of 5 reward units per
+simulated second also favors faster progress and makes stalling accumulate cost.
 Backward body-frame motion is penalized, and a frontier push is withheld if the
 car is moving backward relative to its body beyond the reverse deadband. A
 collision receives the fixed collision cost plus a percentage of positive
-frontier reward accumulated during that car's life; frontier stalls and other
-failed episode endings receive the episode-failure cost. Lap completions never
-change reward or end an episode. No reward depends on distance from
+frontier reward accumulated during that car's life. A frontier stall ends and
+resets the episode after its configured no-progress interval, but adds no
+separate terminal deduction: time cost continues to accrue while progress is
+stalled. Other non-collision failed endings retain the configurable
+episode-failure cost. Lap completions never change reward or end an episode. No
+reward depends on distance from
 the centerline. The frontier remains the monotonic progress marker for lap
 accounting and visualization. Builtin (`none`) runs have no route frontier, so
 they receive no positive driving reward; select a validated route map for this
@@ -162,7 +169,7 @@ been checked against the drivable course.
 | `stagnation_speed_threshold` | `0.15` | m/s idle threshold |
 | `stagnation_steps` | `200` | Consecutive idle → truncate |
 | `map_id` | `none` | Map centerline used for route-frontier reward; frontier reward requires a validated route map |
-| `frontier_stagnation_seconds` | `5.0` | Time without a frontier push before truncating a mapped episode |
+| `frontier_stagnation_seconds` | `10.0` | Time without a frontier push before resetting a mapped episode |
 | `headless` | `True` | Docker / server friendly |
 | `reward_config` | defaults | See `rewards.py` |
 

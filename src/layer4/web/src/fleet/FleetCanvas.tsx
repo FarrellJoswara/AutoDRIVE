@@ -44,67 +44,9 @@ export interface FleetCanvasProps {
   rolloutSize?: number;
 }
 
-interface EvaluatorTransition {
-  from: EvaluatorCarTelemetry;
-  to: EvaluatorCarTelemetry;
-  startedAt: number;
-  durationMs: number;
-}
-
-interface FleetCarTransition {
-  from: FleetCar;
-  to: FleetCar;
-  startedAt: number;
-  durationMs: number;
-}
-
-function interpolateFleetCar(transition: FleetCarTransition, now: number): FleetCar {
-  const t = transition.durationMs <= 0
-    ? 1
-    : Math.max(0, Math.min(1, (now - transition.startedAt) / transition.durationMs));
-  const { from, to } = transition;
-  let yaw = to.yaw;
-  if (from.yaw != null && to.yaw != null) {
-    let angleDelta = (to.yaw - from.yaw) % (Math.PI * 2);
-    if (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
-    if (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
-    yaw = from.yaw + angleDelta * t;
-  }
-  const pose = from.pose && to.pose
-    ? [
-      from.pose[0] + (to.pose[0] - from.pose[0]) * t,
-      from.pose[1] + (to.pose[1] - from.pose[1]) * t,
-    ] as [number, number]
-    : to.pose;
-  const speed = from.speed != null && to.speed != null
-    ? from.speed + (to.speed - from.speed) * t
-    : to.speed;
-  return { ...to, pose, yaw, speed };
-}
-
-function interpolateEvaluator(
-  transition: EvaluatorTransition,
-  now: number,
-): EvaluatorCarTelemetry {
-  const t = transition.durationMs <= 0
-    ? 1
-    : Math.max(0, Math.min(1, (now - transition.startedAt) / transition.durationMs));
-  let angleDelta = (transition.to.yaw - transition.from.yaw) % (Math.PI * 2);
-  if (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
-  if (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
-  return {
-    pose: [
-      transition.from.pose[0] + (transition.to.pose[0] - transition.from.pose[0]) * t,
-      transition.from.pose[1] + (transition.to.pose[1] - transition.from.pose[1]) * t,
-    ],
-    yaw: transition.from.yaw + angleDelta * t,
-    speed: transition.from.speed + (transition.to.speed - transition.from.speed) * t,
-  };
-}
-
 /**
- * Static map and telemetry layers redraw on changes; rAF is active only while
- * fleet/evaluator interpolation is in progress.
+ * Draws the latest received fleet and evaluator poses directly. No synthetic
+ * between-sample motion is added; incoming telemetry schedules each update.
  */
 export function FleetCanvas(props: FleetCanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -117,8 +59,6 @@ export function FleetCanvas(props: FleetCanvasProps) {
   const mapDirty = useRef(true);
   const propsRef = useRef(props);
   const scheduleFrameRef = useRef<() => void>(() => {});
-  const evaluatorTransitionRef = useRef<EvaluatorTransition | null>(null);
-  const evaluatorTargetRef = useRef<{ key: string; car: EvaluatorCarTelemetry; receivedAt: number } | null>(null);
   propsRef.current = props;
 
   // Sync toggle / selection into view ref without React→canvas render storm
@@ -190,9 +130,6 @@ export function FleetCanvas(props: FleetCanvasProps) {
     let lastEvaluatorBoundsKey = "";
     let previousEvaluatorCar: EvaluatorCarTelemetry | null = null;
     let lastBoundsKey = "";
-    let lastFleetSampleKey = "";
-    let lastFleetSampleAt = 0;
-    let fleetCarTransitions = new Map<number, FleetCarTransition>();
     let previousFleetCars: FleetCar[] = [];
     let lastFleetBoundsKey = "";
     let lastFleetCarsKey = "";
@@ -245,7 +182,6 @@ export function FleetCanvas(props: FleetCanvasProps) {
     const tick = () => {
       if (!alive) return;
       raf = 0;
-      const now = performance.now();
 
       const p = propsRef.current;
       const fleet = p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
@@ -284,58 +220,14 @@ export function FleetCanvas(props: FleetCanvasProps) {
       view.selectedEnvId = p.selectedEnvId;
 
       const map = mapRef.current;
-      const fleetSampleKey = `${fleet?.run_id ?? ""}:${fleet?.step ?? ""}:${fleet?.ts ?? ""}`;
-      if (fleetSampleKey !== lastFleetSampleKey) {
-        const sampleIntervalMs = lastFleetSampleAt > 0
-          ? Math.max(40, Math.min(500, now - lastFleetSampleAt))
-          : 0;
-        const previousById = new Map(previousFleetCars.map((car) => [car.env_id, car]));
-        const nextTransitions = new Map<number, FleetCarTransition>();
-        for (const target of fleet?.cars ?? []) {
-          if (target.reset || !target.pose) continue;
-          const from = previousById.get(target.env_id) ?? target;
-          nextTransitions.set(target.env_id, {
-            from,
-            to: target,
-            startedAt: now,
-            durationMs: previousById.has(target.env_id) ? sampleIntervalMs : 0,
-          });
-        }
-        fleetCarTransitions = nextTransitions;
-        lastFleetSampleKey = fleetSampleKey;
-        lastFleetSampleAt = now;
-      }
-
       let evaluatorCar: EvaluatorCarTelemetry | null = null;
       if (p.fleetSource !== "replay" && p.evaluatorActive) {
         const live = getEvaluatorLiveHot();
         const matchingLive: EvaluatorLiveTelemetry | null =
           live && live.snapshot_timesteps === p.evaluatorSnapshotTimesteps ? live : null;
-        const target = matchingLive ?? p.evaluatorCar ?? null;
-        if (target) {
-          const key = `${matchingLive ? "ws" : "poll"}:${target.pose[0]}:${target.pose[1]}:${target.yaw}:${target.speed}`;
-          const previousTarget = evaluatorTargetRef.current;
-          if (!previousTarget || previousTarget.key !== key) {
-            const current = evaluatorTransitionRef.current
-              ? interpolateEvaluator(evaluatorTransitionRef.current, now)
-              : previousTarget?.car ?? target;
-            const durationMs = previousTarget
-              ? Math.max(40, Math.min(500, now - previousTarget.receivedAt))
-              : 0;
-            evaluatorTransitionRef.current = { from: current, to: target, startedAt: now, durationMs };
-            evaluatorTargetRef.current = { key, car: target, receivedAt: now };
-          }
-          evaluatorCar = evaluatorTransitionRef.current
-            ? interpolateEvaluator(evaluatorTransitionRef.current, now)
-            : target;
-        }
-      } else {
-        evaluatorTransitionRef.current = null;
-        evaluatorTargetRef.current = null;
+        evaluatorCar = matchingLive ?? p.evaluatorCar ?? null;
       }
-      // The fitted view follows sampled evaluator targets rather than its
-      // interpolated pose, so animation frames cannot continuously reframe it.
-      const bounds = resolveBounds(map, view, fleet, evaluatorTargetRef.current?.car.pose);
+      const bounds = resolveBounds(map, view, fleet, evaluatorCar?.pose);
       const boundsKey =
         bounds.minX.toFixed(2) +
         ":" +
@@ -345,11 +237,8 @@ export function FleetCanvas(props: FleetCanvasProps) {
         ":" +
         bounds.maxZ.toFixed(2);
 
-      const fleetAnimating = view.showFleet && [...fleetCarTransitions.values()].some(
-        (transition) => transition.durationMs > 0 && now < transition.startedAt + transition.durationMs,
-      );
       const currentFleetCars = view.showFleet
-        ? [...fleetCarTransitions.values()].map((transition) => interpolateFleetCar(transition, now))
+        ? fleet?.cars ?? []
         : [];
 
       const overlayKey =
@@ -400,9 +289,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
       }
 
       const fleetCarsKey = `${fleet?.ts ?? ""}:${fleet?.step ?? ""}:${view.showFleet}:${view.selectedEnvId}:${boundsKey}`;
-      const fleetPoseKey = `${view.showFleet}:${view.selectedEnvId}:${boundsKey}:` + (fleetAnimating
-        ? currentFleetCars.map((car) => `${car.env_id}:${car.pose?.[0].toFixed(4)}:${car.pose?.[1].toFixed(4)}:${car.yaw?.toFixed(4)}:${car.speed?.toFixed(3)}:${car.collision}`).join("|")
-        : fleetCarsKey);
+      const fleetPoseKey = `${view.showFleet}:${view.selectedEnvId}:${boundsKey}:${fleetCarsKey}`;
       const fleetBoundsChanged = boundsKey !== lastFleetBoundsKey;
       if (fleetPoseKey !== lastFleetCarsKey || fleetBoundsChanged) {
         lastFleetCarsKey = fleetPoseKey;
@@ -431,10 +318,10 @@ export function FleetCanvas(props: FleetCanvasProps) {
       }
       const visibleEvaluatorCar = view.showFleet ? evaluatorCar : null;
       const evaluatorKey = visibleEvaluatorCar
-        ? `${visibleEvaluatorCar.pose[0].toFixed(4)}:${visibleEvaluatorCar.pose[1].toFixed(4)}:${visibleEvaluatorCar.yaw.toFixed(4)}:${visibleEvaluatorCar.speed.toFixed(3)}`
+        ? `${visibleEvaluatorCar.pose[0]}:${visibleEvaluatorCar.pose[1]}:${visibleEvaluatorCar.yaw}:${visibleEvaluatorCar.speed}`
         : "none";
       const previousEvaluatorKey = previousEvaluatorCar
-        ? `${previousEvaluatorCar.pose[0].toFixed(4)}:${previousEvaluatorCar.pose[1].toFixed(4)}:${previousEvaluatorCar.yaw.toFixed(4)}:${previousEvaluatorCar.speed.toFixed(3)}`
+        ? `${previousEvaluatorCar.pose[0]}:${previousEvaluatorCar.pose[1]}:${previousEvaluatorCar.yaw}:${previousEvaluatorCar.speed}`
         : "none";
       if (evaluatorKey !== previousEvaluatorKey || evaluatorBoundsChanged) {
         const ectx = ec.getContext("2d");
@@ -460,16 +347,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
         previousEvaluatorCar = visibleEvaluatorCar;
       }
 
-      const evaluatorAnimating = Boolean(
-        visibleEvaluatorCar && evaluatorTransitionRef.current &&
-        evaluatorTransitionRef.current.durationMs > 0 &&
-        now < evaluatorTransitionRef.current.startedAt + evaluatorTransitionRef.current.durationMs,
-      );
-      if (fleetAnimating || evaluatorAnimating) {
-        raf = requestAnimationFrame(tick);
-      } else {
-        scheduleIdleFrame();
-      }
+      scheduleIdleFrame();
     };
 
     scheduleFrameRef.current = scheduleFrame;

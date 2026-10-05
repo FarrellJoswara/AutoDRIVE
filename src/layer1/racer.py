@@ -401,6 +401,43 @@ class Racer:
         except Exception as exc:
             self._set_explicit_error(str(exc))
 
+    def _emit_socket_event(self, event: str, *, sid: str) -> None:
+        """Emit a simulator control event on the Socket.IO server's gevent loop.
+
+        Gym's subprocess worker calls pause/resume from its normal thread, while
+        the Socket.IO server is serviced by a separate gevent loop thread. The
+        explicit Bridge action path already marshals sends onto that loop; these
+        control events must do the same or Unity may never receive them.
+        """
+        server = getattr(self, "_wsgi_server", None)
+        loop = getattr(server, "loop", None) if server is not None else None
+        if loop is None:
+            # Test doubles and manually managed clients have no gevent loop.
+            self.sio.emit(event, to=sid)
+            return
+
+        sent = threading.Event()
+        errors = []
+
+        def emit_on_server_loop() -> None:
+            try:
+                self.sio.emit(event, to=sid)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                sent.set()
+
+        loop.run_callback_threadsafe(emit_on_server_loop)
+        if not sent.wait(timeout=self.step_timeout):
+            raise TimeoutError(
+                f"[Racer {self.racer_id}] Socket.IO server did not dispatch {event} "
+                f"within {self.step_timeout:.1f}s"
+            )
+        if errors:
+            raise RuntimeError(
+                f"[Racer {self.racer_id}] Failed to emit {event}: {errors[0]}"
+            ) from errors[0]
+
     @staticmethod
     def _explicit_payload_without_cameras(data: Dict[str, Any]) -> Dict[str, Any]:
         """Copy packet fields used outside optional camera-image transport."""
@@ -733,7 +770,7 @@ class Racer:
 
             ack = self._simulation_pause_ack
             ack.clear()
-            self.sio.emit("AICAR_SIMULATION_PAUSE", to=self.client_sid)
+            self._emit_socket_event("AICAR_SIMULATION_PAUSE", sid=self.client_sid)
             if not ack.wait(timeout=self.step_timeout):
                 raise TimeoutError(
                     f"[Racer {self.racer_id}] Unity did not acknowledge "
@@ -753,7 +790,7 @@ class Racer:
                 )
             ack = self._simulation_resume_ack
             ack.clear()
-            self.sio.emit("AICAR_SIMULATION_RESUME", to=self.client_sid)
+            self._emit_socket_event("AICAR_SIMULATION_RESUME", sid=self.client_sid)
             if not ack.wait(timeout=self.step_timeout):
                 raise TimeoutError(
                     f"[Racer {self.racer_id}] Unity did not acknowledge "

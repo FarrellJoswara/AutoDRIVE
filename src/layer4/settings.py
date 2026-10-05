@@ -26,9 +26,12 @@ class Settings(BaseModel):
     plateau_patience: int = Field(default=5, ge=1)
     plateau_min_improvement_pct: float = Field(default=1.0, ge=0)
     evaluation_every_timesteps: int = Field(default=50_000, ge=1)
+    evaluation_runs_per_snapshot: int = Field(default=3, ge=1, le=10)
     evaluation_metric: Literal[
         "frontier_speed", "reward_per_simulated_second", "total_reward"
     ] = "total_reward"
+    ppo_learning_rate: float = Field(default=3e-4, gt=0, le=0.01)
+    ppo_n_epochs: int = Field(default=8, ge=1, le=20)
     exploration_std_min: float = Field(default=0.2, gt=0)
     exploration_std_max: float = Field(default=0.8, gt=0)
     exploration_improvement_scale: float = Field(default=0.9, gt=0, le=1)
@@ -50,7 +53,7 @@ class Settings(BaseModel):
     laps_per_episode: int = Field(default=10, ge=0)
     stagnation_speed_threshold: float = 0.15
     stagnation_steps: int = Field(default=50, ge=0)
-    frontier_stagnation_seconds: float = Field(default=5.0, ge=0)
+    frontier_stagnation_seconds: float = Field(default=10.0, ge=0)
     terminate_on_collision: bool = True
     forward_scale: float = 0.0
     backward_speed_penalty_scale: float = Field(default=1.0, ge=0)
@@ -173,6 +176,12 @@ class Settings(BaseModel):
             str(self.plateau_min_improvement_pct),
             "--evaluation-every-timesteps",
             str(self.evaluation_every_timesteps),
+            "--evaluation-runs-per-snapshot",
+            str(self.evaluation_runs_per_snapshot),
+            "--learning-rate",
+            str(self.ppo_learning_rate),
+            "--n-epochs",
+            str(self.ppo_n_epochs),
             "--evaluation-metric",
             self.evaluation_metric,
             "--exploration-std-min",

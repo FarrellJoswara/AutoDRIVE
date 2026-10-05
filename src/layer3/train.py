@@ -7,6 +7,7 @@ import copy
 import json
 import math
 import os
+import statistics
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -33,6 +34,66 @@ _PPO_CLIP_RANGE = 0.2
 _PPO_ENT_COEF = 0.01
 _PPO_VF_COEF = 0.5
 _PPO_MAX_GRAD_NORM = 0.5
+
+
+def aggregate_evaluation_attempts(
+    attempts: list[Dict[str, Any]], timesteps: int, selection_metric: str,
+) -> Dict[str, Any]:
+    """Summarize repeated runs; the median is the checkpoint-selection signal."""
+    if not attempts:
+        raise ValueError("at least one evaluation attempt is required")
+    if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward"}:
+        raise ValueError(f"unsupported evaluation metric: {selection_metric}")
+    metric_fields = (
+        "simulated_seconds", "frontier_distance_m", "frontier_speed_mps",
+        "reward_per_simulated_second", "total_reward", "laps_observed",
+    )
+    aggregate: Dict[str, Any] = {
+        "timesteps": int(timesteps),
+        "evaluation_runs": len(attempts),
+        "successful_attempts": sum(int(run.get("laps_observed", 0)) >= 10 for run in attempts),
+        "attempts": attempts,
+    }
+    for field in metric_fields:
+        values = [float(run[field]) for run in attempts if field in run and math.isfinite(float(run[field]))]
+        if values:
+            aggregate[field] = statistics.median(values)
+            aggregate[f"{field}_mean"] = statistics.mean(values)
+            aggregate[f"{field}_best"] = min(values) if field == "simulated_seconds" else max(values)
+    for field in ("collisions", "failed_episodes"):
+        aggregate[field] = sum(int(run.get(field, 0)) for run in attempts)
+    lap_count = max((len(run.get("lap_times_s", [])) for run in attempts), default=0)
+    aggregate["lap_times_s"] = []
+    for lap_index in range(lap_count):
+        values = [
+            float(run["lap_times_s"][lap_index])
+            for run in attempts
+            if len(run.get("lap_times_s", [])) > lap_index
+            and math.isfinite(float(run["lap_times_s"][lap_index]))
+        ]
+        aggregate["lap_times_s"].append(statistics.median(values))
+    ten_lap_times = [
+        float(run["best_10_lap_time_s"])
+        for run in attempts
+        if run.get("best_10_lap_time_s") is not None
+        and math.isfinite(float(run["best_10_lap_time_s"]))
+    ]
+    aggregate["best_10_lap_time_s"] = statistics.median(ten_lap_times) if ten_lap_times else None
+    aggregate["collision_rate"] = sum(int(run.get("collisions", 0) > 0) for run in attempts) / len(attempts)
+    aggregate["termination_reasons"] = {}
+    for run in attempts:
+        for reason, count in run.get("termination_reasons", {}).items():
+            aggregate["termination_reasons"][reason] = aggregate["termination_reasons"].get(reason, 0) + int(count)
+    score_field = {
+        "frontier_speed": "frontier_speed_mps",
+        "reward_per_simulated_second": "reward_per_simulated_second",
+        "total_reward": "total_reward",
+    }[selection_metric]
+    scores = [float(run[score_field]) for run in attempts]
+    aggregate["selection_score"] = statistics.median(scores)
+    aggregate["selection_score_mean"] = statistics.mean(scores)
+    aggregate["selection_score_best"] = max(scores)
+    return aggregate
 
 
 def _device_arg(value: str) -> str:
@@ -69,7 +130,10 @@ def _resolve_device(requested: str) -> str:
     return requested
 
 
-def make_model(vec_env, *, device: str, seed: int, tensorboard_log: Optional[str]):
+def make_model(
+    vec_env, *, device: str, seed: int, tensorboard_log: Optional[str],
+    learning_rate: float = _PPO_LR, n_epochs: int = _PPO_N_EPOCHS,
+):
     from stable_baselines3 import PPO
 
     from src.layer3.extractors import LidarStateExtractor
@@ -82,10 +146,10 @@ def make_model(vec_env, *, device: str, seed: int, tensorboard_log: Optional[str
     return PPO(
         policy="MultiInputPolicy",
         env=vec_env,
-        learning_rate=_PPO_LR,
+        learning_rate=learning_rate,
         n_steps=_PPO_N_STEPS,
         batch_size=_PPO_BATCH_SIZE,
-        n_epochs=_PPO_N_EPOCHS,
+        n_epochs=n_epochs,
         gamma=_PPO_GAMMA,
         gae_lambda=_PPO_GAE_LAMBDA,
         clip_range=_PPO_CLIP_RANGE,
@@ -126,6 +190,7 @@ class EvaluationCallback(BaseCallback):
         self, evaluation_env, *, out_dir: Path, every_timesteps: int,
         frame_skip: int, selection_metric: str, plateau_min_timesteps: int,
         plateau_patience: int, min_improvement_pct: float,
+        runs_per_snapshot: int,
         exploration_std_min: float, exploration_std_max: float,
         exploration_improvement_scale: float, exploration_plateau_scale: float,
         live_pose_publisher: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -136,6 +201,7 @@ class EvaluationCallback(BaseCallback):
         self.out_dir = Path(out_dir)
         self.every_timesteps = max(1, int(every_timesteps))
         self.frame_skip = max(1, int(frame_skip))
+        self.runs_per_snapshot = max(1, int(runs_per_snapshot))
         if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward"}:
             raise ValueError(f"unsupported evaluation metric: {selection_metric}")
         self.selection_metric = selection_metric
@@ -173,6 +239,7 @@ class EvaluationCallback(BaseCallback):
             "state": state,
             "snapshot_timesteps": snapshot_timesteps,
             "selection_metric": self.selection_metric,
+            "evaluation_runs_per_snapshot": self.runs_per_snapshot,
             "best_selection_score": self.best_score,
             "stale_evaluations": self.stale_evaluations,
             "plateau_patience": self.plateau_patience,
@@ -214,7 +281,7 @@ class EvaluationCallback(BaseCallback):
         with torch.no_grad():
             self._policy_std().fill_(self._target_log_std)
 
-    def _evaluate_snapshot(self, policy: Any, timesteps: int) -> Dict[str, Any]:
+    def _evaluate_snapshot(self, policy: Any, timesteps: int, attempt_index: int) -> Dict[str, Any]:
         from src.layer3.evaluate import evaluate_until_episode_end
 
         class SnapshotModel:
@@ -227,13 +294,20 @@ class EvaluationCallback(BaseCallback):
             frame_skip=self.frame_skip,
             timesteps=timesteps,
             lap_target=10,
-            on_step=self._on_evaluation_step,
+            on_step=lambda info: self._on_evaluation_step(info, attempt_index),
         )
 
-    def _on_evaluation_step(self, info: Dict[str, Any]) -> None:
+    def _evaluate_snapshot_batch(self, policy: Any, timesteps: int) -> Dict[str, Any]:
+        attempts = [
+            self._evaluate_snapshot(policy, timesteps, index)
+            for index in range(1, self.runs_per_snapshot + 1)
+        ]
+        return aggregate_evaluation_attempts(attempts, timesteps, self.selection_metric)
+
+    def _on_evaluation_step(self, info: Dict[str, Any], attempt_index: int) -> None:
         live_result = info.get("_evaluation_metrics")
         if isinstance(live_result, dict):
-            self._live_result = {
+            self._live_result = {**{
                 key: live_result[key]
                 for key in (
                     "frontier_distance_m",
@@ -247,7 +321,7 @@ class EvaluationCallback(BaseCallback):
                     "collisions",
                 )
                 if key in live_result
-            }
+            }, "attempt_index": attempt_index, "attempt_count": self.runs_per_snapshot}
 
         # Publish evaluator metrics independently of pose telemetry. Position
         # or yaw can be absent on a valid simulator step; that must not freeze
@@ -298,7 +372,7 @@ class EvaluationCallback(BaseCallback):
         self._candidate_path = Path(f"{candidate_base}.zip")
         self._write_status("running", snapshot_timesteps=evaluation_timestep)
         self._future = self._executor.submit(
-            self._evaluate_snapshot, snapshot, evaluation_timestep,
+            self._evaluate_snapshot_batch, snapshot, evaluation_timestep,
         )
         print(
             f"evaluation started: snapshot_steps={evaluation_timestep} "
@@ -319,13 +393,7 @@ class EvaluationCallback(BaseCallback):
                 candidate.unlink(missing_ok=True)
             raise RuntimeError("deterministic policy evaluation failed") from exc
 
-        score = float(result[
-            "frontier_speed_mps"
-            if self.selection_metric == "frontier_speed"
-            else "reward_per_simulated_second"
-            if self.selection_metric == "reward_per_simulated_second"
-            else "total_reward"
-        ])
+        score = float(result["selection_score"])
         improved = self.best_score is None
         if self.best_score is not None:
             pct = (score - self.best_score) / max(abs(self.best_score), 1e-6) * 100.0
@@ -349,6 +417,7 @@ class EvaluationCallback(BaseCallback):
                 self._last_adaptation = "increased_after_three_stale_evaluations"
         result.update({
             "selection_score": score,
+            "selection_score_median": score,
             "selection_metric": self.selection_metric,
             "best_selection_score": self.best_score,
             "improved": improved,
@@ -449,11 +518,14 @@ def train(
     plateau_patience: int = 5,
     plateau_min_improvement_pct: float = 1.0,
     evaluation_every_timesteps: int = 50_000,
+    evaluation_runs_per_snapshot: int = 3,
     evaluation_metric: str = "frontier_speed",
     exploration_std_min: float = 0.2,
     exploration_std_max: float = 0.8,
     exploration_improvement_scale: float = 0.9,
     exploration_plateau_scale: float = 1.1,
+    learning_rate: float = _PPO_LR,
+    n_epochs: int = _PPO_N_EPOCHS,
 ) -> Path:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -474,8 +546,8 @@ def train(
         f"device={resolved_device} out={out_dir}"
     )
     print(
-        f"ppo: lr={_PPO_LR} n_steps={_PPO_N_STEPS} batch={_PPO_BATCH_SIZE} "
-        f"n_epochs={_PPO_N_EPOCHS} gamma={_PPO_GAMMA} ent_coef={_PPO_ENT_COEF} "
+        f"ppo: lr={learning_rate} n_steps={_PPO_N_STEPS} batch={_PPO_BATCH_SIZE} "
+        f"n_epochs={n_epochs} gamma={_PPO_GAMMA} ent_coef={_PPO_ENT_COEF} "
         f"clip={_PPO_CLIP_RANGE}"
     )
     if env_kwargs:
@@ -490,12 +562,31 @@ def train(
         if resume is not None:
             print(f"resuming from {resume}")
             model = PPO.load(str(resume), env=vec_env, device=resolved_device)
+            # A resumed archive carries its old optimizer schedule; apply the
+            # explicitly selected run settings to both the PPO attributes and
+            # optimizer before the first update.
+            from stable_baselines3.common.utils import ConstantSchedule
+
+            model.learning_rate = float(learning_rate)
+            model.lr_schedule = ConstantSchedule(float(learning_rate))
+            model.n_epochs = int(n_epochs)
+            for group in model.policy.optimizer.param_groups:
+                group["lr"] = float(learning_rate)
+            # Checkpoints retain the source run's TensorBoard folder. Bind the
+            # resumed policy to this run's logger so diagnostics stay isolated.
+            from stable_baselines3.common.logger import configure
+
+            model.set_logger(
+                configure(folder=str(tb_dir), format_strings=["stdout", "csv", "tensorboard"])
+            )
         else:
             model = make_model(
                 vec_env,
                 device=resolved_device,
                 seed=seed,
                 tensorboard_log=str(tb_dir),
+                learning_rate=learning_rate,
+                n_epochs=n_epochs,
             )
 
         config = {
@@ -509,6 +600,7 @@ def train(
                 "plateau_patience": max(1, int(plateau_patience)),
                 "plateau_min_improvement_pct": max(0.0, float(plateau_min_improvement_pct)),
                 "evaluation_every_timesteps": max(1, int(evaluation_every_timesteps)),
+                "evaluation_runs_per_snapshot": max(1, int(evaluation_runs_per_snapshot)),
                 "evaluation_metric": evaluation_metric,
                 "evaluation_runs_in_parallel": True,
                 "evaluation_stop_conditions": ["collision", "frontier_stall", "10_laps"],
@@ -528,10 +620,10 @@ def train(
             "device": resolved_device,
             "env_kwargs": env_kwargs,
             "ppo": {
-                "learning_rate": _PPO_LR,
+                "learning_rate": float(learning_rate),
                 "n_steps": _PPO_N_STEPS,
                 "batch_size": _PPO_BATCH_SIZE,
-                "n_epochs": _PPO_N_EPOCHS,
+                "n_epochs": int(n_epochs),
                 "gamma": _PPO_GAMMA,
                 "gae_lambda": _PPO_GAE_LAMBDA,
                 "clip_range": _PPO_CLIP_RANGE,
@@ -567,7 +659,7 @@ def train(
         evaluation_env_kwargs["max_episode_steps"] = 0
         evaluation_env_kwargs["terminate_on_collision"] = True
         evaluation_env_kwargs["frontier_stagnation_seconds"] = max(
-            0.1, float(evaluation_env_kwargs.get("frontier_stagnation_seconds", 5.0))
+            0.1, float(evaluation_env_kwargs.get("frontier_stagnation_seconds", 10.0))
         )
         evaluation_env = make_vec_env(
             1, seed=seed + 50_000, port_start=4567 + n_envs,
@@ -580,6 +672,7 @@ def train(
             evaluation_env,
             out_dir=out_dir,
             every_timesteps=evaluation_every_timesteps,
+            runs_per_snapshot=evaluation_runs_per_snapshot,
             frame_skip=int(env_kwargs.get("frame_skip", 4)),
             selection_metric=evaluation_metric,
             plateau_min_timesteps=plateau_min_timesteps,
@@ -650,6 +743,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--plateau-patience", type=int, default=5)
     p.add_argument("--plateau-min-improvement-pct", type=float, default=1.0)
     p.add_argument("--evaluation-every-timesteps", type=int, default=50_000)
+    p.add_argument("--evaluation-runs-per-snapshot", type=int, default=3)
+    p.add_argument("--learning-rate", type=float, default=_PPO_LR)
+    p.add_argument("--n-epochs", type=int, default=_PPO_N_EPOCHS)
     p.add_argument(
         "--evaluation-metric",
         choices=("frontier_speed", "reward_per_simulated_second", "total_reward"),
@@ -685,10 +781,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--map-id", type=str, default="none")
     p.add_argument("--laps-per-episode", type=int, default=10,
                    help="Successful laps before resetting an episode; 0 disables")
-    p.add_argument("--frontier-stagnation-seconds", type=float, default=5.0)
+    p.add_argument("--frontier-stagnation-seconds", type=float, default=10.0)
     p.add_argument("--forward-scale", type=float, default=0.0)
     p.add_argument("--backward-speed-penalty-scale", type=float, default=1.0)
     p.add_argument("--route-progress-scale", type=float, default=10.0)
+    p.add_argument(
+        "--frontier-pace-target-mps", type=float, default=6.0,
+        help="Average frontier pace at which per-metre reward reaches 2x",
+    )
     p.add_argument("--time-penalty-per-second", type=float, default=5.0)
     p.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
     p.add_argument("--collision-reward-percent", type=float, default=100.0)
@@ -726,11 +826,14 @@ def main(argv: Optional[list] = None) -> int:
         plateau_patience=args.plateau_patience,
         plateau_min_improvement_pct=args.plateau_min_improvement_pct,
         evaluation_every_timesteps=args.evaluation_every_timesteps,
+        evaluation_runs_per_snapshot=args.evaluation_runs_per_snapshot,
         evaluation_metric=args.evaluation_metric,
         exploration_std_min=args.exploration_std_min,
         exploration_std_max=args.exploration_std_max,
         exploration_improvement_scale=args.exploration_improvement_scale,
         exploration_plateau_scale=args.exploration_plateau_scale,
+        learning_rate=args.learning_rate,
+        n_epochs=args.n_epochs,
     )
     print(f"done: {zip_path}")
     return 0

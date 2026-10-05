@@ -154,6 +154,43 @@ class RouteProgressTests(unittest.TestCase):
         )
         self.assertEqual(recovered_ground, 0.0)
 
+    def test_frontier_reward_increases_quadratically_with_average_pace_and_caps(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        common = dict(
+            v_long=0.0,
+            frontier_advanced_m=1.0,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=RewardConfig(
+                route_progress_scale=10.0,
+                frontier_pace_target_mps=6.0,
+                time_penalty_per_second=0.0,
+            ),
+        )
+        at_zero = compute_reward_components(frontier_average_speed_mps=0.0, **common)
+        at_half_target = compute_reward_components(
+            frontier_average_speed_mps=3.0, **common
+        )
+        at_target = compute_reward_components(frontier_average_speed_mps=6.0, **common)
+        above_target = compute_reward_components(
+            frontier_average_speed_mps=12.0, **common
+        )
+
+        self.assertAlmostEqual(at_zero["route_progress"], 10.0)
+        self.assertAlmostEqual(at_half_target["route_progress"], 12.5)
+        self.assertAlmostEqual(at_target["route_progress"], 20.0)
+        self.assertAlmostEqual(above_target["route_progress"], 20.0)
+        no_progress = compute_reward_components(
+            frontier_advanced_m=0.0, frontier_average_speed_mps=6.0, **{
+                key: value for key, value in common.items()
+                if key != "frontier_advanced_m"
+            }
+        )
+        self.assertEqual(no_progress["route_progress"], 0.0)
+
     def test_backward_motion_penalty_scales_with_reverse_distance(self) -> None:
         cfg = RewardConfig(backward_speed_penalty_scale=2.0, time_penalty_per_second=0.0)
         reward = compute_reward(

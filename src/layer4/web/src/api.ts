@@ -37,12 +37,33 @@ export interface EvaluationResult {
   lap_times_s: number[];
   best_10_lap_time_s: number | null;
   selection_score?: number;
+  selection_score_median?: number;
+  selection_score_mean?: number;
+  selection_score_best?: number;
+  evaluation_runs?: number;
+  successful_attempts?: number;
+  collision_rate?: number;
+  attempts?: EvaluationAttemptResult[];
   selection_metric?: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
   improved?: boolean;
   stale_evaluations?: number;
   exploration_std?: number[];
   exploration_adaptation?: string;
   stop_reason?: string | null;
+}
+
+export interface EvaluationAttemptResult {
+  simulated_seconds: number;
+  frontier_distance_m: number;
+  frontier_speed_mps: number;
+  reward_per_simulated_second: number;
+  total_reward: number;
+  collisions: number;
+  failed_episodes: number;
+  laps_observed: number;
+  lap_times_s: number[];
+  best_10_lap_time_s: number | null;
+  stop_reason?: string;
 }
 
 export function getEvaluationHistory(): Promise<EvaluationResult[]> {
@@ -53,6 +74,7 @@ export interface EvaluationStatus {
   state: "waiting" | "running" | "complete";
   snapshot_timesteps?: number | null;
   selection_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  evaluation_runs_per_snapshot?: number;
   best_selection_score?: number | null;
   stale_evaluations: number;
   plateau_patience: number;
@@ -64,6 +86,8 @@ export interface EvaluationStatus {
 }
 
 export interface EvaluationLiveResult {
+  attempt_index?: number;
+  attempt_count?: number;
   frontier_distance_m: number;
   frontier_speed_mps: number;
   simulated_seconds: number;
@@ -102,9 +126,12 @@ export interface Settings {
   plateau_patience: number;
   plateau_min_improvement_pct: number;
   evaluation_every_timesteps: number;
+  evaluation_runs_per_snapshot: number;
   /** Layer 3 PPO rollout length per environment; supplied by backend. */
   ppo_n_steps?: number;
   evaluation_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  ppo_learning_rate: number;
+  ppo_n_epochs: number;
   exploration_std_min: number;
   exploration_std_max: number;
   exploration_improvement_scale: number;
@@ -129,6 +156,7 @@ export interface Settings {
   forward_scale: number;
   backward_speed_penalty_scale: number;
   route_progress_scale: number;
+  frontier_pace_target_mps: number;
   time_penalty_per_second: number;
   collision_penalty_magnitude: number;
   collision_reward_percent: number;
@@ -174,12 +202,43 @@ export interface MetricsTelemetry {
   reward: number;
   episode: number;
   loss: number | null;
+  /** Step count at which the latest completed PPO update was logged. */
+  ppo_step?: number | null;
+  /** TensorBoard train/* scalars from the latest completed PPO update. */
+  ppo?: Partial<PpoDiagnostics>;
   completed_laps?: number;
   clean_episode_wins?: number;
   best_lap_time_s?: number | null;
   checkpoint: string | null;
   run_id: string;
   ts: string;
+}
+
+export interface PpoDiagnostics {
+  fps: number;
+  approx_kl: number;
+  clip_fraction: number;
+  entropy_loss: number;
+  explained_variance: number;
+  learning_rate: number;
+  loss: number;
+  policy_gradient_loss: number;
+  std: number;
+  value_loss: number;
+}
+
+export interface PpoDiagnosticsUpdate {
+  step: number;
+  values: Partial<PpoDiagnostics>;
+}
+
+export interface PpoDiagnosticsHistory {
+  run_id: string;
+  updates: PpoDiagnosticsUpdate[];
+}
+
+export function getPpoDiagnostics(): Promise<PpoDiagnosticsHistory> {
+  return jsonFetch("/train/ppo-diagnostics");
 }
 
 export interface FleetCar {

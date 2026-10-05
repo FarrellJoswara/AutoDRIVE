@@ -6,7 +6,7 @@ import time
 import unittest
 import importlib
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -15,6 +15,7 @@ from src.layer2.autodrive_env import AutoDriveEnv
 from src.layer2.rewards import RewardConfig
 from src.layer3.envs import env_kwargs_from_args
 from src.layer3.train import (
+    aggregate_evaluation_attempts,
     RunStopCallback,
     SimulatorPauseCallback,
     build_arg_parser,
@@ -23,6 +24,34 @@ from src.layer4.settings import Settings
 
 
 class RunStopCallbackTests(unittest.TestCase):
+    def test_repeated_evaluation_uses_median_not_luckiest_attempt(self) -> None:
+        attempts = [
+            {"frontier_speed_mps": 2.0, "total_reward": 20.0, "laps_observed": 0,
+             "simulated_seconds": 10.0, "frontier_distance_m": 20.0,
+             "reward_per_simulated_second": 2.0, "collisions": 1,
+             "failed_episodes": 0, "lap_times_s": [], "best_10_lap_time_s": None,
+             "termination_reasons": {"collision": 1}},
+            {"frontier_speed_mps": 2.2, "total_reward": 22.0, "laps_observed": 1,
+             "simulated_seconds": 10.0, "frontier_distance_m": 22.0,
+             "reward_per_simulated_second": 2.2, "collisions": 0,
+             "failed_episodes": 0, "lap_times_s": [10.0], "best_10_lap_time_s": None,
+             "termination_reasons": {"stall": 1}},
+            {"frontier_speed_mps": 20.0, "total_reward": 200.0, "laps_observed": 10,
+             "simulated_seconds": 10.0, "frontier_distance_m": 200.0,
+             "reward_per_simulated_second": 20.0, "collisions": 0,
+             "failed_episodes": 0, "lap_times_s": [10.0] * 10, "best_10_lap_time_s": 100.0,
+             "termination_reasons": {"lap_target": 1}},
+        ]
+
+        result = aggregate_evaluation_attempts(attempts, 50_000, "total_reward")
+
+        self.assertEqual(result["selection_score"], 22.0)
+        self.assertEqual(result["selection_score_mean"], 242 / 3)
+        self.assertEqual(result["selection_score_best"], 200.0)
+        self.assertEqual(result["successful_attempts"], 1)
+        self.assertEqual(result["collision_rate"], 1 / 3)
+        self.assertEqual(result["collisions"], 1)
+
     def test_main_passes_lap_episode_setting_into_training(self) -> None:
         train_module = importlib.import_module("src.layer3.train")
         with patch.object(train_module, "train", return_value="checkpoint.zip") as run:
@@ -37,8 +66,17 @@ class RunStopCallbackTests(unittest.TestCase):
         argv = settings.to_train_argv()
         args = build_arg_parser().parse_args(argv)
         self.assertEqual(settings.timesteps, 0)
+        self.assertEqual(settings.frontier_stagnation_seconds, 10.0)
+        self.assertEqual(args.frontier_stagnation_seconds, 10.0)
         self.assertEqual(settings.time_penalty_per_second, 5.0)
+        self.assertEqual(settings.frontier_pace_target_mps, 6.0)
         self.assertEqual(args.evaluation_every_timesteps, 50_000)
+        self.assertEqual(settings.evaluation_runs_per_snapshot, 3)
+        self.assertEqual(args.evaluation_runs_per_snapshot, 3)
+        self.assertEqual(settings.ppo_learning_rate, 3e-4)
+        self.assertEqual(settings.ppo_n_epochs, 8)
+        self.assertEqual(args.learning_rate, 3e-4)
+        self.assertEqual(args.n_epochs, 8)
         self.assertEqual(settings.evaluation_metric, "total_reward")
         self.assertEqual(args.evaluation_metric, "total_reward")
         self.assertEqual(settings.laps_per_episode, 10)
@@ -52,8 +90,15 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertNotIn('--lap-time-reward-scale', argv)
         self.assertIn('--laps-per-episode', argv)
 
+    def test_ppo_optimizer_parameters_flow_from_settings_to_cli(self) -> None:
+        settings = Settings(ppo_learning_rate=1e-4, ppo_n_epochs=4)
+        args = build_arg_parser().parse_args(settings.to_train_argv())
+        self.assertEqual(args.learning_rate, 1e-4)
+        self.assertEqual(args.n_epochs, 4)
+
     def test_settings_and_env_kwargs_are_backend_driven(self) -> None:
         configured = Settings(map_id='porto', n_envs=4,
+                              frontier_pace_target_mps=4.5,
                               collision_penalty_magnitude=250,
                               collision_reward_percent=35,
                               episode_failure_reward_percent=40)
@@ -62,6 +107,7 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertEqual(env_kwargs['map_id'], 'porto')
         self.assertEqual(env_kwargs['laps_per_episode'], 10)
         self.assertEqual(env_kwargs['time_penalty_per_second'], 5.0)
+        self.assertEqual(env_kwargs['frontier_pace_target_mps'], 4.5)
         self.assertEqual(env_kwargs['collision_penalty_magnitude'], 250.0)
         self.assertEqual(env_kwargs['collision_reward_percent'], 35.0)
         self.assertEqual(env_kwargs['episode_failure_penalty_magnitude'], 100.0)
@@ -82,6 +128,38 @@ class RunStopCallbackTests(unittest.TestCase):
 
 
 class SimulatorPauseCallbackTests(unittest.TestCase):
+    def test_pause_control_event_is_dispatched_on_gevent_server_loop(self) -> None:
+        class FakeLoop:
+            def __init__(self):
+                self.scheduled = 0
+
+            def run_callback_threadsafe(self, callback):
+                self.scheduled += 1
+                callback()
+
+        loop = FakeLoop()
+        racer = Racer.__new__(Racer)
+        racer.racer_id = 0
+        racer.step_timeout = 0.5
+        racer.sio = Mock()
+        racer._wsgi_server = SimpleNamespace(loop=loop)
+
+        racer._emit_socket_event("AICAR_SIMULATION_PAUSE", sid="unity-sid")
+
+        self.assertEqual(loop.scheduled, 1)
+        racer.sio.emit.assert_called_once_with("AICAR_SIMULATION_PAUSE", to="unity-sid")
+
+    def test_socket_event_uses_direct_emit_without_gevent_loop(self) -> None:
+        racer = Racer.__new__(Racer)
+        racer.racer_id = 0
+        racer.step_timeout = 0.5
+        racer.sio = Mock()
+        racer._wsgi_server = SimpleNamespace()
+
+        racer._emit_socket_event("AICAR_SIMULATION_RESUME", sid="unity-sid")
+
+        racer.sio.emit.assert_called_once_with("AICAR_SIMULATION_RESUME", to="unity-sid")
+
     def test_simulator_is_held_only_during_policy_updates(self) -> None:
         class FakeVecEnv:
             def __init__(self):
@@ -495,7 +573,7 @@ class CollisionTerminationTests(unittest.TestCase):
         self.assertFalse(info["episode_won"])
         self.assertLess(reward, 0.0)
 
-    def test_frontier_stall_ends_with_explicit_failure_cost(self) -> None:
+    def test_frontier_stall_resets_without_terminal_failure_cost(self) -> None:
         snap = SimpleNamespace(
             collision_count=1, timestamp=10.0, position=(1.0, 0.0, 1.0),
             v_long=1.0, true_speed=1.0, collision=False, heading_yaw=0.0,
@@ -504,18 +582,18 @@ class CollisionTerminationTests(unittest.TestCase):
         progress = {
             "progress_m": 1.0,
             "advanced_m": 0.0,
-            "time_since_push_s": 5.0,
+            "time_since_push_s": 10.0,
             "line": [[0.0, 0.0], [1.0, 0.0]],
             "speed_mps": 0.0,
         }
         _, reward, terminated, truncated, info = self._step_with_collision(
-            snap, True, progress=progress, frontier_stagnation_seconds=5.0,
+            snap, True, progress=progress, frontier_stagnation_seconds=10.0,
         )
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual(info["termination_reason"], "frontier_stagnation")
-        self.assertEqual(info["reward_components"]["episode_failure"], -100.0)
-        self.assertLess(reward, -100.0)
+        self.assertEqual(info["reward_components"]["episode_failure"], 0.0)
+        self.assertEqual(reward, info["reward_components"]["time_cost"])
 
     def test_env_pays_frontier_high_water_push_not_current_route_motion(self) -> None:
         snap = SimpleNamespace(
@@ -543,8 +621,11 @@ class CollisionTerminationTests(unittest.TestCase):
         _, reward, _, _, info = self._step_with_collision(
             snap, True, progress=progress,
         )
-        self.assertAlmostEqual(info["reward_components"]["route_progress"], 0.2)
-        self.assertAlmostEqual(reward, 0.075)
+        expected_progress_reward = 10.0 * (1.0 + (0.8 / 6.0) ** 2) * 0.02
+        self.assertAlmostEqual(
+            info["reward_components"]["route_progress"], expected_progress_reward
+        )
+        self.assertAlmostEqual(reward, expected_progress_reward - 0.125)
 
 
 if __name__ == "__main__":

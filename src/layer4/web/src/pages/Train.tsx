@@ -32,6 +32,14 @@ function runnableMaps(list: MapCatalogEntry[]): MapCatalogEntry[] {
   return [builtin, ...ready];
 }
 
+function RewardTip({ text }: { text: string }) {
+  return (
+    <span className="reward-tip" role="img" tabIndex={0} aria-label={text} data-tooltip={text}>
+      ?
+    </span>
+  );
+}
+
 export interface TrainPageHandle {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -67,6 +75,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   const rolloutSize = Math.max(1, form.n_envs * ppoStepsPerEnv);
   const firstEvaluationStep = Math.ceil(form.evaluation_every_timesteps / rolloutSize) * rolloutSize;
   const secondEvaluationStep = Math.ceil((form.evaluation_every_timesteps * 2) / rolloutSize) * rolloutSize;
+  const rewardBase = Math.max(0, Number(form.route_progress_scale) || 0);
+  const paceTarget = Math.max(0.1, Number(form.frontier_pace_target_mps) || 6);
+  const rewardAtPace = (pace: number) =>
+    rewardBase * (1 + Math.min(1, Math.max(0, pace) / paceTarget) ** 2);
+  const rewardNumber = (value: number) =>
+    Number(value.toFixed(2)).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   useEffect(() => {
     let cancelled = false;
@@ -287,6 +301,29 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           )}
 
           <div className="section-title">Train / job</div>
+          <label className="field">
+            PPO learning rate
+            <input
+              type="number"
+              min={0.000001}
+              max={0.01}
+              step="any"
+              value={form.ppo_learning_rate}
+              onChange={(e) => num("ppo_learning_rate", e.target.value)}
+            />
+            <small className="meta">Controls how far each PPO update moves the policy. Smaller values make resumed training gentler.</small>
+          </label>
+          <label className="field">
+            PPO epochs per rollout
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={form.ppo_n_epochs}
+              onChange={(e) => num("ppo_n_epochs", e.target.value)}
+            />
+            <small className="meta">Number of optimization passes over each collected rollout. Fewer passes reduce policy movement per update.</small>
+          </label>
           <label className="field">
             Environments (simulators scale automatically)
             <input
@@ -510,6 +547,19 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             </small>
           </label>
           <label className="field">
+            Attempts per evaluation snapshot
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={form.evaluation_runs_per_snapshot}
+              onChange={(e) => num("evaluation_runs_per_snapshot", e.target.value)}
+            />
+            <small className="meta">
+              Each attempt repeats the configured map spawn and ends on collision, stall, or 10 laps. The median selected score compares snapshots; mean and best are shown for context. Repeats measure simulator consistency, not generalization to other spawn points. More attempts make each evaluation take longer.
+            </small>
+          </label>
+          <label className="field">
             Evaluation score for checkpoint selection and plateau stopping
             <select
               value={form.evaluation_metric}
@@ -543,14 +593,16 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
           </label>
           <p className="meta run-stop-help">
-            A separate simulator evaluates a fixed policy snapshot in parallel until
-            it crashes, stalls, or completes 10 laps. Total attempt reward includes
-            frontier progress, time and reverse costs, and any terminal failure cost.
+            A separate simulator evaluates each fixed policy snapshot in parallel for
+            the configured number of attempts; each attempt ends on collision, stall,
+            or 10 laps. The median score compares snapshots. Total attempt reward includes
+            frontier progress, time and reverse costs. Stalling adds no separate
+            terminal cost; collisions and other failures retain their configured costs.
             The selected score chooses the best checkpoint and drives exploration
             and plateau stopping. Evaluations do not overlap.
           </p>
           <label className="field">
-            End episode after no frontier progress (centerline maps; 0 disables)
+            Reset after no frontier progress (centerline maps; 0 disables)
             <input
               type="number"
               min={0}
@@ -569,86 +621,123 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             />
             End that car’s episode on collision
           </label>
-          <label className="field">
-            Reward per meter of new frontier progress
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={form.route_progress_scale}
-              onChange={(e) => num("route_progress_scale", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Time cost per simulated second
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={form.time_penalty_per_second}
-              onChange={(e) => num("time_penalty_per_second", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Secondary body-relative reverse penalty per meter
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={form.backward_speed_penalty_scale}
-              onChange={(e) => num("backward_speed_penalty_scale", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Fixed collision cost (positive magnitude)
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={form.collision_penalty_magnitude}
-              onChange={(e) => num("collision_penalty_magnitude", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Positive frontier reward clawed back on collision (%)
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="any"
-              value={form.collision_reward_percent}
-              onChange={(e) => num("collision_reward_percent", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Failed episode cost (positive magnitude; stall or timeout)
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={form.episode_failure_penalty_magnitude}
-              onChange={(e) => num("episode_failure_penalty_magnitude", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            Positive frontier reward clawed back on stall/timeout (%)
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="any"
-              value={form.episode_failure_reward_percent}
-              onChange={(e) => num("episode_failure_reward_percent", e.target.value)}
-            />
-          </label>
-          <p className="meta run-stop-help">
-            Only new frontier advances earn progress reward; retracing ground and raw
-            speed earn nothing. Simulated time has a running cost, and reversing has
-            an additional body-relative cost. Crashes and other failed episodes claw
-            back the configured share of positive frontier reward earned during that
-            car’s life, then pay their fixed failure cost. Ten-lap completion ends an
-            episode successfully without a failure deduction.
-          </p>
+          <h3 className="reward-heading">Reward model</h3>
+          <section className="reward-model">
+            <div className="reward-equations" aria-label="Reward equations">
+              <div className="reward-equation" role="math" aria-label="Frontier reward equals new frontier distance times base reward times one plus the square of average frontier speed divided by target speed, capped at one">
+                <span className="math-var">r<sub>frontier</sub></span><span>=</span>
+                <span>Δd · b · (1 + min(</span>
+                <span className="math-fraction"><span>v̄<sub>f</sub></span><span>v<sub>target</sub></span></span>
+                <span>, 1)<sup>2</sup>)</span>
+              </div>
+              <div className="reward-equation reward-equation-secondary" role="math" aria-label="Step reward equals frontier reward minus time, reverse, slip, steering, and terminal costs when a terminal event occurs">
+                <span className="math-var">r<sub>step</sub></span><span>=</span>
+                <span className="math-var">r<sub>frontier</sub></span><span>−</span>
+                <span className="math-var">c<sub>t</sub></span><span>Δt</span><span>−</span>
+                <span className="math-var">c<sub>rev</sub></span><span>d<sub>rev</sub></span><span>−</span>
+                <span className="math-var">c<sub>slip</sub></span><span>|β|</span><span>−</span>
+                <span className="math-var">c<sub>steer</sub></span><span>|Δδ|</span><span>−</span>
+                <span className="math-var">I<sub>terminal</sub></span><span>·</span>
+                <span className="math-var">C<sub>terminal</sub></span>
+              </div>
+              <div className="reward-equation reward-equation-secondary" role="math" aria-label="Crash cost equals fixed crash cost plus crash clawback fraction times accumulated positive frontier reward. Frontier stalls have no additional terminal cost; other failed endings use the configured failure cost.">
+                <span className="math-var">C<sub>crash</sub></span><span>=</span>
+                <span className="math-var">c<sub>crash</sub></span><span>+</span>
+                <span className="math-fraction"><span>p<sub>crash</sub></span><span>100</span></span><span>R<sup>+</sup></span>
+                <span className="math-spacer" />
+                <span className="math-var">C<sub>stall</sub></span><span>=</span><span>0</span>
+                <span className="math-spacer" />
+                <span className="math-var">C<sub>other</sub></span><span>=</span>
+                <span className="math-var">c<sub>other</sub></span><span>+</span>
+                <span className="math-fraction"><span>p<sub>other</sub></span><span>100</span></span><span>R<sup>+</sup></span>
+              </div>
+              <div className="reward-notation">
+                <span><strong>Δd</strong> new frontier metres</span>
+                <span><strong>v̄<sub>f</sub></strong> episode-average frontier speed</span>
+                <span><strong>R<sup>+</sup></strong> accumulated positive frontier reward</span>
+              </div>
+            </div>
+            <div className="reward-examples" aria-label="Live reward examples">
+              <span><small>0 m/s</small><strong>{rewardNumber(rewardAtPace(0))} / m</strong></span>
+              <span><small>{rewardNumber(paceTarget / 2)} m/s</small><strong>{rewardNumber(rewardAtPace(paceTarget / 2))} / m</strong></span>
+              <span><small>{rewardNumber(paceTarget)} m/s+</small><strong>{rewardNumber(rewardAtPace(paceTarget))} / m</strong></span>
+            </div>
+            <details className="reward-controls">
+              <summary>Edit reward parameters</summary>
+              <div className="reward-controls-grid">
+                <label className="field">
+                  <span className="reward-field-name"><i>b</i> · Base reward / frontier metre
+                    <RewardTip text="Positive reward for each new metre the monotonic frontier advances. This is multiplied by the pace factor shown above." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.route_progress_scale}
+                    onChange={(e) => num("route_progress_scale", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>v<sub>target</sub></i> · Pace target (m/s)
+                    <RewardTip text="Episode-average frontier speed where the progress multiplier reaches its 2× cap. Faster paces do not increase the multiplier further." />
+                  </span>
+                  <input type="number" min={0.1} step="any" value={form.frontier_pace_target_mps}
+                    onChange={(e) => num("frontier_pace_target_mps", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>t</sub></i> · Time cost / second
+                    <RewardTip text="Reward subtracted per simulated second, including while the car is moving." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.time_penalty_per_second}
+                    onChange={(e) => num("time_penalty_per_second", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>rev</sub></i> · Reverse cost / metre
+                    <RewardTip text="Additional penalty per metre travelled backward relative to the car body. The frontier reward is also withheld for a new push while body velocity is backward." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.backward_speed_penalty_scale}
+                    onChange={(e) => num("backward_speed_penalty_scale", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>crash</sub></i> · Fixed crash cost
+                    <RewardTip text="A fixed terminal penalty applied once when a collision ends the car's episode." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.collision_penalty_magnitude}
+                    onChange={(e) => num("collision_penalty_magnitude", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>p<sub>crash</sub></i> · Crash clawback (%)
+                    <RewardTip text="Percentage of the positive frontier reward accumulated in that car's life, subtracted once on collision." />
+                  </span>
+                  <input type="number" min={0} max={100} step="any" value={form.collision_reward_percent}
+                    onChange={(e) => num("collision_reward_percent", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>other</sub></i> · Other failure cost
+                    <RewardTip text="Fixed cost for non-collision failed endings such as an idle timeout or step cap. Frontier-stall resets do not charge this cost; their elapsed time still incurs the time cost." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.episode_failure_penalty_magnitude}
+                    onChange={(e) => num("episode_failure_penalty_magnitude", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>p<sub>other</sub></i> · Other failure clawback (%)
+                    <RewardTip text="Percentage of accumulated positive frontier reward subtracted on other non-collision failed endings. Frontier-stall resets do not apply this clawback." />
+                  </span>
+                  <input type="number" min={0} max={100} step="any" value={form.episode_failure_reward_percent}
+                    onChange={(e) => num("episode_failure_reward_percent", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>slip</sub></i> · Slip cost
+                    <RewardTip text="Penalty coefficient multiplied by the absolute slip angle in radians. Set to zero to disable." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.slip_penalty}
+                    onChange={(e) => num("slip_penalty", e.target.value)} />
+                </label>
+                <label className="field">
+                  <span className="reward-field-name"><i>c<sub>steer</sub></i> · Steering-change cost
+                    <RewardTip text="Penalty coefficient multiplied by the absolute change in steering command between steps. Set to zero to disable." />
+                  </span>
+                  <input type="number" min={0} step="any" value={form.steer_jerk_penalty}
+                    onChange={(e) => num("steer_jerk_penalty", e.target.value)} />
+                </label>
+              </div>
+            </details>
+          </section>
           <label className="field">
             Minimum action standard deviation
             <input type="number" min={0.01} step="any" value={form.exploration_std_min}
@@ -673,25 +762,6 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             Evaluation improvement gently reduces policy randomness. Repeated flat
             evaluations raise it modestly, always within the configured bounds.
           </p>
-          <label className="field">
-            slip_penalty
-            <input
-              type="number"
-              step="any"
-              value={form.slip_penalty}
-              onChange={(e) => num("slip_penalty", e.target.value)}
-            />
-          </label>
-          <label className="field">
-            steer_jerk_penalty
-            <input
-              type="number"
-              step="any"
-              value={form.steer_jerk_penalty}
-              onChange={(e) => num("steer_jerk_penalty", e.target.value)}
-            />
-          </label>
-
           <div className="section-title">Hub / telemetry</div>
           <label className="field">
             telemetry_every_n

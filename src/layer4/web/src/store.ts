@@ -14,6 +14,9 @@ import {
 
 const METRICS_CAP = 2000;
 const FLEET_UI_HZ = 4;
+const metricsHistoryHot: MetricsTelemetry[] = new Array(METRICS_CAP);
+let metricsHistoryLength = 0;
+let metricsHistoryNext = 0;
 
 type Listener = () => void;
 
@@ -90,6 +93,9 @@ function setState(partial: Partial<StoreState>) {
 }
 
 function pushMetric(m: MetricsTelemetry) {
+  metricsHistoryHot[metricsHistoryNext] = m;
+  metricsHistoryNext = (metricsHistoryNext + 1) % METRICS_CAP;
+  metricsHistoryLength = Math.min(metricsHistoryLength + 1, METRICS_CAP);
   const i = state.metricsLen % METRICS_CAP;
   state.steps[i] = m.step;
   state.rewards[i] = m.reward;
@@ -100,6 +106,16 @@ function pushMetric(m: MetricsTelemetry) {
     metricsLen: state.metricsLen >= METRICS_CAP ? METRICS_CAP : nextLen,
   };
   emit();
+}
+
+/** Return recent metrics in time order for charts mounted after training starts. */
+export function getMetricsHistoryHot(): MetricsTelemetry[] {
+  const history: MetricsTelemetry[] = [];
+  const start = (metricsHistoryNext - metricsHistoryLength + METRICS_CAP) % METRICS_CAP;
+  for (let offset = 0; offset < metricsHistoryLength; offset += 1) {
+    history.push(metricsHistoryHot[(start + offset) % METRICS_CAP]);
+  }
+  return history;
 }
 
 function ingestFleet(p: FleetTelemetry) {
