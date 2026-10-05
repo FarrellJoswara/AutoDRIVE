@@ -99,15 +99,18 @@ namespace AiCar.Editor
             var originalSettings = File.ReadAllText(settingsPath);
             const string enabled = "m_AutoSyncTransforms: 1";
             const string disabled = "m_AutoSyncTransforms: 0";
-            if (originalSettings.IndexOf(enabled, StringComparison.Ordinal) < 0 ||
-                originalSettings.IndexOf(enabled, StringComparison.Ordinal) !=
-                originalSettings.LastIndexOf(enabled, StringComparison.Ordinal))
+            var enabledIndex = originalSettings.IndexOf(enabled, StringComparison.Ordinal);
+            var disabledIndex = originalSettings.IndexOf(disabled, StringComparison.Ordinal);
+            if ((enabledIndex < 0 && disabledIndex < 0) ||
+                (enabledIndex >= 0 && originalSettings.LastIndexOf(enabled, StringComparison.Ordinal) != enabledIndex) ||
+                (disabledIndex >= 0 && originalSettings.LastIndexOf(disabled, StringComparison.Ordinal) != disabledIndex))
                 throw new InvalidOperationException(
-                    "Expected exactly one enabled m_AutoSyncTransforms setting in " + settingsPath);
+                    "Expected exactly one m_AutoSyncTransforms setting in " + settingsPath);
 
             try
             {
-                File.WriteAllText(settingsPath, originalSettings.Replace(enabled, disabled));
+                if (enabledIndex >= 0)
+                    File.WriteAllText(settingsPath, originalSettings.Replace(enabled, disabled));
                 var staging = Path.Combine(SimulatorRoot, "_build", "linux-fixed-step-explicit-sync-experiment");
                 BuildLinux(publish: false, stagingName: "linux-fixed-step-explicit-sync-experiment");
                 SetJobWorkerCount(staging, 1);
