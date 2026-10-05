@@ -348,6 +348,65 @@ documents that these commands run asynchronously in parallel and their result
 buffers cannot be read before the returned `JobHandle` completes; timing and
 result ordering therefore require direct measurement rather than assumption.
 
+## CPU hot-path trace and next candidate (October 4, 2026)
+
+The steady-state CPU Timeline capture above is 300 frames from a Unity 2022.3.52f1
+Development player with camera output disabled. It includes 6,450 physics steps.
+Use per-thread self time to rank work; parent totals include their children and
+must not be added together. The Main Thread spent 1.21 s inside `Physics.Simulate`
+(0.188 ms per physics step), with 2.11 s inclusive. Main-thread PhysX self-time
+was led by contact-manager updates (198 ms), broad phase (90 ms), vehicle update
+(85 ms), post-broad-phase work (76 ms), island generation (73 ms), and lost
+contact processing (70 ms each for two stages). The Worker 0 thread also did
+measurable PhysX work (about 400 ms across its larger stages); the other worker
+threads were mostly idle. This points to real physics/contact work as the largest
+steady cost, rather than telemetry compression or graphics.
+
+The most specific avoidable-looking cost is transform synchronization around
+vehicle updates. `VehicleController.FixedUpdate` took 398 ms inclusive / 55 ms
+self across 6,450 calls. Nested below it, Unity recorded 25,800
+`Physics.SyncColliderTransform` calls (four per update) totaling 337 ms
+inclusive / 140 ms self, with 170 ms in `TransformChangeSystem`. The source calls
+`WheelCollider.GetWorldPose` for each of four wheels and then writes each wheel
+mesh transform's position and rotation. That exact four-per-tick match is strong
+evidence these writes are associated with the sync work, but profiler hierarchy
+alone cannot prove which individual property setter causes each native sync.
+Project settings also set `m_AutoSyncTransforms: 1`. Unity's 2022.3 API
+documentation says Auto Sync can incur repeated synchronization when transforms
+change and recommends disabling it for newer projects; when disabled, changes
+are synchronized before simulation, and queries that depend on same-frame
+transform changes need an explicit sync. This is a promising setting to A/B,
+not yet a safe optimization result: LiDAR uses physics raycasts, and exact sensor
+and vehicle traces must confirm all queries see the same world.
+
+LiDAR is the second clear software-side hotspot: 308 ms inclusive / 164 ms self
+in 6,450 `FixedUpdate` calls, including 137,287 raycasts (82 ms self / 110 ms
+inclusive). Its 1,081-beam scan is configured at 7 Hz in the parallel MARL scene.
+The previous isolated array-reuse candidate preserved every captured value but
+was slower in both pool tests, so allocation removal is not supported by the
+data. Batching raycasts remains a separate candidate with a larger theoretical
+upside, but it must preserve scan ordering, output, and timing exactly.
+
+Other measured costs are smaller: wheel encoders used 36 ms self across 12,900
+calls; IMU used 22 ms across 6,450; telemetry callbacks used 55 ms self and
+gzip compression 32 ms across the 10-second telemetry capture. Main-thread
+`WaitForTargetFPS` occupied 4.81 s across 225 frames; this is deliberate pacing
+while idle, not active simulation work. The Development capture's Dispatcher
+thread spent 1.58 s writing profiler data, which is capture overhead and should
+not be interpreted as normal player cost. Startup `TrackLoader` scanning was
+already established as a temporary first-15-second cost, not a long-run hot
+path.
+
+Recommended next experiment: build a staged player with only Auto Sync Transforms
+disabled, retain all four wheel pose updates, and compare it against the current
+staged fixed-step baseline with the existing exact-trace harness. Verify actions,
+physics-step counts, protocol IDs, simulated-time deltas, vehicle state, complete
+LiDAR arrays, observations, and rewards; benchmark paired CPU seconds per
+simulated second and pool throughput at four and eight environments. Reject it
+if any behavior differs or the CPU reduction does not repeat. Do not modify the
+active training players. If it fails, test batched LiDAR raycasts next. Neither
+candidate has been adopted based on this profile alone.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
