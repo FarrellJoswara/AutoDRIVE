@@ -43,8 +43,28 @@ def run_one(*, label: str, simulator: Path, port: int, repeat: int,
 
 
 def compare(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    intensity_mismatches = 0
+    intensity_values = 0
+    for left, right in zip(a["trace"], b["trace"]):
+        left_payload = left.get("lidar_intensity_payload", [])
+        right_payload = right.get("lidar_intensity_payload", [])
+        width = max(len(left_payload), len(right_payload))
+        intensity_values += width
+        intensity_mismatches += sum(
+            index >= len(left_payload) or index >= len(right_payload)
+            or left_payload[index] != right_payload[index]
+            for index in range(width)
+        )
+    trace_diff = _field_diff(a["trace"], b["trace"])
+    trace_diff["fields"]["lidar_intensity_payload"] = {
+        "exact_value_mismatches": intensity_mismatches,
+        "value_count": intensity_values,
+        "exact_match_fraction": (
+            1.0 - intensity_mismatches / intensity_values if intensity_values else 1.0
+        ),
+    }
     return {
-        "trace_diff": _field_diff(a["trace"], b["trace"]),
+        "trace_diff": trace_diff,
         "actions_equal": np.array_equal(a["actions"], b["actions"]),
         "physics_ticks_equal": np.array_equal(
             [r["physics_ticks"] for r in a["trace"]],
@@ -59,6 +79,13 @@ def compare(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
         / a["unity_cpu_seconds_per_simulated_second"],
         "throughput_ratio": b["simulated_seconds_per_wall_second"]
         / a["simulated_seconds_per_wall_second"],
+        "raw_lidar_intensity_payload": {
+            "exact_value_mismatches": intensity_mismatches,
+            "value_count": intensity_values,
+            "exact_match_fraction": (
+                1.0 - intensity_mismatches / intensity_values if intensity_values else 1.0
+            ),
+        },
     }
 
 
@@ -117,6 +144,7 @@ def main() -> int:
     exact = all(
         c["actions_equal"] and c["physics_ticks_equal"] and c["protocol_step_ids_equal"]
         and c["simulated_seconds_delta"] == 0
+        and c["raw_lidar_intensity_payload"]["exact_value_mismatches"] == 0
         and all(v["exact_value_mismatches"] == 0 for v in c["trace_diff"]["fields"].values())
         for c in comparisons
     )

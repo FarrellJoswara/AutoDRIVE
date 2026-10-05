@@ -209,6 +209,16 @@ def _create_env(
             action_interval_s=interval_s,
             simulator_log_path=simulator_log_path,
         )
+        # Preserve the uncompressed protocol fields for simulator equivalence
+        # tests. Wrap the already-registered action-step handler rather than
+        # registering a second Socket.IO handler for the same event.
+        original_explicit_bridge = racer._on_explicit_bridge
+
+        def capture_explicit_bridge(sid: str, data: Dict[str, Any]) -> None:
+            racer.latest_bridge_payload = dict(data)
+            original_explicit_bridge(sid, data)
+
+        racer._on_explicit_bridge = capture_explicit_bridge
     except BaseException:
         _restore_camera_env(old_camera_env)
         raise
@@ -290,6 +300,13 @@ def _run_one(
             row["observation_lidar"] = np.asarray(observation["lidar"], dtype=np.float32).copy()
             row["observation_state"] = np.asarray(observation["state"], dtype=np.float32).copy()
             row["reward"] = float(reward)
+            bridge_payload = getattr(racer, "latest_bridge_payload", {})
+            intensity_keys = sorted(
+                key for key in bridge_payload if "LIDAR Intensity Array" in str(key)
+            )
+            if not intensity_keys:
+                raise RuntimeError("Bridge response did not include the raw LiDAR intensity payload")
+            row["lidar_intensity_payload"] = [str(bridge_payload[key]) for key in intensity_keys]
             row["terminated"] = bool(terminated)
             row["truncated"] = bool(truncated)
             row["frontier_progress_m"] = info.get("frontier_progress_m")
