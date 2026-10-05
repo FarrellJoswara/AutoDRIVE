@@ -457,6 +457,46 @@ change simulation results and is outside this optimization goal. Small
 data-path opportunities can still be measured separately, such as avoiding
 repeated compression of an unchanged LiDAR intensity array.
 
+The intensity-payload cache candidate kept the formatted intensity array and
+its gzip/base64 output until the next scan changed it. Its staged player
+matched the reference exactly across actions, physics ticks, protocol IDs,
+simulated time, vehicle telemetry, all LiDAR ranges, observations, rewards, and
+the raw compressed intensity payload. Two single-environment pairs suggested
+about 0.9% lower CPU per simulated second, but the larger four-environment,
+three-pair test reversed that result: median pool throughput was 2.1% lower
+and CPU per simulated second was 2.7% higher. This is too small and noisy to
+justify carrying the cache, so it is rejected and not installed in the normal
+player. The local report is `logs/diagnostics/intensity_cache_4env.json` (the
+single-environment exact-data report is
+`logs/diagnostics/intensity_cache_behavior_ab.json`).
+
+## CPU-path conclusions
+
+The current measured cost is dominated by work required to produce each fixed
+physics step. In the 300-frame Timeline capture, `Physics.Simulate` consumed
+1.21 s main-thread self time and 2.11 s inclusive; PhysX contact management,
+broad phase, vehicle updates, island generation, and lost-contact processing
+were the large children. VehicleController used 398 ms inclusive, mostly
+collider synchronization caused by four `WheelCollider.GetWorldPose` results
+followed by wheel-mesh transform writes. LiDAR used 308 ms inclusive, with
+137,287 raycasts accounting for 110 ms inclusive. Encoders and IMU were much
+smaller (36 ms and 22 ms). Telemetry callbacks used 55 ms; gzip compression
+used about 32 ms across 150 range/intensity compressions. `WaitForTargetFPS`
+was 4.81 s of deliberate idle pacing and profiler export itself added 1.58 s;
+neither is simulation work.
+
+Under the requirement that actions, physics ticks, sensor values, observations,
+and rewards remain identical, tested changes to automatic transform syncing
+(alone or replaced by one explicit sync), batched LiDAR raycasts, managed
+LiDAR array reuse, and intensity compression caching were rejected. They
+either changed exact physics/sensor data or failed to improve CPU and aggregate
+throughput repeatably. The viable existing gains are workload-level: disable
+rendered camera output when unused and lower the idle frame target while
+preserving the fixed simulation timestep. Changing solver/contact work,
+vehicle update logic, wheel transforms, or LiDAR rays may be more impactful,
+but the experiments show those paths affect the state or observations and
+cannot meet the current exact-equivalence constraint as implemented.
+
 **Docker Linux and Windows players both need a rebuild** to pick up
 `ForceConnect`, `AiCarSimulationGate`, and LapTimer batchmode silencing. The
 training process uses the gate to stop cached controls from moving cars while
