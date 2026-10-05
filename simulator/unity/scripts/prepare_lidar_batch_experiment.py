@@ -72,7 +72,7 @@ def apply() -> None:
 		Vector3 rayOrigin = Head.transform.position;
 		for (int i = 0; i < MeasurementsPerScan; i++)
 		{
-			batchCommands[i] = new RaycastCommand(rayOrigin, laserRayDirections[i], batchQueryParameters, MaximumLinearRange);
+			batchCommands[i] = new RaycastCommand(rayOrigin, laserRayDirections[i].normalized, batchQueryParameters, MaximumLinearRange);
 		}
 		RaycastCommand.ScheduleBatch(batchCommands, batchHits, 32, default(JobHandle)).Complete();
 		NativeArray<RaycastHit> hits = batchHits;
