@@ -654,11 +654,20 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `logs/rl/lidar_speed_finetune_exploration030_from_action50_20261007` resumes
   the same original checkpoint with the same official sensor profile, action
   mapping, reward, and PPO settings, changing only the minimum action standard
-  deviation from 0.20 to 0.30. Its first comparison is the next three-run
-  deterministic evaluation at 20,480 steps. The prior 66.98 s and 65.84 s
-  local results remain preserved but are not official scores; the only
-  measured corrected-sensor 10-lap result so far is 70.20 s locally with zero
-  collisions.
+  deviation from 0.20 to 0.30. At 20,480 steps, all three deterministic
+  evaluation attempts collided after 1.55–1.60 s with zero laps. PPO updates
+  remained small (approximate KL below 0.0013 and clip fraction at or below
+  0.011); increasing action noise alone did not fix the observed behavior.
+  Its checkpoints and evaluation traces are retained.
+- Next controlled challenger:
+  `logs/rl/lidar_speed_finetune_lr1e5_exploration030_from_action50_20261007`
+  resumes the same original checkpoint with the same sensor profile, action
+  mapping, reward, and exploration floor (0.30), changing only the learning
+  rate from 3e-6 to 1e-5. Evaluate at the same 20,480-step, three-attempt
+  boundary before deciding whether to continue.
+- The prior 66.98 s and 65.84 s local results remain preserved but are not
+  official scores; the only measured corrected-sensor 10-lap result so far is
+  70.20 s locally with zero collisions.
 - Follow-up one-factor steering-scale comparison, with the same checkpoint and
   forward-only mapping: training-matched scale 0.945 yielded a 124.72 s warm-up
   and one scored lap in 125.71 s with six race collisions, versus scale 1.0's
