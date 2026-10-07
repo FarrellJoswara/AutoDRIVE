@@ -756,12 +756,20 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
 - The official evaluator's optional trace now records the policy's pre-action
   normalized state vector and compact left/front/right LiDAR minima beside each
   action. It records only observations already supplied to the policy; restricted
-  race metrics remain evaluator-only. The 0.945 replay saw normalized front
-  clearance minima near 0.07 (about 0.75 m under the official 0.06–10 m sensor
-  range) while emitting both reverse throttle and substantial steering. This
+  race metrics remain evaluator-only. The 0.945 replay saw front-sector minima
+  near 0.04 (about 0.46 m under the official 0.06–10 m sensor range) while
+  still commanding 0.74 throttle and 0.51 steering magnitude. This
   trace does not change the competition policy path. It lets the next diagnosis
   focus on the policy's response to near-obstacle sensor input instead of
   guessing from aggregate collision counts. The full run log is
   `bidirectional_lr1e5_81920_headless_trace_0945_20261007.log`.
-  Next inspect the aligned sensor/action trace and isolate the turn response
+- Under the identical trace setup, the preserved 66.98 s champion also reached
+  11 race collisions and was disqualified after one 18.365 s lap. Its initial
+  LiDAR sector minima match the fine-tune's to the displayed precision, while
+  its initial throttle and steering differ; the fine-tune's scored lap was
+  about 3.08 s faster, but neither model is safe enough to finish. This confirms
+  that official sensors and the control bridge are active while showing the
+  transfer problem is present in both local-trained policies. Report:
+  `champion_66982_headless_trace_0945_20261007.json`.
+  Next use the aligned traces to isolate turn response and safety learning
   before selecting another training change.
