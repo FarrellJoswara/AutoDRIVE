@@ -17,7 +17,7 @@ from src.layer1.official_bridge_relay import (
 )
 from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.official_race_env import OfficialRaceEnv
-from src.layer2.spaces import map_throttle_action
+from src.layer2.spaces import map_steering_action, map_throttle_action
 from src.layer3.official_evaluate import (
     action_observation_diagnostics,
     collision_penalty_seconds,
@@ -235,6 +235,12 @@ def test_negative_throttle_mapping_modes_are_explicit_and_bounded():
     assert map_throttle_action(-0.8, "positive_magnitude") == 0.8
     assert map_throttle_action(1.4, "allow") == 1.0
     assert map_throttle_action(-1.4, "positive_magnitude") == 1.0
+
+
+def test_steering_mapping_modes_are_explicit_and_bounded():
+    assert map_steering_action(0.8, "normal") == 0.8
+    assert map_steering_action(0.8, "invert") == -0.8
+    assert map_steering_action(-1.4, "invert") == 1.0
 
 
 def test_evaluation_diagnostics_capture_only_policy_io():

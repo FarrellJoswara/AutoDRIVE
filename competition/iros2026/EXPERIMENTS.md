@@ -131,3 +131,16 @@ lap and neither is a score comparison.
   from policy observations. The three controlled throttle mappings live in
   Layer 2 and are exposed by the Layer 3 evaluator/runner; the Layer 1 bridge
   continues to relay official telemetry and actuator commands.
+
+### Steering polarity trial
+
+- Date: 2026-10-07; same checkpoint and official simulator/API images; fresh
+  simulator; 35-second diagnostic cap.
+- Compared with the preceding forward-throttle/normal-steering attempt, this
+  changed only steering polarity to `invert`.
+- Result: 0 laps, 58 collision events in 35 seconds, versus 35 collision events
+  in 35 seconds with normal steering. The policy's mean steering was +0.533,
+  applied mean steering was -0.533, and mean applied throttle was +0.994.
+  Steering inversion made the short-run result worse; keep the default
+  `normal` mapping. This is a failed diagnostic, not a score comparison.
+- Raw report: `results/steering_invert_20261007.json`.

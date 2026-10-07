@@ -23,6 +23,7 @@ LIDAR_BEAMS: int = 1081
 # observe when the simulator's actuator feedback differs from what was sent.
 STATE_DIM: int = 9
 NegativeThrottleMode = Literal["allow", "zero", "positive_magnitude"]
+SteeringMode = Literal["normal", "invert"]
 
 _SPEED_SCALE_MPS = 22.88  # simulator RoboRacer maximum speed (82.4 km/h)
 _YAW_RATE_SCALE_RAD_S = 10.0  # leaves headroom above observed peak ~5.5 rad/s
@@ -47,6 +48,14 @@ def map_throttle_action(value: float, mode: NegativeThrottleMode = "allow") -> f
         if mode == "positive_magnitude":
             return -throttle
     return throttle
+
+
+def map_steering_action(value: float, mode: SteeringMode = "normal") -> float:
+    """Map normalized policy steering to the official actuator convention."""
+    if mode not in ("normal", "invert"):
+        raise ValueError(f"Unknown steering mode: {mode}")
+    steering = float(np.clip(float(value), -1.0, 1.0))
+    return -steering if mode == "invert" else steering
 
 
 def make_observation_space(lidar_beams: int = LIDAR_BEAMS) -> spaces.Dict:

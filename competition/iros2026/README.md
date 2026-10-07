@@ -87,6 +87,8 @@ to the same positive magnitude). The default is `allow`; alternate mappings
 are experiments, not competition defaults. Evaluation output includes action
 and allowed-observation distributions so a mapping can be assessed from the
 official sensor path without exposing restricted race state to the policy.
+`AICAR_STEERING_MODE` similarly accepts `normal` or `invert`; both controls
+default to the unmodified policy output for competition use.
 
 ## Interpretation
 

@@ -36,10 +36,11 @@ def run_policy(
     device: str = "cpu",
     timeout_s: float = 5.0,
     negative_throttle_mode: str = "allow",
+    steering_mode: str = "normal",
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
-    from src.layer2.spaces import map_throttle_action, snapshot_to_obs
+    from src.layer2.spaces import map_steering_action, map_throttle_action, snapshot_to_obs
 
     model = load_policy(model_path, device=device)
     racer = RacerRos2(timeout_s=timeout_s, include_race_metrics=False)
@@ -54,7 +55,7 @@ def run_policy(
             previous_throttle = map_throttle_action(
                 float(command[0]), negative_throttle_mode
             )
-            previous_steering = float(np.clip(command[1], -1.0, 1.0))
+            previous_steering = map_steering_action(command[1], steering_mode)
             snap = racer.step(previous_throttle, previous_steering)
             observation = snapshot_to_obs(
                 snap, previous_throttle, previous_steering
@@ -78,12 +79,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="allow",
         help="How to map negative policy throttle actions to the actuator",
     )
+    parser.add_argument(
+        "--steering-mode",
+        choices=("normal", "invert"),
+        default="normal",
+        help="Map policy steering into the official actuator direction",
+    )
     args = parser.parse_args(argv)
     run_policy(
         args.model,
         device=args.device,
         timeout_s=args.timeout_s,
         negative_throttle_mode=args.negative_throttle_mode,
+        steering_mode=args.steering_mode,
     )
     return 0
 

@@ -209,6 +209,7 @@ def evaluate(
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
     negative_throttle_mode: str = "allow",
+    steering_mode: str = "normal",
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
@@ -234,6 +235,7 @@ def evaluate(
         straight_throttle_gain=straight_throttle_gain,
         straight_throttle_steering_threshold=straight_throttle_steering_threshold,
         negative_throttle_mode=negative_throttle_mode,
+        steering_mode=steering_mode,
     )
     runs: List[Dict[str, Any]] = []
     try:
@@ -292,6 +294,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="allow",
         help="How to map negative policy throttle actions to the actuator",
     )
+    parser.add_argument(
+        "--steering-mode",
+        choices=("normal", "invert"),
+        default="normal",
+        help="Map policy steering into the official actuator direction",
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
     evaluate(
@@ -305,6 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         straight_throttle_gain=args.straight_throttle_gain,
         straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
         negative_throttle_mode=args.negative_throttle_mode,
+        steering_mode=args.steering_mode,
         output_path=args.out,
     )
     return 0
