@@ -1,0 +1,162 @@
+{
+  "model": "/models/policy.zip",
+  "created_utc": "2026-10-07T17:10:15.455718+00:00",
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "deterministic": true,
+  "controller": "ppo",
+  "observation_profile": "official_sensors",
+  "throttle_mode": "forward_only",
+  "steering_mode": "normal",
+  "warmup_laps_ignored": 1,
+  "race_laps": 10,
+  "runs": [
+    {
+      "race_laps_completed": 1,
+      "race_lap_times_s": [
+        127.76640319824219
+      ],
+      "race_time_s": 127.76640319824219,
+      "race_collisions": 4,
+      "collision_penalty_s": 100.0,
+      "adjusted_race_time_s": null,
+      "disqualified": false,
+      "complete": false,
+      "best_lap_s": 127.76640319824219,
+      "mean_lap_s": 127.76640319824219,
+      "attempt": 1,
+      "steps": 5827,
+      "warmup_lap_times_s": [
+        134.72659301757812
+      ],
+      "warmup_collisions": 4,
+      "raw_collision_count_at_finish": 8,
+      "race_collision_baseline": 4,
+      "total_laps_since_start": 2,
+      "stop_reason": "wall_timeout",
+      "wall_duration_s": 300.0191612300114,
+      "mean_control_rate_hz": 19.42414828067285,
+      "median_control_interval_s": 0.051688301493413746,
+      "median_reported_lidar_scan_rate_hz": 39.99999940395356,
+      "action_observation_diagnostics": {
+        "policy_throttle": {
+          "count": 5827,
+          "min": -1.0,
+          "max": 0.663302481174469,
+          "mean": -0.2464487402825673,
+          "std": 0.7567235682625321
+        },
+        "policy_steering": {
+          "count": 5827,
+          "min": -0.5918495655059814,
+          "max": 0.7927675247192383,
+          "mean": 0.02298173355873625,
+          "std": 0.18202597897910355
+        },
+        "applied_throttle": {
+          "count": 5827,
+          "min": 0.0,
+          "max": 1.0,
+          "mean": 0.4468866243599817,
+          "std": 0.45454983375052027
+        },
+        "applied_steering": {
+          "count": 5827,
+          "min": -0.5598896889686584,
+          "max": 0.7499580783843994,
+          "mean": 0.021740719946564492,
+          "std": 0.17219657611423198
+        },
+        "policy_reverse_fraction": 0.5018019564098164,
+        "observation_state": {
+          "forward_speed": {
+            "count": 5827,
+            "min": 0.0,
+            "max": 1.8889209032058716,
+            "mean": 0.49040117604397965,
+            "std": 0.4934689232931487
+          },
+          "sideways_speed": {
+            "count": 5827,
+            "min": -0.0,
+            "max": -0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "yaw_rate": {
+            "count": 5827,
+            "min": -0.12054000049829483,
+            "max": 0.04741000011563301,
+            "mean": -0.0029164252616462843,
+            "std": 0.014052672229995107
+          },
+          "forward_acceleration": {
+            "count": 5827,
+            "min": -5.0,
+            "max": 1.2937649488449097,
+            "mean": 0.06636489580070552,
+            "std": 0.5587688052940927
+          },
+          "sideways_acceleration": {
+            "count": 5827,
+            "min": -1.0942472219467163,
+            "max": 0.9115039110183716,
+            "mean": -0.008173371051444214,
+            "std": 0.04196720215551755
+          },
+          "throttle_feedback": {
+            "count": 5827,
+            "min": 0.0,
+            "max": 1.0,
+            "mean": 0.4465563752371527,
+            "std": 0.4545240280987268
+          },
+          "steering_feedback": {
+            "count": 5827,
+            "min": -0.559969425201416,
+            "max": 0.75,
+            "mean": 0.021697714358398932,
+            "std": 0.1665923082625976
+          },
+          "previous_throttle": {
+            "count": 5827,
+            "min": 0.0,
+            "max": 1.0,
+            "mean": 0.4467236682522025,
+            "std": 0.45453980731785176
+          },
+          "previous_steering": {
+            "count": 5827,
+            "min": -0.5598896741867065,
+            "max": 0.7499580979347229,
+            "mean": 0.021721584606617463,
+            "std": 0.17219279578994073
+          }
+        },
+        "normalized_lidar_minimum": {
+          "count": 5827,
+          "min": 0.008776288479566574,
+          "max": 0.09200594574213028,
+          "mean": 0.04004531942841138,
+          "std": 0.014438443975947166
+        }
+      },
+      "action_trace": [],
+      "motion_verification": {
+        "source": "restricted_ips_diagnostic_only",
+        "available": true,
+        "elapsed_s": 299.93593108002096,
+        "check_after_s": 3.0,
+        "minimum_displacement_m": 0.25,
+        "verified": true,
+        "max_displacement_m": 19.502429296115906
+      },
+      "score_status": "incomplete",
+      "valid_for_comparison": false
+    }
+  ],
+  "completed_attempts": 0,
+  "median_adjusted_race_time_s": null,
+  "best_adjusted_race_time_s": null
+}

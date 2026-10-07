@@ -73,6 +73,26 @@ reset command, a fresh simulator process, and a complete race.
   rate makes this transfer unsuitable. Next work should address control/action
   transfer inside the existing four layers and screen on the official runtime.
 
+### Official action-transfer sweep on the 120,000-step checkpoint — rejected
+
+- All variants used the same checkpoint, official simulator/Devkit images,
+  policy observation path, and forward-only throttle. These are incomplete
+  diagnostics, not race scores.
+- Steering scale 0.92 (all else at the 0.946 baseline) completed one timed lap
+  in 124.905 s with 5 race collisions. The 0.946 screen was faster at 121.977 s
+  but had 6 race collisions. This one-lap difference is insufficient to promote
+  0.92; neither test completed the 10-lap race.
+- Straight throttle gain 1.25 (scale 0.946, other controls held fixed) was
+  continued to the official disqualification endpoint. It completed laps in
+  122.377 and 127.848 s, then reached 11 race collisions and was disqualified
+  with 660 s collision penalty. Reject this gain; it did not yield a clean or
+  competitive race. Per-run reports are the `forwardonly_ppo120k_*` files in
+  `results/`.
+- The run findings do not justify promoting any of these action mappings.
+  Keep the checkpoint and original training stack. The next candidate needs a
+  policy/control improvement that changes both sustained pace and collision
+  rate, verified by complete official races.
+
 ## Transfer baseline: callback-rate control
 
 - Date: 2026-10-07
