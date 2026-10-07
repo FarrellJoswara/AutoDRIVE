@@ -215,6 +215,25 @@ def test_encoder_speed_uses_accumulated_wheel_angles_without_aliasing():
     assert np.isclose(speed, expected)
 
 
+def test_official_sensor_observation_profile_uses_encoder_speed_and_zero_lateral():
+    from src.layer2.autodrive_env import AutoDriveEnv
+
+    env = object.__new__(AutoDriveEnv)
+    env.observation_profile = "official_sensors"
+    env._observation_encoder_positions = (1.0, 1.0)
+    snap = _snapshot(lap=0, last_lap=0.0, collisions=0)
+    snap.v_long = 99.0  # simulator-only velocity must not reach this profile
+    snap.v_lat = 7.0
+    snap.encoder_left = 2.0
+    snap.encoder_right = 2.0
+    obs = env._policy_observation(
+        snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.1
+    )
+    expected_speed = 0.059 / 0.1
+    assert np.isclose(obs["state"][0], expected_speed / 22.88)
+    assert obs["state"][1] == 0.0
+
+
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
     complete_packet = {key: "value" for key in DEVKIT_REQUIRED_FIELDS}
     startup_packet = dict(complete_packet)

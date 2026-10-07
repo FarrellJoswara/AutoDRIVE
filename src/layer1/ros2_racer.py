@@ -86,7 +86,7 @@ def ros_messages_to_bridge_payload(
     }
 
 
-def _encoder_forward_speed_mps(
+def encoder_forward_speed_mps(
     current: tuple[float, float],
     previous: tuple[float, float],
     elapsed_s: float,
@@ -100,6 +100,11 @@ def _encoder_forward_speed_mps(
     left_delta = float(current[0]) - float(previous[0])
     right_delta = float(current[1]) - float(previous[1])
     return 0.5 * (left_delta + right_delta) * float(wheel_radius_m) / float(elapsed_s)
+
+
+# Retain the original private name for callers/tests created before this
+# measurement was shared with the Layer 2 sensor-parity observation profile.
+_encoder_forward_speed_mps = encoder_forward_speed_mps
 
 
 class RacerRos2:
@@ -237,7 +242,7 @@ class RacerRos2:
                             self._previous_encoder_receipt = encoder_receipt
                         elif encoder_receipt > self._previous_encoder_receipt:
                             elapsed = encoder_receipt - self._previous_encoder_receipt
-                            self._encoder_speed_mps = _encoder_forward_speed_mps(
+                            self._encoder_speed_mps = encoder_forward_speed_mps(
                                 positions,
                                 self._previous_encoder_positions,
                                 elapsed,

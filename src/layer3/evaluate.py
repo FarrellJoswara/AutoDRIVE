@@ -126,6 +126,10 @@ def evaluate_policy(
     connect_timeout: float = 90.0,
     output_path: Optional[Path] = None,
     action_interval_s: Optional[float] = None,
+    steering_action_scale: float = 1.0,
+    straight_throttle_gain: float = 1.0,
+    straight_throttle_steering_threshold: float = 0.15,
+    observation_profile: str = "simulator",
 ) -> Dict[str, Any]:
     """Run a deterministic policy until failure or ten laps, then save metrics."""
     from stable_baselines3 import PPO
@@ -143,6 +147,10 @@ def evaluate_policy(
         laps_per_episode=0,
         frame_skip=frame_skip,
         action_interval_s=action_interval_s,
+        steering_action_scale=steering_action_scale,
+        straight_throttle_gain=straight_throttle_gain,
+        straight_throttle_steering_threshold=straight_throttle_steering_threshold,
+        observation_profile=observation_profile,
         max_episode_steps=0,
         frontier_stagnation_seconds=10.0,
         terminate_on_collision=True,
@@ -163,6 +171,10 @@ def evaluate_policy(
             "lap_target": 10,
             "frame_skip": frame_skip,
             "action_interval_s": action_interval_s,
+            "steering_action_scale": steering_action_scale,
+            "straight_throttle_gain": straight_throttle_gain,
+            "straight_throttle_steering_threshold": straight_throttle_steering_threshold,
+            "observation_profile": observation_profile,
             "deterministic": True,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "summary": summary,
@@ -184,6 +196,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--map-id", required=True)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--action-interval-s", type=float, default=None)
+    parser.add_argument("--steering-action-scale", type=float, default=1.0)
+    parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
+    parser.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
+    parser.add_argument(
+        "--observation-profile",
+        choices=("simulator", "official_sensors"),
+        default="simulator",
+    )
     parser.add_argument("--port-start", type=int, default=4567)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--connect-timeout", type=float, default=90.0)
@@ -196,6 +216,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         map_id=args.map_id,
         frame_skip=args.frame_skip,
         action_interval_s=args.action_interval_s,
+        steering_action_scale=args.steering_action_scale,
+        straight_throttle_gain=args.straight_throttle_gain,
+        straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
+        observation_profile=args.observation_profile,
         port_start=args.port_start,
         device=args.device,
         headless=args.headless,

@@ -768,6 +768,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--action-interval-s", type=float, default=None,
         help="Opt-in simulated seconds per Bridge action; requires fixed-step player",
     )
+    p.add_argument(
+        "--steering-action-scale", type=float, default=1.0,
+        help="Scale the normalized steering command sent to Unity (0..1)",
+    )
+    p.add_argument(
+        "--straight-throttle-gain", type=float, default=1.0,
+        help="Multiply positive throttle by this factor when executed steering is below its threshold (1 disables)",
+    )
+    p.add_argument(
+        "--straight-throttle-steering-threshold", type=float, default=0.15,
+        help="Apply straight-throttle gain only when absolute executed steering is below this threshold (0..1)",
+    )
+    p.add_argument(
+        "--observation-profile",
+        choices=("simulator", "official_sensors"),
+        default="simulator",
+        help="Use full simulator telemetry or match the official allowed sensor inputs",
+    )
     # Hard cap so stuck-but-wiggling episodes still reset (~100 s @ frame_skip=4).
     p.add_argument("--max-episode-steps", type=int, default=0)
     p.add_argument("--stagnation-speed-threshold", type=float, default=0.15)
@@ -801,6 +819,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    if not math.isfinite(args.steering_action_scale) or not 0.0 <= args.steering_action_scale <= 1.0:
+        print("ERROR: --steering-action-scale must be finite and in [0, 1]")
+        return 1
+    if not math.isfinite(args.straight_throttle_gain) or not 1.0 <= args.straight_throttle_gain <= 2.0:
+        print("ERROR: --straight-throttle-gain must be finite and in [1, 2]")
+        return 1
+    if (
+        not math.isfinite(args.straight_throttle_steering_threshold)
+        or not 0.0 <= args.straight_throttle_steering_threshold <= 1.0
+    ):
+        print("ERROR: --straight-throttle-steering-threshold must be finite and in [0, 1]")
+        return 1
     if args.n_envs < 1:
         print("ERROR: --n-envs must be >= 1")
         return 1

@@ -246,6 +246,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--auto-launch", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--connect-timeout", type=float, default=90.0)
+    p.add_argument("--steering-action-scale", type=float, default=1.0)
+    p.add_argument("--straight-throttle-gain", type=float, default=1.0)
+    p.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
+    p.add_argument(
+        "--observation-profile",
+        choices=("simulator", "official_sensors"),
+        default="simulator",
+    )
     p.add_argument("--forward-scale", type=float, default=1.0)
     p.add_argument("--collision-penalty", type=float, default=0.0)
     p.add_argument("--map-id", type=str, default="none")

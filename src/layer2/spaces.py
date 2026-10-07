@@ -131,6 +131,9 @@ def snapshot_to_obs(
     prev_throttle: float,
     prev_steering: float,
     lidar_beams: int = LIDAR_BEAMS,
+    *,
+    forward_speed_mps: float | None = None,
+    lateral_speed_mps: float | None = None,
 ) -> Dict[str, np.ndarray]:
     """Build the normalized policy observation from one Bridge snapshot.
 
@@ -153,8 +156,8 @@ def snapshot_to_obs(
     a_lat = -float(snap.linear_acceleration[1])
     state_raw = np.asarray(
         [
-            float(snap.v_long) / _SPEED_SCALE_MPS,
-            float(snap.v_lat) / _SPEED_SCALE_MPS,
+            float(snap.v_long if forward_speed_mps is None else forward_speed_mps) / _SPEED_SCALE_MPS,
+            float(snap.v_lat if lateral_speed_mps is None else lateral_speed_mps) / _SPEED_SCALE_MPS,
             yaw_rate / _YAW_RATE_SCALE_RAD_S,
             a_long / _ACCEL_SCALE_M_S2,
             a_lat / _ACCEL_SCALE_M_S2,

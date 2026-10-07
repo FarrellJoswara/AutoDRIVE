@@ -43,6 +43,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from src.layer1.racer import Racer
+from src.layer1.ros2_racer import encoder_forward_speed_mps
 from src.layer1.telemetry import TelemetrySnapshot
 
 from .rewards import RewardConfig, compute_reward_components
@@ -152,6 +153,12 @@ class AutoDriveEnv(gym.Env):
         racer: Optional[Racer] = None,
         # Opt-in acknowledged simulation interval; None preserves legacy timing.
         action_interval_s: Optional[float] = None,
+        # Scale the normalized steering command before sending it to Unity.
+        steering_action_scale: float = 1.0,
+        # Optional throttle gain when the executed steering command is small.
+        straight_throttle_gain: float = 1.0,
+        straight_throttle_steering_threshold: float = 0.15,
+        observation_profile: str = "simulator",
     ) -> None:
         # Required Gymnasium base init (seeding hooks, etc.).
         super().__init__()
@@ -170,9 +177,15 @@ class AutoDriveEnv(gym.Env):
                 f"Layer 2 v1 requires full {LIDAR_BEAMS}-beam LiDAR "
                 f"(no downsampling); got {lidar_beams}"
             )
+        if observation_profile not in ("simulator", "official_sensors"):
+            raise ValueError(
+                "observation_profile must be 'simulator' or 'official_sensors'"
+            )
 
         # Store knobs as instance attributes (used every step).
         self.frame_skip = int(frame_skip)
+        self.observation_profile = observation_profile
+        self._observation_encoder_positions: Optional[Tuple[float, float]] = None
         injected_interval = getattr(racer, "action_interval_s", None)
         if racer is not None and action_interval_s is not None:
             if injected_interval is None or not np.isclose(
@@ -187,6 +200,20 @@ class AutoDriveEnv(gym.Env):
             not np.isfinite(self.action_interval_s) or self.action_interval_s <= 0
         ):
             raise ValueError("action_interval_s must be finite and positive")
+        self.steering_action_scale = float(steering_action_scale)
+        if not np.isfinite(self.steering_action_scale) or not 0.0 <= self.steering_action_scale <= 1.0:
+            raise ValueError("steering_action_scale must be finite and in [0, 1]")
+        self.straight_throttle_gain = float(straight_throttle_gain)
+        if not np.isfinite(self.straight_throttle_gain) or not 1.0 <= self.straight_throttle_gain <= 2.0:
+            raise ValueError("straight_throttle_gain must be finite and in [1, 2]")
+        self.straight_throttle_steering_threshold = float(straight_throttle_steering_threshold)
+        if (
+            not np.isfinite(self.straight_throttle_steering_threshold)
+            or not 0.0 <= self.straight_throttle_steering_threshold <= 1.0
+        ):
+            raise ValueError(
+                "straight_throttle_steering_threshold must be finite and in [0, 1]"
+            )
         self.max_episode_steps = int(max_episode_steps)
         self.stagnation_speed_threshold = float(stagnation_speed_threshold)
         self.stagnation_steps = int(stagnation_steps)
@@ -373,6 +400,7 @@ class AutoDriveEnv(gym.Env):
         self._prev_collision_flag = bool(snap.collision)
         self._pending_collision_event = reset_collision_pending
         self._last_snap = snap
+        self._observation_encoder_positions = (snap.encoder_left, snap.encoder_right)
         progress_state = None
         progress_now = self._progress_time(snap)
         if self.route_progress is not None:
@@ -394,7 +422,9 @@ class AutoDriveEnv(gym.Env):
                 ) from exc
         self.lap_tracker.reset(progress_state, progress_now)
 
-        obs = snapshot_to_obs(snap, 0.0, 0.0, lidar_beams=self.lidar_beams)
+        obs = self._policy_observation(
+            snap, 0.0, 0.0, lidar_beams=self.lidar_beams, elapsed_s=0.0
+        )
         info = self._build_info(snap, reward=0.0, collision_event=False)
         return obs, info
 
@@ -416,7 +446,17 @@ class AutoDriveEnv(gym.Env):
         # Coerce / clip to legal continuous controls.
         action = np.asarray(action, dtype=np.float32).reshape(2)
         throttle = float(np.clip(action[0], -1.0, 1.0))
-        steering = float(np.clip(action[1], -1.0, 1.0))
+        steering = float(
+            np.clip(action[1], -1.0, 1.0) * self.steering_action_scale
+        )
+        # A small configurable gain lets the car use more of its available
+        # throttle on straights while leaving cornering and reverse commands
+        # untouched. With the default gain of 1.0 this mapping is neutral.
+        if (
+            throttle > 0.0
+            and abs(steering) < self.straight_throttle_steering_threshold
+        ):
+            throttle = min(1.0, throttle * self.straight_throttle_gain)
 
         # Frame skip: repeat the SAME action for N Layer 1 Bridge responses.
         # Explicit mode acknowledges the same simulated interval per response.
@@ -557,11 +597,12 @@ class AutoDriveEnv(gym.Env):
         reward = reward_components["total"]
         self._positive_episode_return += max(0.0, float(reward_components["route_progress"]))
 
-        obs = snapshot_to_obs(
+        obs = self._policy_observation(
             snap,
             prev_throttle=throttle,
             prev_steering=steering,
             lidar_beams=self.lidar_beams,
+            elapsed_s=step_duration_s,
         )
         info = self._build_info(
             snap,
@@ -606,6 +647,37 @@ class AutoDriveEnv(gym.Env):
         self._last_snap = snap
 
         return obs, reward, terminated, truncated, info
+
+    def _policy_observation(
+        self,
+        snap: TelemetrySnapshot,
+        prev_throttle: float,
+        prev_steering: float,
+        *,
+        lidar_beams: int,
+        elapsed_s: float,
+    ) -> ObsType:
+        if self.observation_profile == "simulator":
+            return snapshot_to_obs(
+                snap, prev_throttle, prev_steering, lidar_beams=lidar_beams
+            )
+
+        positions = (float(snap.encoder_left), float(snap.encoder_right))
+        previous = self._observation_encoder_positions
+        speed = (
+            0.0 if previous is None else encoder_forward_speed_mps(
+                positions, previous, elapsed_s
+            )
+        )
+        self._observation_encoder_positions = positions
+        return snapshot_to_obs(
+            snap,
+            prev_throttle,
+            prev_steering,
+            lidar_beams=lidar_beams,
+            forward_speed_mps=speed,
+            lateral_speed_mps=0.0,
+        )
 
     def _progress_time(self, snap: TelemetrySnapshot) -> float:
         # Bridge receipt timestamps are wall-clock based. Exclude PPO's policy
