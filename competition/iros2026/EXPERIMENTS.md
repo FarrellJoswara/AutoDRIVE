@@ -144,3 +144,15 @@ lap and neither is a score comparison.
   Steering inversion made the short-run result worse; keep the default
   `normal` mapping. This is a failed diagnostic, not a score comparison.
 - Raw report: `results/steering_invert_20261007.json`.
+
+### Checkpoint transfer comparison
+
+- Date: 2026-10-07; fresh official simulator; same 35-second cap, forward
+  throttle mapping, and normal steering as the first diagnostic.
+- Compared `optimization_action50ms_champion_20261006_20261007_011022` with
+  `optimization_minimal_updates_20261005` while keeping all controls fixed.
+- Result: both completed 0 laps and recorded 35 collisions in 35 seconds.
+  The comparison checkpoint selected reverse 98.6% of the time and had mean
+  policy throttle -0.973, nearly identical to the first checkpoint's 98.5%
+  and -0.971. Changing checkpoints alone did not resolve transfer behavior.
+- Raw report: `results/checkpoint_compare_20261007.json`.
