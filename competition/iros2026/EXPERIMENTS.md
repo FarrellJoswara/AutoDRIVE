@@ -305,3 +305,13 @@ lap and neither is a score comparison.
   map geometry, pose, lap count, or collision count. Unit tests cover obstacle
   side, steering direction, and speed response. Treat its official-image run as
   a control-path diagnostic, not a record candidate.
+- Outcome: with normal steering it ran 30 seconds at 20.25 Hz, completed 0
+  laps, and recorded 33 raw collisions. Outputs were adaptive (steering std
+  0.201, throttle std 0.083) and mean encoder-derived speed was about 5.70
+  m/s, so the constant-output PPO behavior is not simply forced by the bridge.
+  The steering-inverted repeat completed 0 laps and recorded 42 collisions in
+  30 seconds at 19.72 Hz. Steering inversion therefore worsened this diagnostic;
+  retain the normal actuator direction. These bounded samples are diagnostics,
+  not official race scores. Raw reports:
+  `results/lidar_gap_diag_30s_20261007.json` and
+  `results/lidar_gap_invert_diag_30s_20261007.json`.
