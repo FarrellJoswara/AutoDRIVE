@@ -449,3 +449,24 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   score; reject `abs(throttle)` as a transfer fix. Report and raw container log:
   `results/official_abs_throttle_partial_20261007.json` and
   `results/official_abs_throttle_partial_20261007.log`.
+- One-factor steering-scale transfer (`forward_only`, scale 0.92; same
+  checkpoint, throttle gain, official images, and sensors): warm-up took
+  183.762 s with 3 collisions. The first three scored laps took 120.788,
+  121.621, and 121.871 s; the attempt reached 11 race collisions and was
+  disqualified at 4 total laps (including warm-up). It therefore has no valid
+  score. Compared with the 0.946 forward-only diagnostic's first two laps
+  (121.805 and 122.145 s, 6 race collisions by lap 2), the 0.92 scale improved
+  those two laps by about 1.54 s combined but had the same 6 race collisions by
+  lap 2 and was much slower to finish warm-up. Reject it as a candidate. The official
+  cadence was 18.91 Hz (median 52.31 ms) while reported LiDAR scans remained at
+  40 Hz. Report and full run log:
+  `results/official_forward_only_steer092_900s_20261007.json` and
+  `results/official_forward_only_steer092_900s_20261007.log`.
+- Across the official PPO transfers, the model emits reverse throttle on
+  approximately half its actions. `forward_only` maps those outputs to zero,
+  and yields an applied-throttle mean of about 0.44. Absolute-magnitude
+  remapping instead causes a high-collision warm-up failure. This is evidence
+  that output remapping alone cannot safely repair the model; a controlled
+  continuation should train with the official forward-only action semantics
+  and the official sensor observation profile, while leaving all unrelated
+  reward/PPO settings fixed.
