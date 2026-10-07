@@ -5,6 +5,32 @@ competition image tags. Only the final policy path is intended for competition
 use. A valid score comparison also requires allowed sensor inputs, no restricted
 reset command, a fresh simulator process, and a complete race.
 
+## Benchmark target and local-training boundary
+
+- The official IROS 2026 page now publishes the completed results. Phase 1's
+  fastest result was 49.83 s (4.94 s best lap); Phase 2's fastest result was
+  71.82 s (7.16 s best lap), with zero collisions. Phase 2 is the relevant
+  benchmark for the unseen-track time-attack objective.
+- The rules prohibit modifying the competition framework and prohibit using
+  restricted ground-truth streams such as IPS, odometry, TF, reset, lap-count,
+  and collision-count in the submitted policy. The technical guide lists
+  LiDAR, camera, IMU, wheel encoders, and actuator feedback as policy inputs.
+- The normal `docker-compose.yml` training stack uses this repository's own
+  Unity player and Layer 2 reward signals derived from internal route state. It
+  remains useful for development, but its lap times cannot establish an
+  official-compatible result. Competition claims require the separate
+  `competition/iros2026` path and exact official simulator/Devkit image tags.
+- Date: 2026-10-07. A fresh PPO trial was briefly started with the official
+  sensor observation profile but the local custom simulator/reward stack. It
+  reached 4,096 steps / one PPO update (KL 0.00268, clip fraction 0.019,
+  explained variance -0.00072, action std 0.80) and was stopped before an
+  evaluation. It is preserved as `official_sensor_fresh_lr1e4_20261007_*` in
+  `logs/rl`; it has no race result and is not a candidate checkpoint. This
+  confirms that merely switching observations does not make the custom training
+  stack a competition-faithful benchmark.
+- Next experiments should target the official runtime and allowed sensor path;
+  keep local multi-environment training results labeled as development-only.
+
 ## Transfer baseline: callback-rate control
 
 - Date: 2026-10-07
