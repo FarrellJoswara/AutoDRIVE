@@ -31,7 +31,10 @@ class Settings(BaseModel):
         "frontier_speed", "reward_per_simulated_second", "total_reward"
     ] = "total_reward"
     ppo_learning_rate: float = Field(default=3e-4, gt=0, le=0.01)
+    ppo_n_steps: int = Field(default=1024, ge=64, le=8192, multiple_of=64)
     ppo_n_epochs: int = Field(default=8, ge=1, le=20)
+    ppo_gamma: float = Field(default=0.99, gt=0, le=1)
+    ppo_gae_lambda: float = Field(default=0.95, ge=0, le=1)
     exploration_std_min: float = Field(default=0.2, gt=0)
     exploration_std_max: float = Field(default=0.8, gt=0)
     exploration_improvement_scale: float = Field(default=0.9, gt=0, le=1)
@@ -49,6 +52,7 @@ class Settings(BaseModel):
     action_interval_s: Optional[float] = Field(default=None, gt=0)
     observation_profile: Literal["simulator", "official_sensors"] = "simulator"
     throttle_mode: Literal["bidirectional", "forward_only"] = "bidirectional"
+    policy_architecture: Literal["lidar_cnn", "lidar_cnn_pooled"] = "lidar_cnn"
     steering_action_scale: float = Field(default=1.0, ge=0, le=1)
     straight_throttle_gain: float = Field(default=1.0, ge=1.0, le=2.0)
     straight_throttle_steering_threshold: float = Field(default=0.15, ge=0.0, le=1.0)
@@ -185,8 +189,16 @@ class Settings(BaseModel):
             str(self.evaluation_runs_per_snapshot),
             "--learning-rate",
             str(self.ppo_learning_rate),
+            "--n-steps",
+            str(self.ppo_n_steps),
             "--n-epochs",
             str(self.ppo_n_epochs),
+            "--policy-architecture",
+            self.policy_architecture,
+            "--gamma",
+            str(self.ppo_gamma),
+            "--gae-lambda",
+            str(self.ppo_gae_lambda),
             "--evaluation-metric",
             self.evaluation_metric,
             "--exploration-std-min",

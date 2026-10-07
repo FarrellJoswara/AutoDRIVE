@@ -147,6 +147,7 @@ export interface Settings {
   action_interval_s: number | null;
   observation_profile: "simulator" | "official_sensors";
   throttle_mode: "bidirectional" | "forward_only";
+  policy_architecture: "lidar_cnn" | "lidar_cnn_pooled";
   steering_action_scale: number;
   straight_throttle_gain: number;
   straight_throttle_steering_threshold: number;

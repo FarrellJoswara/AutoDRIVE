@@ -456,6 +456,23 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             <small className="meta">For race training, forward-only removes reverse actions while retaining continuous throttle control.</small>
           </label>
           <label className="field">
+            Policy network
+            <RewardTip text="The legacy LiDAR CNN flattens its full scan feature map into a large dense layer. The pooled LiDAR CNN summarizes 64 ordered scan sectors with average and nearest-obstacle pooling, reducing the dense input while preserving left-to-right geometry. Changing architectures requires a fresh policy; checkpoints cannot be resumed across architectures." />
+            <select
+              value={form.policy_architecture}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  policy_architecture: e.target.value as Settings["policy_architecture"],
+                }))
+              }
+            >
+              <option value="lidar_cnn">Legacy LiDAR CNN</option>
+              <option value="lidar_cnn_pooled">Pooled LiDAR CNN</option>
+            </select>
+            <small className="meta">Pooled architecture requires a fresh run and preserves the legacy checkpoint format.</small>
+          </label>
+          <label className="field">
             Simulator mode
             <select
               value={form.simulator_mode}

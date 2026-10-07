@@ -526,6 +526,10 @@ def train(
     exploration_plateau_scale: float = 1.1,
     learning_rate: float = _PPO_LR,
     n_epochs: int = _PPO_N_EPOCHS,
+    n_steps: int = _PPO_N_STEPS,
+    gamma: float = _PPO_GAMMA,
+    gae_lambda: float = _PPO_GAE_LAMBDA,
+    policy_architecture: str = "lidar_cnn",
 ) -> Path:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -561,7 +565,21 @@ def train(
     try:
         if resume is not None:
             print(f"resuming from {resume}")
-            model = PPO.load(str(resume), env=vec_env, device=resolved_device)
+            model = PPO.load(
+                str(resume), env=vec_env, device=resolved_device,
+                custom_objects={"n_steps": int(n_steps)},
+            )
+            extractor_name = type(model.policy.features_extractor).__name__
+            checkpoint_architecture = {
+                "LidarStateExtractor": "lidar_cnn",
+                "PooledLidarStateExtractor": "lidar_cnn_pooled",
+            }.get(extractor_name)
+            if checkpoint_architecture != policy_architecture:
+                raise ValueError(
+                    "Cannot change policy architecture while resuming: "
+                    f"checkpoint uses {checkpoint_architecture or extractor_name}, "
+                    f"requested {policy_architecture}. Start a fresh run for an architecture change."
+                )
             # A resumed archive carries its old optimizer schedule; apply the
             # explicitly selected run settings to both the PPO attributes and
             # optimizer before the first update.
@@ -587,6 +605,10 @@ def train(
                 tensorboard_log=str(tb_dir),
                 learning_rate=learning_rate,
                 n_epochs=n_epochs,
+                n_steps=n_steps,
+                gamma=gamma,
+                gae_lambda=gae_lambda,
+                policy_architecture=policy_architecture,
             )
 
         config = {
@@ -621,17 +643,18 @@ def train(
             "env_kwargs": env_kwargs,
             "ppo": {
                 "learning_rate": float(learning_rate),
-                "n_steps": _PPO_N_STEPS,
+                "n_steps": int(n_steps),
                 "batch_size": _PPO_BATCH_SIZE,
                 "n_epochs": int(n_epochs),
-                "gamma": _PPO_GAMMA,
-                "gae_lambda": _PPO_GAE_LAMBDA,
+                "gamma": float(gamma),
+                "gae_lambda": float(gae_lambda),
                 "clip_range": _PPO_CLIP_RANGE,
                 "ent_coef": _PPO_ENT_COEF,
                 "vf_coef": _PPO_VF_COEF,
                 "max_grad_norm": _PPO_MAX_GRAD_NORM,
                 "net_arch": {"pi": [128, 128], "vf": [128, 128]},
                 "features_dim": 256,
+                "policy_architecture": policy_architecture,
             },
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "resume": str(resume) if resume else None,
@@ -745,7 +768,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--evaluation-every-timesteps", type=int, default=50_000)
     p.add_argument("--evaluation-runs-per-snapshot", type=int, default=3)
     p.add_argument("--learning-rate", type=float, default=_PPO_LR)
+    p.add_argument(
+        "--policy-architecture",
+        choices=("lidar_cnn", "lidar_cnn_pooled"),
+        default="lidar_cnn",
+        help="Legacy flattened LiDAR CNN or sector-pooled LiDAR CNN",
+    )
+    p.add_argument("--n-steps", type=int, default=_PPO_N_STEPS)
     p.add_argument("--n-epochs", type=int, default=_PPO_N_EPOCHS)
+    p.add_argument(
+        "--gamma", type=float, default=_PPO_GAMMA,
+        help="PPO discount factor; larger values retain credit over longer driving horizons",
+    )
+    p.add_argument(
+        "--gae-lambda", type=float, default=_PPO_GAE_LAMBDA,
+        help="PPO GAE trace factor; larger values propagate delayed outcomes farther back",
+    )
     p.add_argument(
         "--evaluation-metric",
         choices=("frontier_speed", "reward_per_simulated_second", "total_reward"),
@@ -869,7 +907,11 @@ def main(argv: Optional[list] = None) -> int:
         exploration_improvement_scale=args.exploration_improvement_scale,
         exploration_plateau_scale=args.exploration_plateau_scale,
         learning_rate=args.learning_rate,
+        policy_architecture=args.policy_architecture,
+        n_steps=args.n_steps,
         n_epochs=args.n_epochs,
+        gamma=args.gamma,
+        gae_lambda=args.gae_lambda,
     )
     print(f"done: {zip_path}")
     return 0
