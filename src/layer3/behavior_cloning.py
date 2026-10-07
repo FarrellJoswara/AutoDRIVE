@@ -100,12 +100,15 @@ def collect_policy_demonstrations(
     *,
     steps: int,
     output_path: Path,
+    behavior_policy: Any = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, int]]:
     """Record sensor observations paired with a privileged PPO teacher's actions.
 
     The running environments return the student observations. A separate
     Layer 2 diagnostic method supplies the teacher's simulator-profile input;
     only the student observations and normalized action labels are persisted.
+    If ``behavior_policy`` is provided, it controls the car while the teacher
+    still supplies labels, implementing a DAgger-style on-policy data round.
     """
     observations = vec_env.reset()
     lidar_rows = []
@@ -125,15 +128,20 @@ def collect_policy_demonstrations(
             )
             for key in ("lidar", "state")
         }
-        actions, _ = teacher.predict(teacher_batch, deterministic=True)
-        actions = np.asarray(actions, dtype=np.float32).reshape(n_envs, 2)
+        labels, _ = teacher.predict(teacher_batch, deterministic=True)
+        labels = np.asarray(labels, dtype=np.float32).reshape(n_envs, 2)
+        if behavior_policy is None:
+            actions = labels
+        else:
+            actions, _ = behavior_policy.predict(observations, deterministic=True)
+            actions = np.asarray(actions, dtype=np.float32).reshape(n_envs, 2)
         lidar_rows.extend(
             np.asarray(observations["lidar"], dtype=np.float32).copy()
         )
         state_rows.extend(
             np.asarray(observations["state"], dtype=np.float32).copy()
         )
-        action_rows.extend(actions.copy())
+        action_rows.extend(labels.copy())
         observations, _, _, _ = vec_env.step(actions)
         if (step_index + 1) % report_every == 0 or step_index + 1 == total_steps:
             print(
@@ -169,13 +177,15 @@ def behavior_clone_actor(
     if count < 2:
         raise ValueError("at least two expert transitions are required for behavior cloning")
 
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(count)
+    # Keep neighboring time samples together: random frame splits leak nearly
+    # identical consecutive observations across train and validation and make
+    # the reported imitation error look far better than real rollout transfer.
     validation_count = max(1, int(round(count * 0.1)))
-    validation_indices = order[:validation_count]
-    training_indices = order[validation_count:]
+    validation_indices = np.arange(count - validation_count, count)
+    training_indices = np.arange(0, count - validation_count)
     if len(training_indices) == 0:
-        training_indices, validation_indices = order, order[:1]
+        training_indices, validation_indices = np.arange(count), np.arange(1)
+    rng = np.random.default_rng(seed)
 
     policy = model.policy
     policy.set_training_mode(True)

@@ -101,6 +101,46 @@ class BehaviorCloningTests(unittest.TestCase):
             with np.load(path) as saved:
                 self.assertEqual(set(saved.files), {"lidar", "state", "actions"})
 
+    def test_dagger_collection_executes_student_but_stores_teacher_labels(self) -> None:
+        class FakeVecEnv:
+            num_envs = 1
+
+            def reset(self):
+                return {
+                    "lidar": np.full((1, LIDAR_BEAMS), 0.25, np.float32),
+                    "state": np.full((1, STATE_DIM), 0.5, np.float32),
+                }
+
+            def env_method(self, method):
+                return [{
+                    "lidar": np.full(LIDAR_BEAMS, 0.9, np.float32),
+                    "state": np.full(STATE_DIM, 0.9, np.float32),
+                }]
+
+            def step(self, actions):
+                self.executed_actions = actions.copy()
+                return self.reset(), np.zeros(1), np.zeros(1, dtype=bool), [{}]
+
+        class FakePolicy:
+            def __init__(self, action):
+                self.action = np.asarray([action], dtype=np.float32)
+
+            def predict(self, observations, deterministic):
+                self.deterministic = deterministic
+                return self.action.copy(), None
+
+        env = FakeVecEnv()
+        with TemporaryDirectory() as directory:
+            dataset, _ = collect_policy_demonstrations(
+                env,
+                FakePolicy([0.1, -0.2]),
+                steps=1,
+                output_path=Path(directory) / "dagger.npz",
+                behavior_policy=FakePolicy([0.7, 0.6]),
+            )
+        self.assertTrue(np.allclose(env.executed_actions[0], [0.7, 0.6]))
+        self.assertTrue(np.allclose(dataset["actions"][0], [0.1, -0.2]))
+
 
 if __name__ == "__main__":
     unittest.main()

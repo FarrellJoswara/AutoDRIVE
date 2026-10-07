@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -21,6 +23,14 @@ from src.layer3.train import _resolve_device, make_model
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--teacher", type=Path, required=True)
+    parser.add_argument(
+        "--student-policy", type=Path, default=None,
+        help="optional sensor-only policy to drive a DAgger data-collection round",
+    )
+    parser.add_argument(
+        "--previous-dataset", type=Path, default=None,
+        help="optional earlier sensor/action NPZ to combine with new labels",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--steps", type=int, default=10_000,
@@ -42,6 +52,10 @@ def main() -> int:
         parser.error("--n-envs and --steps must be positive")
     if not args.teacher.is_file():
         parser.error(f"teacher checkpoint does not exist: {args.teacher}")
+    if args.student_policy is not None and not args.student_policy.is_file():
+        parser.error(f"student checkpoint does not exist: {args.student_policy}")
+    if args.previous_dataset is not None and not args.previous_dataset.is_file():
+        parser.error(f"previous dataset does not exist: {args.previous_dataset}")
 
     from stable_baselines3 import PPO
     from src.layer3.envs import make_vec_env
@@ -67,17 +81,36 @@ def main() -> int:
     )
     try:
         teacher = PPO.load(str(args.teacher), device=device)
+        student = (
+            PPO.load(str(args.student_policy), env=env, device=device)
+            if args.student_policy is not None else None
+        )
         dataset_path = args.out / "sensor_demonstrations.npz"
         dataset, collection = collect_policy_demonstrations(
-            env, teacher, steps=args.steps, output_path=dataset_path
-        )
-        student = make_model(
             env,
-            device=device,
-            seed=args.seed,
-            tensorboard_log=None,
-            policy_architecture="lidar_cnn",
+            teacher,
+            steps=args.steps,
+            output_path=dataset_path,
+            behavior_policy=student,
         )
+        if args.previous_dataset is not None:
+            with np.load(args.previous_dataset) as previous:
+                previous_rows = {key: previous[key] for key in ("lidar", "state", "actions")}
+            if any(previous_rows[key].shape[1:] != dataset[key].shape[1:] for key in previous_rows):
+                raise ValueError("previous dataset observation/action shapes do not match the new collection")
+            dataset = {
+                key: np.concatenate((previous_rows[key], dataset[key]), axis=0)
+                for key in ("lidar", "state", "actions")
+            }
+            np.savez_compressed(dataset_path, **dataset)
+        if student is None:
+            student = make_model(
+                env,
+                device=device,
+                seed=args.seed,
+                tensorboard_log=None,
+                policy_architecture="lidar_cnn",
+            )
         cloning = behavior_clone_actor(
             student,
             dataset,
@@ -90,6 +123,12 @@ def main() -> int:
         student.save(str(model_path))
         report = {
             "teacher_checkpoint": str(args.teacher.resolve()),
+            "student_policy_drove_collection": (
+                str(args.student_policy.resolve()) if args.student_policy else None
+            ),
+            "previous_dataset": (
+                str(args.previous_dataset.resolve()) if args.previous_dataset else None
+            ),
             "student_checkpoint": str(model_path.with_suffix(".zip")),
             "dataset": str(dataset_path),
             "map_id": args.map_id,

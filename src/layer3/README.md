@@ -119,7 +119,11 @@ route progress, collision count, or teacher observation. The resulting
 `--observation-profile official_sensors`; distillation itself does not change
 the default training flow or competition inference path. This is a transfer
 hypothesis, not a competition result, and it requires a successful like-for-like
-evaluation before promotion.
+evaluation before promotion. A later DAgger round can add
+`--student-policy <sensor_student.zip>` and
+`--previous-dataset <sensor_demonstrations.npz>`: the student then drives while
+the teacher labels the states it actually visits. Cloning validation holds out
+the final chronological segment instead of randomly mixing adjacent frames.
 
 ---
 
