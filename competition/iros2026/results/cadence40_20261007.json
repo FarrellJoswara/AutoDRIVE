@@ -1,0 +1,51 @@
+{
+  "model": "/models/champion.zip",
+  "created_utc": "2026-10-07T08:27:06.145295+00:00",
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "deterministic": true,
+  "warmup_laps_ignored": 1,
+  "race_laps": 10,
+  "runs": [
+    {
+      "race_laps_completed": 10,
+      "race_lap_times_s": [
+        13.160699844360352,
+        13.067700386047363,
+        13.381799697875977,
+        13.150699615478516,
+        12.986599922180176,
+        13.1766996383667,
+        12.857600212097168,
+        13.112700462341309,
+        12.745499610900879,
+        13.156700134277344
+      ],
+      "race_time_s": 130.79669952392578,
+      "race_collisions": 31,
+      "collision_penalty_s": 4960.0,
+      "adjusted_race_time_s": null,
+      "disqualified": true,
+      "best_lap_s": 12.745499610900879,
+      "mean_lap_s": 13.079669952392578,
+      "attempt": 1,
+      "steps": 8776,
+      "warmup_lap_times_s": [
+        31.941099166870117
+      ],
+      "warmup_collisions": 3,
+      "raw_collision_count_at_finish": 34,
+      "race_collision_baseline": 3,
+      "total_laps_since_start": 11,
+      "stop_reason": "race_complete",
+      "wall_duration_s": 143.95299278903985,
+      "mean_control_rate_hz": 60.964047678545846,
+      "median_control_interval_s": 0.016653937054798007,
+      "median_reported_lidar_scan_rate_hz": 39.99999940395356
+    }
+  ],
+  "completed_attempts": 0,
+  "median_adjusted_race_time_s": null,
+  "best_adjusted_race_time_s": null
+}
