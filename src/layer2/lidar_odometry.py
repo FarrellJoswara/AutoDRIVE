@@ -14,6 +14,51 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 
+_MAX_BODY_SPEED_MPS = 22.88
+_SPEED_INNOVATION_TOLERANCE_MPS = 1.5
+
+
+def acceleration_consistent_lidar_speed(
+    measured_speed_mps: float,
+    previous_speed_mps: float,
+    forward_acceleration_mps2: float,
+    elapsed_s: float,
+) -> float:
+    """Reject scan-matching speed jumps inconsistent with the IMU.
+
+    A LiDAR scan can match a different nearby wall configuration after a
+    checkpoint reset or in a repetitive corridor. Such a match can be marked
+    geometrically valid while implying an impossible one-frame velocity jump.
+    The IMU prediction provides a sensor-only plausibility check. A near-zero
+    LiDAR estimate is retained as a stop/reset observation even if it conflicts
+    with the prediction, so a checkpoint teleport cannot leave stale speed.
+    """
+    measured = float(measured_speed_mps)
+    previous = float(previous_speed_mps)
+    acceleration = float(forward_acceleration_mps2)
+    dt = float(elapsed_s)
+    if not np.isfinite([measured, previous, acceleration, dt]).all() or dt <= 0.0:
+        return 0.0
+
+    predicted = float(np.clip(
+        previous + acceleration * dt,
+        -_MAX_BODY_SPEED_MPS,
+        _MAX_BODY_SPEED_MPS,
+    ))
+    tolerance = max(
+        _SPEED_INNOVATION_TOLERANCE_MPS,
+        abs(acceleration) * dt * 1.5 + 0.25,
+    )
+    if abs(measured - predicted) <= tolerance:
+        return float(np.clip(measured, -_MAX_BODY_SPEED_MPS, _MAX_BODY_SPEED_MPS))
+
+    # A near-zero scan displacement is evidence that the body stopped or was
+    # teleported to a checkpoint. Do not preserve a stale pre-reset velocity.
+    if abs(measured) <= 0.75:
+        return 0.0
+    return predicted
+
+
 @dataclass(frozen=True)
 class ScanMotion:
     """Estimated relative motion from the previous scan to the current scan."""

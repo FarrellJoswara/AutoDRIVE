@@ -773,3 +773,39 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `champion_66982_headless_trace_0945_20261007.json`.
   Next use the aligned traces to isolate turn response and safety learning
   before selecting another training change.
+
+### LiDAR speed plausibility guard: matched official-image screen — not promoted
+
+- Date: 2026-10-07. Analysis of the 500-step official-image trace found valid
+  LiDAR scan matches producing one-frame forward-speed jumps as large as
+  10.46 m/s while the IMU reported only about 5.3 m/s² acceleration. The same
+  trace also contained several alternating 7–10 m/s jumps without collision
+  events, consistent with scan-matching aliasing rather than vehicle dynamics.
+- Added a Layer 2, sensor-only plausibility guard: compare scan-derived speed
+  against the previous estimate integrated with permitted forward IMU
+  acceleration; reject implausible innovations and accept near-zero scan motion
+  as a stop/reset. The identical guard is applied in local `official_sensors`
+  training and the official race environment, so a continuation can train and
+  evaluate on the same state transform. No collision counter or simulator pose
+  is sent to the policy.
+- Matched transfer screen: same `ppo_80000_steps.zip` candidate, fresh official
+  simulator/API image processes, 50 ms control, steering scale 0.945, and
+  negative-throttle-to-zero mapping. Two filtered trials completed one timed
+  lap in 13.926 and 14.576 s; three unfiltered controls recorded 15.544,
+  13.971, and 13.794 s. Both conditions hit 11 race collisions and were
+  disqualified after one lap. The filtered median (14.251 s) was slower than
+  the control median (13.971 s), so this did not improve the measured lap-time
+  objective and is not a champion result.
+- The guard did remove the extreme speed observations in this small sample:
+  filtered trace maximum absolute estimated speed was 6.64 m/s with no samples
+  above 10 m/s, versus 10.62 m/s and two samples above 10 m/s in the matched
+  control. This supports better physical plausibility but not better driving.
+  Do not promote the existing checkpoint on this basis; the next meaningful test
+  is a controlled continuation trained with the same guarded observation path,
+  then repeated full official races. Preserve the 66.9818 s local champion and
+  all existing checkpoints.
+- Raw reports: `results/lidar_speed_filtered_candidate_official_20261007.json`,
+  `results/lidar_speed_filtered_candidate_repeat2_20261007.json`,
+  `results/lidar_speed_unfiltered_candidate_official_control_20261007.json`,
+  `results/lidar_speed_unfiltered_candidate_repeat2_20261007.json`, and
+  `results/lidar_speed_unfiltered_candidate_repeat3_20261007.json`.

@@ -101,7 +101,10 @@ def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
 
 def _policy_observation_trace(observation: Dict[str, Any]) -> Dict[str, Any]:
     """Return compact diagnostics from only the observation given to the policy."""
-    lidar_values = [float(value) for value in observation["lidar"]]
+    lidar = observation["lidar"]
+    if getattr(lidar, "ndim", 1) > 1:
+        lidar = lidar[-1]
+    lidar_values = [float(value) for value in lidar]
     state_values = [float(value) for value in observation["state"]]
     left_end = max(1, len(lidar_values) // 3)
     right_start = min(len(lidar_values) - 1, (2 * len(lidar_values)) // 3)
@@ -209,6 +212,7 @@ def evaluate_attempt(
         policy_steering.append(command[1])
         obs, _, terminated, _, info = env.step(action)
         if len(action_trace) < max(0, int(trace_steps)):
+            next_observation_trace = _policy_observation_trace(obs)
             action_trace.append({
                 "step": steps,
                 **trace_observation,
@@ -216,6 +220,12 @@ def evaluate_attempt(
                 "policy_steering": command[1],
                 "applied_throttle": float(info.get("throttle_command", 0.0)),
                 "applied_steering": float(info.get("steering_command", 0.0)),
+                "next_observation_state": next_observation_trace["observation_state"],
+                "next_lidar_min_left": next_observation_trace["lidar_min_left"],
+                "next_lidar_min_front": next_observation_trace["lidar_min_front"],
+                "next_lidar_min_right": next_observation_trace["lidar_min_right"],
+                "evaluation_collision_event": bool(info.get("collision_event", False)),
+                "evaluation_race_collisions": int(info.get("race_collisions", 0)),
                 **{key: float(value) for key, value in debug.items()},
             })
         applied_throttle.append(float(info.get("throttle_command", 0.0)))

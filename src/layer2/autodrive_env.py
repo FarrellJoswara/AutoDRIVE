@@ -47,7 +47,7 @@ from src.layer1.telemetry import TelemetrySnapshot
 
 from .rewards import RewardConfig, compute_reward_components
 from .lap_tracker import LapTracker, map_lap_gate_config
-from .lidar_odometry import LidarOdometry
+from .lidar_odometry import LidarOdometry, acceleration_consistent_lidar_speed
 from .route_progress import RouteProgressTracker, map_centerline_path
 from .spaces import (
     LIDAR_BEAMS,
@@ -200,6 +200,7 @@ class AutoDriveEnv(gym.Env):
         self.throttle_mode = throttle_mode
         self._lidar_speed_estimator = LidarOdometry()
         self._observation_heading_yaw: Optional[float] = None
+        self._last_lidar_forward_speed_mps = 0.0
         injected_interval = getattr(racer, "action_interval_s", None)
         if racer is not None and action_interval_s is not None:
             if injected_interval is None or not np.isclose(
@@ -419,6 +420,7 @@ class AutoDriveEnv(gym.Env):
         self._last_snap = snap
         self._lidar_speed_estimator.reset()
         self._observation_heading_yaw = None
+        self._last_lidar_forward_speed_mps = 0.0
         if self.observation_profile == "official_sensors_history":
             initial_scan = _normalize_lidar(snap, lidar_beams=self.lidar_beams)
             self._lidar_history = [initial_scan.copy() for _ in range(3)]
@@ -699,7 +701,15 @@ class AutoDriveEnv(gym.Env):
             yaw_delta_rad=yaw_delta,
         )
         self._observation_heading_yaw = float(snap.heading_yaw)
-        speed = motion.forward_m if motion.valid else 0.0
+        speed = 0.0
+        if motion.valid:
+            speed = acceleration_consistent_lidar_speed(
+                motion.forward_m,
+                getattr(self, "_last_lidar_forward_speed_mps", 0.0),
+                float(snap.linear_acceleration[0]),
+                elapsed_s,
+            )
+        self._last_lidar_forward_speed_mps = speed
         history = None
         if self.observation_profile == "official_sensors_history":
             history = self._lidar_history

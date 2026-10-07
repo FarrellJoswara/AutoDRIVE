@@ -28,7 +28,7 @@ from .spaces import (
     transform_policy_action,
     _normalize_lidar,
 )
-from .lidar_odometry import LidarOdometry
+from .lidar_odometry import LidarOdometry, acceleration_consistent_lidar_speed
 
 
 class OfficialRaceEnv(gym.Env):
@@ -101,6 +101,7 @@ class OfficialRaceEnv(gym.Env):
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
         self._lidar_speed_estimator = LidarOdometry()
         self._observation_heading_yaw: Optional[float] = None
+        self._last_lidar_forward_speed_mps = 0.0
 
     def reset(
         self,
@@ -126,6 +127,7 @@ class OfficialRaceEnv(gym.Env):
         self._last_snap = snap
         self._lidar_speed_estimator.reset()
         self._observation_heading_yaw = None
+        self._last_lidar_forward_speed_mps = 0.0
         initial_obs = self._policy_observation(snap, 0.0, 0.0, elapsed_s=0.0)
         if self.observation_profile == "official_sensors_history":
             scan = _normalize_lidar(snap)
@@ -278,11 +280,20 @@ class OfficialRaceEnv(gym.Env):
             yaw_delta_rad=yaw_delta,
         )
         self._observation_heading_yaw = float(snap.heading_yaw)
+        forward_speed = 0.0
+        if motion.valid:
+            forward_speed = acceleration_consistent_lidar_speed(
+                motion.forward_m,
+                self._last_lidar_forward_speed_mps,
+                float(snap.linear_acceleration[0]),
+                elapsed_s,
+            )
+        self._last_lidar_forward_speed_mps = forward_speed
         return snapshot_to_obs(
             snap,
             prev_throttle,
             prev_steering,
-            forward_speed_mps=motion.forward_m if motion.valid else 0.0,
+            forward_speed_mps=forward_speed,
             lateral_speed_mps=0.0,
             lidar_history=lidar_history,
         )

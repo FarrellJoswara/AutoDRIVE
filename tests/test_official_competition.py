@@ -17,7 +17,10 @@ from src.layer1.official_bridge_relay import (
     missing_devkit_fields,
 )
 from src.layer1.telemetry import TelemetrySnapshot
-from src.layer2.official_race_env import OfficialRaceEnv
+from src.layer2.lidar_odometry import acceleration_consistent_lidar_speed
+from src.layer2.official_race_env import (
+    OfficialRaceEnv,
+)
 from src.layer2.spaces import map_steering_action, map_throttle_action
 from src.layer3.official_evaluate import (
     action_observation_diagnostics,
@@ -104,6 +107,12 @@ def test_official_trace_records_only_policy_input_observations_compactly():
     assert trace["lidar_min_left"] == 0.1
     assert trace["lidar_min_front"] == 0.4
     assert trace["lidar_min_right"] == 0.7
+
+    history_trace = _policy_observation_trace({
+        "lidar": np.asarray([[0.9] * 9, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]]),
+        "state": np.zeros(9, dtype=np.float32),
+    })
+    assert history_trace["lidar_min_front"] == 0.4
 
 
 def test_motion_preflight_rejects_stationary_ips_and_accepts_displacement():
@@ -326,6 +335,35 @@ def test_encoder_speed_uses_accumulated_wheel_angles_without_aliasing():
     assert np.isclose(speed, expected)
 
 
+def test_official_lidar_speed_rejects_impossible_scan_match_jump():
+    # 10 m/s in a single 50 ms scan interval is inconsistent with this IMU
+    # acceleration and should not become a one-frame policy input.
+    filtered = acceleration_consistent_lidar_speed(
+        measured_speed_mps=-10.0,
+        previous_speed_mps=0.0,
+        forward_acceleration_mps2=-5.0,
+        elapsed_s=0.05,
+    )
+    assert np.isclose(filtered, -0.25)
+
+
+def test_official_lidar_speed_accepts_physical_change_and_checkpoint_stop():
+    accelerating = acceleration_consistent_lidar_speed(
+        measured_speed_mps=2.25,
+        previous_speed_mps=2.0,
+        forward_acceleration_mps2=5.0,
+        elapsed_s=0.05,
+    )
+    checkpoint_stop = acceleration_consistent_lidar_speed(
+        measured_speed_mps=0.1,
+        previous_speed_mps=8.0,
+        forward_acceleration_mps2=-5.0,
+        elapsed_s=0.05,
+    )
+    assert np.isclose(accelerating, 2.25)
+    assert checkpoint_stop == 0.0
+
+
 def test_official_sensor_observation_profile_uses_lidar_motion_not_wheel_rotation():
     from src.layer2.lidar_odometry import ScanMotion
     from src.layer2.autodrive_env import AutoDriveEnv
@@ -344,12 +382,36 @@ def test_official_sensor_observation_profile_uses_lidar_motion_not_wheel_rotatio
     snap.v_lat = 7.0
     snap.encoder_left = 200.0
     snap.encoder_right = 200.0
+    snap.linear_acceleration = (25.0, 0.0, 0.0)
     obs = env._policy_observation(
         snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.1
     )
     expected_speed = 2.5
     assert np.isclose(obs["state"][0], expected_speed / 22.88)
     assert obs["state"][1] == 0.0
+
+
+def test_local_official_sensor_profile_filters_lidar_speed_spike():
+    from src.layer2.lidar_odometry import ScanMotion
+    from src.layer2.autodrive_env import AutoDriveEnv
+
+    class FixedMotionEstimator:
+        def update(self, ranges_m, elapsed_s, *, yaw_delta_rad=None):
+            return ScanMotion(forward_m=-10.0, valid=True)
+
+    env = object.__new__(AutoDriveEnv)
+    env.observation_profile = "official_sensors"
+    env._lidar_speed_estimator = FixedMotionEstimator()
+    env._observation_heading_yaw = None
+    env._last_lidar_forward_speed_mps = 0.0
+    snap = _snapshot(lap=0, last_lap=0.0, collisions=0)
+    snap.linear_acceleration = (-5.0, 0.0, 0.0)
+
+    obs = env._policy_observation(
+        snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.05
+    )
+
+    assert np.isclose(float(obs["state"][0]) * 22.88, -0.25)
 
 
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
