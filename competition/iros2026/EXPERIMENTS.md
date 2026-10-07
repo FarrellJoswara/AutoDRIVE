@@ -182,3 +182,23 @@ lap and neither is a score comparison.
   policy throttle -0.973, nearly identical to the first checkpoint's 98.5%
   and -0.971. Changing checkpoints alone did not resolve transfer behavior.
 - Raw report: `results/checkpoint_compare_20261007.json`.
+
+### Pooled official-sensor policy: first official-image transfer diagnostic
+
+- Date: 2026-10-07; training used the local four-environment Layer 2 sim with
+  `official_sensors`, forward-only throttle, 25 ms action interval, and the
+  pooled LiDAR CNN. The tested checkpoint was the 20,480-step recovery point.
+- The local deterministic evaluator reported 0/3 completed laps; all three
+  attempts collided after 0.925 simulated seconds at about 1.275 m of frontier
+  distance. The deterministic action trace was nearly constant as front LiDAR
+  distance fell from about 0.138 to 0.036 normalized range.
+- A transfer diagnostic then ran against the unmodified IROS 2026 simulator
+  and official Devkit images, using the same forward-only throttle, steering
+  scale (0.946), and straight throttle gain (1.025) as training. The relay
+  received full sensor packets and returned official Devkit commands.
+- After roughly 2.5 wall-clock minutes the official lap counter remained 0
+  and collision count had reached 244. The diagnostic was stopped before a
+  lap completed; it has no official race-time score and is not comparable to
+  leaderboard results. This confirms that the 20k checkpoint is not yet a
+  usable competition policy. Continue training from the preserved checkpoint
+  and use official-image runs for performance comparisons.
