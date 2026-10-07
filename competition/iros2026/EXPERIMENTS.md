@@ -614,3 +614,11 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   near a competitive pace and accumulates collisions rapidly. It supports
   forward-only semantics as a necessary transfer adaptation, not as a complete
   fix; the learned steering/control behavior still needs improvement.
+- Follow-up one-factor steering-scale comparison, with the same checkpoint and
+  forward-only mapping: training-matched scale 0.945 yielded a 124.72 s warm-up
+  and one scored lap in 125.71 s with six race collisions, versus scale 1.0's
+  129.90 s warm-up and 123.73 s scored lap with five race collisions. Neither
+  screen completed 10 laps. The trained scale was slightly faster to warm up,
+  but slower on the scored lap and had one additional race collision; there is
+  no reliable race improvement. Report:
+  `results/action50_lr3e6_forwardonly_steer0945_official_300s_20261007.json`.
