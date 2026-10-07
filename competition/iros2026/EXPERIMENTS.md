@@ -641,16 +641,24 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   reduced that first-lap time to 17.583 s, but still produced 11 collisions.
   Neither screen is a valid full-race score; forward-only mapping alone does
   not solve control transfer.
-- Controlled fine-tune now running as
-  `logs/rl/lidar_speed_finetune_from_action50_20261007`: resumes the preserved
-  best 50 ms checkpoint, uses the official LiDAR-derived observation and
-  forward-only action mapping at the official 50 ms cadence, and holds reward,
-  map, four environments, learning rate (3e-6), rollout length (1024), PPO
-  epochs (1), and other training parameters fixed. Evaluation uses three
-  deterministic 10-lap attempts every 20,480 steps; plateau stopping is
-  eligible after 81,920 steps and four stale checks. Early telemetry confirms
-  the workers are running and cars are moving; no lap-time claim is available
-  yet. Keep the original checkpoint regardless of this trial's result.
+- First controlled fine-tune:
+  `logs/rl/lidar_speed_finetune_from_action50_20261007`. It resumed the
+  preserved best 50 ms checkpoint with official LiDAR-derived observations and
+  forward-only action mapping, holding reward, map, four environments,
+  learning rate (3e-6), rollout length (1024), and PPO epochs (1) fixed. At
+  20,480 steps, all three deterministic evaluations collided at about 1.55 s
+  with zero completed laps (three collisions total). The policy's checkpoint
+  had a 0.20 action standard deviation. This is a failed transfer fine-tune,
+  not a competitive result; its checkpoints and evaluation traces are retained.
+- Current one-factor challenger:
+  `logs/rl/lidar_speed_finetune_exploration030_from_action50_20261007` resumes
+  the same original checkpoint with the same official sensor profile, action
+  mapping, reward, and PPO settings, changing only the minimum action standard
+  deviation from 0.20 to 0.30. Its first comparison is the next three-run
+  deterministic evaluation at 20,480 steps. The prior 66.98 s and 65.84 s
+  local results remain preserved but are not official scores; the only
+  measured corrected-sensor 10-lap result so far is 70.20 s locally with zero
+  collisions.
 - Follow-up one-factor steering-scale comparison, with the same checkpoint and
   forward-only mapping: training-matched scale 0.945 yielded a 124.72 s warm-up
   and one scored lap in 125.71 s with six race collisions, versus scale 1.0's
