@@ -1,0 +1,33 @@
+{
+  "model": "logs/rl/optimization_minimal_updates_20261005/best_evaluated_model.zip",
+  "created_utc": "2026-10-07T17:57:40.8086126Z",
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "deterministic": true,
+  "throttle_mode": "bidirectional",
+  "warmup_laps_ignored": 1,
+  "race_laps": 10,
+  "runs": [
+    {
+      "adjusted_race_time_s": null,
+      "total_laps_since_start": 0,
+      "sampled_steering_command": 0.10035,
+      "reported_lap_time_s": 367.5292,
+      "race_lap_times_s": [],
+      "attempt": 1,
+      "lap_count": 0,
+      "score_status": "incomplete",
+      "reported_collision_count": 4,
+      "wall_duration_s": 394.8,
+      "stop_reason": "diagnostic_abort_no_lap_after_5m",
+      "sampled_throttle_command": 1.0,
+      "race_collisions": null,
+      "valid_for_comparison": false
+    }
+  ],
+  "completed_attempts": 0,
+  "median_adjusted_race_time_s": null,
+  "valid_for_comparison": false,
+  "note": "Partial diagnostic screen only. The simulator reported zero laps, four cumulative collisions, and lap timer 367.53 s at abort. This does not establish a scored race result."
+}

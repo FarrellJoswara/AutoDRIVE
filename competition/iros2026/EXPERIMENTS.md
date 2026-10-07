@@ -567,3 +567,21 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   checkpoint, first verify that checkpoint in the official simulator/runtime,
   then change one training factor at a time. This trial is a development
   training result, not an official race score.
+
+### Official-runtime screen of the preserved 66.98 s local checkpoint
+
+- Date: 2026-10-07. Tested
+  `logs/rl/optimization_minimal_updates_20261005/best_evaluated_model.zip`
+  with the official IROS API and simulator image tags, native simulator
+  control cadence, official sensor profile, and bidirectional action mapping.
+- After 394.8 s wall time, the official simulator still reported zero laps,
+  four cumulative collisions, and a lap timer of 367.53 s. A sampled actuator
+  command was throttle 1.0 / steering 0.100. We ended this diagnostic screen;
+  it is incomplete and has no valid race score. The normal local simulator pool
+  was restored afterward. Partial report:
+  `results/minimal_updates_checkpoint_official_partial_20261007.json`.
+- This checkpoint's 66.98 s result came from the custom local evaluator and
+  does not transfer to the official runtime. Its long official run without a
+  lap confirms a substantial simulator/observation/control transfer gap.
+  Keep it as a training source, but do not call it an official champion or
+  promote its local time as an IROS result.
