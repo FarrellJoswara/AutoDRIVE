@@ -315,3 +315,9 @@ lap and neither is a score comparison.
   not official race scores. Raw reports:
   `results/lidar_gap_diag_30s_20261007.json` and
   `results/lidar_gap_invert_diag_30s_20261007.json`.
+- Code audit identified that the first controller revision imposed a 0.15
+  throttle floor, so it could never coast while overspeed. Since negative
+  throttle commands reverse instead of brake, this made its target-speed
+  calculation ineffective. The next controlled repeat changes only this
+  throttle rule: clamp to zero at/above target speed, retaining the same target
+  speed curve, steering, sensor path, and official images.

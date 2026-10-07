@@ -43,9 +43,9 @@ class LidarGapPolicyTests(unittest.TestCase):
     def test_throttle_is_forward_and_reduces_at_speed(self) -> None:
         ranges = np.ones(1081, dtype=np.float32)
         stopped = self.policy.action(self.observation(ranges, 0.0))
-        fast = self.policy.action(self.observation(ranges, 4.0))
-        self.assertGreaterEqual(float(stopped[0]), 0.15)
-        self.assertGreaterEqual(float(fast[0]), 0.15)
+        fast = self.policy.action(self.observation(ranges, 6.0))
+        self.assertGreater(float(stopped[0]), 0.0)
+        self.assertEqual(float(fast[0]), 0.0)
         self.assertGreater(float(stopped[0]), float(fast[0]))
 
     def test_rejects_invalid_scan_size(self) -> None:

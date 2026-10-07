@@ -107,7 +107,11 @@ class LidarGapPolicy:
         )
         # Layer 2's bidirectional action mapping is used in competition mode;
         # keeping throttle positive makes this baseline incapable of reversing.
-        throttle = float(np.clip(0.35 + self.speed_gain * (target_speed - speed_mps), 0.15, 0.85))
+        # Zero is a meaningful coast command in AutoDRIVE. A positive throttle
+        # floor would keep adding power after target speed is exceeded and make
+        # the nominal speed limit ineffective; negative throttle is reverse,
+        # not a service brake, so the policy deliberately coasts instead.
+        throttle = float(np.clip(self.speed_gain * (target_speed - speed_mps), 0.0, 0.85))
         return np.asarray([throttle, steering], dtype=np.float32)
 
     def predict(self, observation: dict[str, np.ndarray], deterministic: bool = True) -> tuple[np.ndarray, None]:
