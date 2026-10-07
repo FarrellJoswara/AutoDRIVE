@@ -292,3 +292,16 @@ lap and neither is a score comparison.
   this architecture or infer a race-time improvement. Preserve the checkpoints
   as training diagnostics. Raw report:
   `results/fullres_50ms_30k_checkpoint_diag_30s_20261007.json`.
+
+### Sensor-only gap-following controller
+
+- Hypothesis: before spending more PPO compute, verify the permitted sensor and
+  actuator path with an adaptive Layer 3 controller whose steering responds
+  deterministically to clear LiDAR gaps. A successful lap would validate
+  LiDAR orientation and steering sign; failure would isolate low-level control
+  or simulator/bridge issues from policy learning.
+- The controller uses only the canonical LiDAR array and encoder-derived
+  forward speed already exposed in the official observation. It does not read
+  map geometry, pose, lap count, or collision count. Unit tests cover obstacle
+  side, steering direction, and speed response. Treat its official-image run as
+  a control-path diagnostic, not a record candidate.

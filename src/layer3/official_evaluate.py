@@ -212,12 +212,13 @@ def evaluate(
     steering_mode: str = "normal",
     throttle_mode: str = "bidirectional",
     output_path: Optional[Path] = None,
+    controller: str = "ppo",
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
 
     checkpoint = Path(model_path).resolve()
-    if not checkpoint.is_file():
+    if controller == "ppo" and not checkpoint.is_file():
         raise FileNotFoundError(f"PPO checkpoint not found: {checkpoint}")
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
@@ -227,7 +228,7 @@ def evaluate(
             "restricted reset command is not used by the scored path"
         )
 
-    model = load_policy(checkpoint, device=device)
+    model = load_policy(checkpoint, device=device, controller=controller)
     env = OfficialRaceEnv(
         timeout_s=timeout_s,
         warmup_laps=1,
@@ -258,6 +259,7 @@ def evaluate(
             "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
             "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
             "deterministic": True,
+            "controller": controller,
             "throttle_mode": throttle_mode,
             "steering_mode": steering_mode,
             "warmup_laps_ignored": 1,
@@ -284,6 +286,7 @@ def evaluate(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--controller", choices=("ppo", "lidar_gap"), default="ppo")
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--wall-timeout-s", type=float, default=300.0)
@@ -326,6 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         steering_mode=args.steering_mode,
         throttle_mode=args.throttle_mode,
         output_path=args.out,
+        controller=args.controller,
     )
     return 0
 

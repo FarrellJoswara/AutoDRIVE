@@ -9,7 +9,13 @@ from typing import Any, Optional
 import numpy as np
 
 
-def load_policy(model_path: Path, *, device: str = "cpu") -> Any:
+def load_policy(model_path: Path, *, device: str = "cpu", controller: str = "ppo") -> Any:
+    if controller == "lidar_gap":
+        from src.layer3.lidar_gap_policy import load_gap_policy
+
+        return load_gap_policy()
+    if controller != "ppo":
+        raise ValueError(f"Unknown official controller: {controller}")
     """Load a saved PPO policy using the current canonical Layer 2 spaces."""
     from stable_baselines3 import PPO
 
@@ -41,6 +47,7 @@ def run_policy(
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
+    controller: str = "ppo",
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
@@ -49,7 +56,7 @@ def run_policy(
         transform_policy_action,
     )
 
-    model = load_policy(model_path, device=device)
+    model = load_policy(model_path, device=device, controller=controller)
     racer = RacerRos2(timeout_s=timeout_s, include_race_metrics=False)
     previous_throttle = 0.0
     previous_steering = 0.0
@@ -83,6 +90,7 @@ def run_policy(
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=Path("/models/policy.zip"))
+    parser.add_argument("--controller", choices=("ppo", "lidar_gap"), default="ppo")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument(
@@ -119,6 +127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         steering_action_scale=args.steering_action_scale,
         straight_throttle_gain=args.straight_throttle_gain,
         straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
+        controller=args.controller,
     )
     return 0
 

@@ -4,7 +4,8 @@ set -eo pipefail
 source /opt/ros/humble/setup.bash
 source /home/autodrive_devkit/install/setup.bash
 
-if [[ ! -f "${AICAR_MODEL_PATH:-/models/policy.zip}" ]]; then
+controller="${AICAR_CONTROLLER:-ppo}"
+if [[ "$controller" == "ppo" && ! -f "${AICAR_MODEL_PATH:-/models/policy.zip}" ]]; then
   echo "ERROR: set AICAR_MODEL_PATH to a readable PPO checkpoint" >&2
   exit 2
 fi
@@ -31,6 +32,7 @@ if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
   echo "Running local evaluation monitor; restricted score topics are read for measurement only."
   python3 -m src.layer3.official_evaluate \
     --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \
+    --controller "$controller" \
     --attempts "${AICAR_EVALUATION_ATTEMPTS:-1}" \
     --device cpu \
     --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-180}" \
@@ -47,6 +49,7 @@ else
   echo "Running competition policy; only allowed sensor and actuator topics are enabled."
   python3 -m src.layer3.official_policy \
     --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \
+    --controller "$controller" \
     --device cpu \
     --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-5}" \
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \

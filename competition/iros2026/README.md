@@ -103,3 +103,13 @@ are useful development evidence but are not directly comparable to the
 official IROS score. The model's action cadence is driven by fresh ROS 2
 LiDAR frames; this evaluator does not set a simulator timestep or modify the
 official simulator.
+
+### Sensor-only gap-following diagnostic
+
+Layer 3 also includes a deterministic LiDAR gap-following controller used to
+validate sensor ordering, steering direction, and actuator response without
+PPO. It consumes the same canonical LiDAR and encoder-derived speed observation
+and does not use map geometry or restricted race metrics. Select it with
+`AICAR_CONTROLLER=lidar_gap`; no checkpoint mount is needed. This is a
+diagnostic baseline, not a learned or competition-ready policy. Compare its
+official-image lap/collision output before drawing conclusions about PPO.
