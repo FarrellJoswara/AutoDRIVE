@@ -650,7 +650,7 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   with zero completed laps (three collisions total). The policy's checkpoint
   had a 0.20 action standard deviation. This is a failed transfer fine-tune,
   not a competitive result; its checkpoints and evaluation traces are retained.
-- Current one-factor challenger:
+- Exploration-floor challenger:
   `logs/rl/lidar_speed_finetune_exploration030_from_action50_20261007` resumes
   the same original checkpoint with the same official sensor profile, action
   mapping, reward, and PPO settings, changing only the minimum action standard
@@ -659,12 +659,33 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   remained small (approximate KL below 0.0013 and clip fraction at or below
   0.011); increasing action noise alone did not fix the observed behavior.
   Its checkpoints and evaluation traces are retained.
-- Next controlled challenger:
+- Learning-rate challenger:
   `logs/rl/lidar_speed_finetune_lr1e5_exploration030_from_action50_20261007`
   resumes the same original checkpoint with the same sensor profile, action
   mapping, reward, and exploration floor (0.30), changing only the learning
   rate from 3e-6 to 1e-5. Evaluate at the same 20,480-step, three-attempt
   boundary before deciding whether to continue.
+- The 1e-5 challenger also failed its 20,480-step snapshot: three attempts
+  collided after 1.55–1.60 s, with zero completed laps. Its KL rose into the
+  0.006–0.013 range and clip fraction into 0.075–0.154, but explained variance
+  fell from about -1.6 to -3.95. The larger updates did not improve driving.
+  The trace shows an initial throttle near 0.95 and left steering near -0.33;
+  as the car approached the sharp turn, negative policy throttle was mapped to
+  small positive throttle under `forward_only`, while speed remained above
+  3 m/s and LiDAR front clearance fell below 0.1 m. This supports testing the
+  checkpoint's original bidirectional throttle semantics before further PPO
+  tuning.
+- A separate official-container steering-scale 0.50 screen could not be
+  evaluated: the official simulator process did not publish fresh LiDAR to the
+  Devkit within the 60 s sensor guard. The attempt produced no policy score and
+  was stopped; it must not be interpreted as a steering result.
+- Next controlled test:
+  `logs/rl/lidar_speed_finetune_bidirectional_lr1e5_exploration030_from_action50_20261007`
+  resumes the same original checkpoint and keeps the LiDAR observation,
+  50 ms cadence, 1e-5 learning rate, 0.30 exploration floor, reward, and other
+  settings fixed, changing only throttle mapping from forward-only back to the
+  checkpoint's original bidirectional semantics. This tests whether loss of
+  active braking is contributing to the repeated first-corner collisions.
 - The prior 66.98 s and 65.84 s local results remain preserved but are not
   official scores; the only measured corrected-sensor 10-lap result so far is
   70.20 s locally with zero collisions.
