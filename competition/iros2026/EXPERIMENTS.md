@@ -697,3 +697,18 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   but slower on the scored lap and had one additional race collision; there is
   no reliable race improvement. Report:
   `results/action50_lr3e6_forwardonly_steer0945_official_300s_20261007.json`.
+- Bidirectional LiDAR fine-tune snapshot results (local corrected-sensor simulation,
+  not an official score) for `logs/rl/lidar_speed_finetune_bidirectional_lr1e5_exploration030_from_action50_20261007`:
+  at 20,480 steps, 1/3 attempts completed 10 laps cleanly in 70.742 s; other
+  attempts collided after 6 and 1 laps. At 40,960 steps, 1/3 completed cleanly
+  in 69.593 s; the other attempt outcomes were a collision after 1 lap and
+  frontier stagnation after 3 laps. This is a 1.15 s (1.6%) improvement over
+  the same trial's first clean completion, but remains slower than the retained
+  66.98 s local champion and has only 1/3 completion reliability.
+- At 61,440 steps, the best clean completion regressed to 70.734 s (1/3
+  attempts completed; one collision at lap 4, one frontier-stall at lap 9).
+  The run's internal best remains 69.593 s. PPO diagnostics at this point were
+  low-update (KL about 0.00035, clip fraction about 0.0015, explained variance
+  about 0.25); more of the same updates have not yet shown repeatable gains.
+  Keep the 66.98 s champion and all trial checkpoints; do not promote the
+  69.593 s single successful attempt as a reliable record.
