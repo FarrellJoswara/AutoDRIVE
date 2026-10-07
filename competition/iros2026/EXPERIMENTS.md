@@ -809,3 +809,30 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `results/lidar_speed_unfiltered_candidate_official_control_20261007.json`,
   `results/lidar_speed_unfiltered_candidate_repeat2_20261007.json`, and
   `results/lidar_speed_unfiltered_candidate_repeat3_20261007.json`.
+
+### Guard-trained 60k checkpoint: official-image transfer test — disqualified
+
+- Date: 2026-10-07. The `ppo_60000_steps.zip` checkpoint from
+  `lidar_speed_consistency_finetune_20261007` loaded directly in the current
+  official-policy container; no model conversion was required. Training and
+  official inference use the same PPO observation/action shapes and
+  `official_sensors` profile. This confirms format compatibility, not policy
+  performance equivalence.
+- The checkpoint was evaluated once using the exact IROS 2026 API and simulator
+  image tags, a fresh simulator process in documented headless mode, Porto,
+  bidirectional throttle, negative-throttle passthrough, and steering scale
+  0.945. The official race evaluator counted one warm-up lap, then recorded one
+  14.8884 s race lap before the attempt reached 11 race collisions and was
+  disqualified. The measured control rate was 19.23 Hz. It is not a valid
+  competition time and does not replace the 66.9818 s local champion.
+- Provenance: checkpoint
+  `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_60000_steps.zip`;
+  runner image `aicar-iros2026:eval-ppo60000-20261007` (`sha256:3b39b7553383734779efa8c7d818ddd7b805c8c52c2c599f3754e1312a287c6e`);
+  official API image digest `sha256:4ce4334657feb4c6760aa61f23a76f8962bf80e8e746e2547b082985a95a46a2`;
+  simulator image digest `sha256:749fbef07942109d18497cbcf6ffe9452e06ae487f2bfc915e92440bc4b4663d`.
+- This separates two conclusions: the checkpoint is directly loadable and
+  receives official sensors, but the custom `aicar-sim` training/evaluator is
+  not behaviorally equivalent to the official IROS images. The local 7.14–7.53
+  s laps from the 40,960-step snapshot are not official lap-time evidence.
+- Report: `results/ppo60000_guard_current_official_20261007.json`. Preserve the
+  checkpoint and training run; do not promote this transfer result.
