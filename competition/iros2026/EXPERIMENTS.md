@@ -202,3 +202,12 @@ lap and neither is a score comparison.
   leaderboard results. This confirms that the 20k checkpoint is not yet a
   usable competition policy. Continue training from the preserved checkpoint
   and use official-image runs for performance comparisons.
+- A separate 30-second official-image diagnostic captured 592 control actions:
+  measured control cadence was 19.73 Hz (median interval 50.91 ms) while the
+  advertised LiDAR scan rate was 40 Hz. It completed 0 laps and observed 55 raw
+  collisions. Applied commands were nearly constant (mean throttle 0.478,
+  mean steering 0.0345); the normalized minimum LiDAR return averaged 0.0435.
+  Policy inference itself took under 1 ms in an isolated CPU microbenchmark, so
+  the lower control cadence is in the bridge/simulator exchange, not the CNN.
+  Align the next Layer 2 training trial to the measured ~50 ms command cadence;
+  this changes only action interval and is an explicit training experiment.
