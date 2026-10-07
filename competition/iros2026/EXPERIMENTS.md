@@ -211,3 +211,18 @@ lap and neither is a score comparison.
   the lower control cadence is in the bridge/simulator exchange, not the CNN.
   Align the next Layer 2 training trial to the measured ~50 ms command cadence;
   this changes only action interval and is an explicit training experiment.
+
+### Control-rate-matched pooled policy continuation (planned)
+
+- Hypothesis: the pooled policy trained at 25 ms action intervals is mismatched
+  to the official image path's measured ~50.9 ms command interval. Training at
+  50 ms may improve closed-loop behavior under the official cadence.
+- Start from the preserved `ppo_20000_steps.zip` checkpoint in
+  `official_sensor_pooled_forward_20261007_20261007_112825`; keep map (Porto),
+  4 environments, official-sensor observations, pooled architecture, action
+  mapping, rewards, and all PPO/exploration settings fixed. Change only
+  `action_interval_s` from 0.025 to 0.05. Use a new run directory.
+- Compare deterministic internal evaluations and PPO diagnostics, then test a
+  saved checkpoint through the unmodified official simulator + Devkit images.
+  Do not call a training-only result an official score; require completed
+  official laps for a valid race-time comparison.
