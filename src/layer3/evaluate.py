@@ -221,6 +221,7 @@ def evaluate_policy(
     output_path: Optional[Path] = None,
     action_interval_s: Optional[float] = None,
     steering_action_scale: float = 1.0,
+    throttle_mode: str = "bidirectional",
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
     observation_profile: str = "simulator",
@@ -242,6 +243,7 @@ def evaluate_policy(
         frame_skip=frame_skip,
         action_interval_s=action_interval_s,
         steering_action_scale=steering_action_scale,
+        throttle_mode=throttle_mode,
         straight_throttle_gain=straight_throttle_gain,
         straight_throttle_steering_threshold=straight_throttle_steering_threshold,
         observation_profile=observation_profile,
@@ -266,6 +268,7 @@ def evaluate_policy(
             "frame_skip": frame_skip,
             "action_interval_s": action_interval_s,
             "steering_action_scale": steering_action_scale,
+            "throttle_mode": throttle_mode,
             "straight_throttle_gain": straight_throttle_gain,
             "straight_throttle_steering_threshold": straight_throttle_steering_threshold,
             "observation_profile": observation_profile,
@@ -291,6 +294,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--action-interval-s", type=float, default=None)
     parser.add_argument("--steering-action-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--throttle-mode",
+        choices=("bidirectional", "forward_only"),
+        default="bidirectional",
+        help="Use the actuator mapping the policy was trained with",
+    )
     parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
     parser.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
     parser.add_argument(
@@ -311,6 +320,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         frame_skip=args.frame_skip,
         action_interval_s=args.action_interval_s,
         steering_action_scale=args.steering_action_scale,
+        throttle_mode=args.throttle_mode,
         straight_throttle_gain=args.straight_throttle_gain,
         straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
         observation_profile=args.observation_profile,
