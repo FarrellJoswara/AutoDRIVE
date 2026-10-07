@@ -10,6 +10,11 @@ from src.layer1.ros2_racer import (
     _next_scan_deadline,
     ros_messages_to_bridge_payload,
 )
+from src.layer1.official_bridge_relay import (
+    DEVKIT_REQUIRED_FIELDS,
+    NEUTRAL_COMMAND,
+    missing_devkit_fields,
+)
 from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.official_race_env import OfficialRaceEnv
 from src.layer3.official_evaluate import collision_penalty_seconds, summarize_attempt
@@ -203,3 +208,17 @@ def test_encoder_speed_uses_accumulated_wheel_angles_without_aliasing():
     )
     expected = 4.2 * 0.059 / 0.025
     assert np.isclose(speed, expected)
+
+
+def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
+    complete_packet = {key: "value" for key in DEVKIT_REQUIRED_FIELDS}
+    startup_packet = dict(complete_packet)
+    startup_packet.pop("V1 LIDAR Range Array")
+
+    assert missing_devkit_fields(startup_packet) == ("V1 LIDAR Range Array",)
+    assert missing_devkit_fields(complete_packet) == ()
+    assert NEUTRAL_COMMAND == {
+        "V1 Throttle": "0.0000",
+        "V1 Steering": "0.0000",
+        "V1 Reset": "False",
+    }

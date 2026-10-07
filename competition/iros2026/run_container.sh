@@ -13,7 +13,15 @@ fi
 # unchanged, then run our policy/evaluator node in the same Devkit container.
 ros2 launch autodrive_roboracer bringup_headless.launch.py &
 bridge_pid=$!
+python3 -u -m src.layer1.official_bridge_relay \
+  --devkit-url "${AICAR_DEVKIT_URL:-http://127.0.0.1:4567}" \
+  --host "${AICAR_RELAY_HOST:-0.0.0.0}" \
+  --port "${AICAR_RELAY_PORT:-4568}" \
+  --response-timeout-s "${AICAR_BRIDGE_RESPONSE_TIMEOUT_S:-2}" &
+relay_pid=$!
 cleanup() {
+  kill "$relay_pid" 2>/dev/null || true
+  wait "$relay_pid" 2>/dev/null || true
   kill "$bridge_pid" 2>/dev/null || true
   wait "$bridge_pid" 2>/dev/null || true
 }

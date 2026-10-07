@@ -31,6 +31,14 @@ The competition policy never publishes `/autodrive/reset_command`. Restricted
 score topics are enabled only in the local test evaluator, separately from the
 continuous policy runner.
 
+Layer 1 also runs a small Socket.IO relay in front of the official Devkit
+bridge. The official simulator emits one startup `Bridge` packet before its
+first LiDAR array is available, while the stock Devkit callback indexes that
+array unconditionally and fails before sending a reply. The relay answers only
+incomplete packets with neutral throttle/steering and forwards every complete
+packet unchanged to the unmodified official bridge. The policy still reads
+only the allowed ROS topics listed above.
+
 ## Build and run
 
 Pull the official simulator image separately and start it with the official
@@ -42,12 +50,16 @@ docker build -f competition/iros2026/Dockerfile -t aicar-iros2026 .
 
 The policy image is derived directly from
 `autodriveecosystem/autodrive_roboracer_api:2026-iros-compete`. Mount the model
-read-only and attach this container to the same Docker network as the simulator:
+read-only and attach this container to the same Docker network as the simulator.
+The container runs the unmodified official ROS bridge on port 4567 and the
+Layer 1 relay on port 4568. Point the simulator to the policy container's
+network name/IP on port 4568 (for example `-ip relay -port 4568` on a shared
+Docker network):
 
 ```powershell
 docker run --rm --name aicar-iros-policy `
   --network aicar-iros-eval `
-  --network-alias devkit `
+  --network-alias relay `
   -e AICAR_MODEL_PATH=/models/policy.zip `
   -v "${PWD}/logs/rl/optimization_minimal_updates_20261005/best_evaluated_model.zip:/models/policy.zip:ro" `
   aicar-iros2026
@@ -61,11 +73,12 @@ is written to `/tmp/aicar-iros-evaluation.json` by default.
 `AICAR_RACE_WALL_TIMEOUT_S` and `AICAR_RACE_STEP_GUARD` are local safety guards,
 not simulated race-time limits and do not affect the measured score.
 
-The official simulator connection is opened from the simulator's Connection
-Button after both containers are running. Use Autonomous mode and the required
-Ultra graphics setting, as in the competition procedure. For repeatable local
-comparisons, restart/reset to the same initial simulator state before each
-attempt and preserve the exact image tags.
+For GUI operation, configure the simulator's Connection target as the relay
+host on port 4568, press Connection, then switch to Autonomous mode and the
+required Ultra graphics setting. For headless operation, use the official
+simulator's documented `-ip <relay-host> -port 4568` arguments. For repeatable
+local comparisons, start a fresh simulator process for every attempt and
+preserve the exact image tags.
 
 ## Interpretation
 

@@ -84,4 +84,28 @@ simulator-process evaluation is required before drawing conclusions.
   produced no lap result.
 - GPU passthrough was missing in the prior smoke setup, but correcting that
   did not resolve the stream. The telemetry/handshake failure remains
-  unlocalized; neither attempt is a policy performance result.
+unlocalized; neither attempt is a policy performance result.
+
+### Root cause: the official bridge deadlocks on the first startup packet
+
+- Date: 2026-10-07; exact official simulator/API images above.
+- A packet probe on a disposable network captured the simulator's actual
+  startup sequence. Its first `Bridge` event contains 17 fields and omits only
+  `V1 LIDAR Range Array`; the next events contain the full 18-field telemetry
+  payload. The unmodified Devkit callback indexes the missing LiDAR field and
+  raises before returning its actuator response. The simulator waits for that
+  response, so the official bridge receives no later full frame.
+- Layer 1 now replies to incomplete startup frames with neutral throttle,
+  steering, and reset=false. Complete packets are forwarded unchanged to the
+  unmodified official Devkit bridge, and its returned actuator command is
+  forwarded back to the simulator. The policy still subscribes only to allowed
+  ROS sensor and actuator-feedback topics.
+- The relay's first local integration test also found that this official image
+  lacks `requests`, required by its Python Socket.IO client's polling
+  transport. The submission image now pins `requests==2.32.3` and the relay
+  fails visibly if its upstream Devkit connection cannot be established.
+- Validation: packet probe received the partial first frame followed by full
+  frames; relay passed full frames and returned Devkit commands. Against the
+  official Devkit image, the ROS LiDAR topic then produced 1081-beam scans at
+  the advertised 40 Hz. This proves the transport and sensor path only; it is
+  not a race-time result.
