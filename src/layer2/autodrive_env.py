@@ -43,11 +43,11 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from src.layer1.racer import Racer
-from src.layer1.ros2_racer import encoder_forward_speed_mps
 from src.layer1.telemetry import TelemetrySnapshot
 
 from .rewards import RewardConfig, compute_reward_components
 from .lap_tracker import LapTracker, map_lap_gate_config
+from .lidar_odometry import LidarOdometry
 from .route_progress import RouteProgressTracker, map_centerline_path
 from .spaces import (
     LIDAR_BEAMS,
@@ -198,7 +198,8 @@ class AutoDriveEnv(gym.Env):
         self.observation_profile = observation_profile
         self._lidar_history: list[np.ndarray] = []
         self.throttle_mode = throttle_mode
-        self._observation_encoder_positions: Optional[Tuple[float, float]] = None
+        self._lidar_speed_estimator = LidarOdometry()
+        self._observation_heading_yaw: Optional[float] = None
         injected_interval = getattr(racer, "action_interval_s", None)
         if racer is not None and action_interval_s is not None:
             if injected_interval is None or not np.isclose(
@@ -416,7 +417,8 @@ class AutoDriveEnv(gym.Env):
         self._prev_collision_flag = bool(snap.collision)
         self._pending_collision_event = reset_collision_pending
         self._last_snap = snap
-        self._observation_encoder_positions = (snap.encoder_left, snap.encoder_right)
+        self._lidar_speed_estimator.reset()
+        self._observation_heading_yaw = None
         if self.observation_profile == "official_sensors_history":
             initial_scan = _normalize_lidar(snap, lidar_beams=self.lidar_beams)
             self._lidar_history = [initial_scan.copy() for _ in range(3)]
@@ -676,14 +678,28 @@ class AutoDriveEnv(gym.Env):
                 snap, prev_throttle, prev_steering, lidar_beams=lidar_beams
             )
 
-        positions = (float(snap.encoder_left), float(snap.encoder_right))
-        previous = self._observation_encoder_positions
-        speed = (
-            0.0 if previous is None else encoder_forward_speed_mps(
-                positions, previous, elapsed_s
+        estimator = getattr(self, "_lidar_speed_estimator", None)
+        if estimator is None:
+            # Keep direct construction useful in focused Layer 2 tests.
+            estimator = LidarOdometry()
+            self._lidar_speed_estimator = estimator
+            self._observation_heading_yaw = None
+        previous_yaw = getattr(self, "_observation_heading_yaw", None)
+        yaw_delta = None
+        if previous_yaw is not None:
+            yaw_delta = float(
+                np.arctan2(
+                    np.sin(float(snap.heading_yaw) - float(previous_yaw)),
+                    np.cos(float(snap.heading_yaw) - float(previous_yaw)),
+                )
             )
+        motion = estimator.update(
+            snap.lidar_ranges,
+            elapsed_s,
+            yaw_delta_rad=yaw_delta,
         )
-        self._observation_encoder_positions = positions
+        self._observation_heading_yaw = float(snap.heading_yaw)
+        speed = motion.forward_m if motion.valid else 0.0
         history = None
         if self.observation_profile == "official_sensors_history":
             history = self._lidar_history

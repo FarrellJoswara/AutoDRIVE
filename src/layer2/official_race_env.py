@@ -28,6 +28,7 @@ from .spaces import (
     transform_policy_action,
     _normalize_lidar,
 )
+from .lidar_odometry import LidarOdometry
 
 
 class OfficialRaceEnv(gym.Env):
@@ -98,6 +99,8 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s: list[float] = []
         self._episode_steps = 0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
+        self._lidar_speed_estimator = LidarOdometry()
+        self._observation_heading_yaw: Optional[float] = None
 
     def reset(
         self,
@@ -121,13 +124,15 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s = []
         self._episode_steps = 0
         self._last_snap = snap
-        initial_obs = snapshot_to_obs(snap, 0.0, 0.0)
+        self._lidar_speed_estimator.reset()
+        self._observation_heading_yaw = None
+        initial_obs = self._policy_observation(snap, 0.0, 0.0, elapsed_s=0.0)
         if self.observation_profile == "official_sensors_history":
             scan = _normalize_lidar(snap)
             self._lidar_history.clear()
             self._lidar_history.extend([scan.copy()] * 3)
-            initial_obs = snapshot_to_obs(
-                snap, 0.0, 0.0, lidar_history=list(self._lidar_history)
+            initial_obs = self._policy_observation(
+                snap, 0.0, 0.0, elapsed_s=0.0
             )
         return initial_obs, self._build_info(
             snap, metrics, collision_event=False
@@ -196,12 +201,21 @@ class OfficialRaceEnv(gym.Env):
             ),
         })
         if self.observation_profile == "official_sensors_history":
-            observation = snapshot_to_obs(
-                snap, throttle, steering, lidar_history=list(self._lidar_history)
+            observation = self._policy_observation(
+                snap,
+                throttle,
+                steering,
+                elapsed_s=float(self.racer.last_step_duration_s),
+                lidar_history=list(self._lidar_history),
             )
             self._lidar_history.append(_normalize_lidar(snap))
         else:
-            observation = snapshot_to_obs(snap, throttle, steering)
+            observation = self._policy_observation(
+                snap,
+                throttle,
+                steering,
+                elapsed_s=float(self.racer.last_step_duration_s),
+            )
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
         return observation, 0.0, terminated, False, info
@@ -239,6 +253,39 @@ class OfficialRaceEnv(gym.Env):
             "lidar_range_max": float(snap.lidar_range_max),
             "lidar_beams": int(snap.lidar_ranges.size),
         }
+
+    def _policy_observation(
+        self,
+        snap: TelemetrySnapshot,
+        prev_throttle: float,
+        prev_steering: float,
+        *,
+        elapsed_s: float,
+        lidar_history: Optional[list[np.ndarray]] = None,
+    ) -> Dict[str, np.ndarray]:
+        previous_yaw = self._observation_heading_yaw
+        yaw_delta = None
+        if previous_yaw is not None:
+            yaw_delta = float(
+                np.arctan2(
+                    np.sin(float(snap.heading_yaw) - previous_yaw),
+                    np.cos(float(snap.heading_yaw) - previous_yaw),
+                )
+            )
+        motion = self._lidar_speed_estimator.update(
+            snap.lidar_ranges,
+            elapsed_s,
+            yaw_delta_rad=yaw_delta,
+        )
+        self._observation_heading_yaw = float(snap.heading_yaw)
+        return snapshot_to_obs(
+            snap,
+            prev_throttle,
+            prev_steering,
+            forward_speed_mps=motion.forward_m if motion.valid else 0.0,
+            lateral_speed_mps=0.0,
+            lidar_history=lidar_history,
+        )
 
     def close(self) -> None:
         if self._owns_racer:

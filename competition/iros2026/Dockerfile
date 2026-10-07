@@ -12,6 +12,7 @@ RUN python3 -m pip install --no-cache-dir --index-url https://download.pytorch.o
       torch==2.2.2+cpu \
     && python3 -m pip install --no-cache-dir \
       numpy==1.22.2 gymnasium==0.29.1 cloudpickle==3.1.2 \
+      scipy==1.10.1 \
       pandas==1.5.3 matplotlib==3.6.3 tqdm==4.67.1 requests==2.32.3 \
     && python3 -m pip install --no-cache-dir --no-deps stable-baselines3==2.3.2
 

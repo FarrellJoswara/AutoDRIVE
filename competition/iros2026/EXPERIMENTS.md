@@ -614,6 +614,43 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   near a competitive pace and accumulates collisions rapidly. It supports
   forward-only semantics as a necessary transfer adaptation, not as a complete
   fix; the learned steering/control behavior still needs improvement.
+
+### Layer 2 sensor-speed correction and official-transfer fine-tune
+
+- Date: 2026-10-07. A Porto telemetry audit found that the official sensor
+  profile's wheel-rotation estimate reported about 2.95 m/s while the car body
+  was essentially stopped under low throttle, and about 8.76 m/s while pinned
+  against a wall under higher throttle. This is wheel spin, not body motion.
+  IMU acceleration integration also drifted by about 2.56 m/s median error in
+  the low-throttle test. Therefore neither wheel speed nor unbounded IMU
+  integration is a reliable substitute for measured body motion.
+- Layer 2 now estimates short-horizon body translation from consecutive
+  permitted LiDAR scans, using IMU yaw change to constrain scan alignment.
+  Simulator pose/velocity was used only offline to measure estimator quality;
+  the policy observation and official runner do not consume ground-truth pose,
+  encoder speed, lap, collision, or odometry topics. Added SciPy to the team
+  image because the estimator uses its spatial index.
+- The preserved 50 ms checkpoint was replayed locally with the corrected
+  `official_sensors` observation: it completed 10/10 laps in 70.20 s with zero
+  collisions. Its older direct-simulator-observation profile replay was 64.55 s
+  with zero collisions. This confirms that the legal sensor observation works,
+  while exposing a meaningful sim-to-sensor observation gap.
+- On the unmodified official simulator/API containers, the same checkpoint
+  with LiDAR speed completed one scored lap in 19.057 s but accumulated 11 race
+  collisions and was disqualified. Mapping negative throttle outputs to zero
+  reduced that first-lap time to 17.583 s, but still produced 11 collisions.
+  Neither screen is a valid full-race score; forward-only mapping alone does
+  not solve control transfer.
+- Controlled fine-tune now running as
+  `logs/rl/lidar_speed_finetune_from_action50_20261007`: resumes the preserved
+  best 50 ms checkpoint, uses the official LiDAR-derived observation and
+  forward-only action mapping at the official 50 ms cadence, and holds reward,
+  map, four environments, learning rate (3e-6), rollout length (1024), PPO
+  epochs (1), and other training parameters fixed. Evaluation uses three
+  deterministic 10-lap attempts every 20,480 steps; plateau stopping is
+  eligible after 81,920 steps and four stale checks. Early telemetry confirms
+  the workers are running and cars are moving; no lap-time claim is available
+  yet. Keep the original checkpoint regardless of this trial's result.
 - Follow-up one-factor steering-scale comparison, with the same checkpoint and
   forward-only mapping: training-matched scale 0.945 yielded a 124.72 s warm-up
   and one scored lap in 125.71 s with six race collisions, versus scale 1.0's

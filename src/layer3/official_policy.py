@@ -73,6 +73,7 @@ def run_policy(
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
+    from src.layer2.lidar_odometry import LidarOdometry
     from src.layer2.spaces import (
         snapshot_to_obs,
         transform_policy_action,
@@ -89,12 +90,23 @@ def run_policy(
     previous_steering = 0.0
     try:
         snap = racer.wait_until_ready()
+        speed_estimator = LidarOdometry()
+        speed_estimator.update(snap.lidar_ranges, 0.0)
+        previous_observation_yaw = float(snap.heading_yaw)
         previous_scans: deque[np.ndarray] = deque(maxlen=3)
-        observation = snapshot_to_obs(snap, previous_throttle, previous_steering)
+        observation = snapshot_to_obs(
+            snap,
+            previous_throttle,
+            previous_steering,
+            forward_speed_mps=0.0,
+            lateral_speed_mps=0.0,
+        )
         if observation_profile == "official_sensors_history":
             previous_scans.extend([observation["lidar"].copy()] * 3)
             observation = snapshot_to_obs(
                 snap, previous_throttle, previous_steering,
+                forward_speed_mps=0.0,
+                lateral_speed_mps=0.0,
                 lidar_history=list(previous_scans),
             )
         while True:
@@ -110,15 +122,42 @@ def run_policy(
                 straight_throttle_steering_threshold=straight_throttle_steering_threshold,
             )
             snap = racer.step(previous_throttle, previous_steering)
+            yaw_delta = float(
+                np.arctan2(
+                    np.sin(float(snap.heading_yaw) - previous_observation_yaw),
+                    np.cos(float(snap.heading_yaw) - previous_observation_yaw),
+                )
+            )
+            motion = speed_estimator.update(
+                snap.lidar_ranges,
+                float(racer.last_step_duration_s),
+                yaw_delta_rad=yaw_delta,
+            )
+            previous_observation_yaw = float(snap.heading_yaw)
+            forward_speed = motion.forward_m if motion.valid else 0.0
             if observation_profile == "official_sensors_history":
-                current_scan = snapshot_to_obs(snap, previous_throttle, previous_steering)["lidar"]
+                current_scan = snapshot_to_obs(
+                    snap,
+                    previous_throttle,
+                    previous_steering,
+                    forward_speed_mps=forward_speed,
+                    lateral_speed_mps=0.0,
+                )["lidar"]
                 observation = snapshot_to_obs(
                     snap, previous_throttle, previous_steering,
+                    forward_speed_mps=forward_speed,
+                    lateral_speed_mps=0.0,
                     lidar_history=list(previous_scans),
                 )
                 previous_scans.append(current_scan.copy())
             else:
-                observation = snapshot_to_obs(snap, previous_throttle, previous_steering)
+                observation = snapshot_to_obs(
+                    snap,
+                    previous_throttle,
+                    previous_steering,
+                    forward_speed_mps=forward_speed,
+                    lateral_speed_mps=0.0,
+                )
     except KeyboardInterrupt:
         pass
     finally:

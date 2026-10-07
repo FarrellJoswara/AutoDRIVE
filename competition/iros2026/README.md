@@ -5,12 +5,15 @@ simulator and Devkit images. The four-layer boundaries remain explicit:
 
 1. **Layer 1** (`src/layer1/ros2_racer.py`) maps permitted LiDAR, IMU, wheel
    encoder, and actuator-feedback topics into the established
-   `TelemetrySnapshot` parser and sends throttle/steering commands. It derives
-   forward speed from wheel-angle changes. Policy mode does not subscribe to
-   odometry, IPS, TF, reset, lap-count, or collision-count topics.
+   `TelemetrySnapshot` parser and sends throttle/steering commands. Its
+   wheel-angle speed estimate is retained for diagnostics, not used as body
+   speed by the policy. Policy mode does not subscribe to odometry, IPS, TF,
+   reset, lap-count, or collision-count topics.
 2. **Layer 2** (`src/layer2/official_race_env.py`) builds policy observations
-   from Layer 1 data and tracks the official race sequence. It does not use
-   centerlines, map files, simulator ground truth, or non-ROS interfaces.
+   from permitted Layer 1 data, estimates body motion by matching successive
+   LiDAR scans with the IMU yaw change, and tracks the official race sequence.
+   It does not use centerlines, map files, simulator ground truth, or
+   non-ROS interfaces.
 3. **Layer 3** (`src/layer3/official_policy.py`) runs the continuous
    competition controller. The separate local evaluator
    (`src/layer3/official_evaluate.py`) reads restricted lap/collision metrics
@@ -115,7 +118,7 @@ official simulator.
 
 Layer 3 also includes a deterministic LiDAR gap-following controller used to
 validate sensor ordering, steering direction, and actuator response without
-PPO. It consumes the same canonical LiDAR and encoder-derived speed observation
+PPO. It consumes the same canonical LiDAR and LiDAR-derived motion observation
 and does not use map geometry or restricted race metrics. Select it with
 `AICAR_CONTROLLER=lidar_gap`; no checkpoint mount is needed. This is a
 diagnostic baseline, not a learned or competition-ready policy. Compare its

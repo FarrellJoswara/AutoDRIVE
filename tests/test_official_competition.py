@@ -313,21 +313,28 @@ def test_encoder_speed_uses_accumulated_wheel_angles_without_aliasing():
     assert np.isclose(speed, expected)
 
 
-def test_official_sensor_observation_profile_uses_encoder_speed_and_zero_lateral():
+def test_official_sensor_observation_profile_uses_lidar_motion_not_wheel_rotation():
+    from src.layer2.lidar_odometry import ScanMotion
     from src.layer2.autodrive_env import AutoDriveEnv
+
+    class FixedMotionEstimator:
+        def update(self, ranges_m, elapsed_s, *, yaw_delta_rad=None):
+            assert elapsed_s == 0.1
+            return ScanMotion(forward_m=2.5, valid=True)
 
     env = object.__new__(AutoDriveEnv)
     env.observation_profile = "official_sensors"
-    env._observation_encoder_positions = (1.0, 1.0)
+    env._lidar_speed_estimator = FixedMotionEstimator()
+    env._observation_heading_yaw = None
     snap = _snapshot(lap=0, last_lap=0.0, collisions=0)
     snap.v_long = 99.0  # simulator-only velocity must not reach this profile
     snap.v_lat = 7.0
-    snap.encoder_left = 2.0
-    snap.encoder_right = 2.0
+    snap.encoder_left = 200.0
+    snap.encoder_right = 200.0
     obs = env._policy_observation(
         snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.1
     )
-    expected_speed = 0.059 / 0.1
+    expected_speed = 2.5
     assert np.isclose(obs["state"][0], expected_speed / 22.88)
     assert obs["state"][1] == 0.0
 

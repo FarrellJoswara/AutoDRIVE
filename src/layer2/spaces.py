@@ -189,7 +189,7 @@ def snapshot_to_obs(
     """Build the normalized policy observation from one Bridge snapshot.
 
     State channels, individually normalized:
-      0  body forward velocity or supplied encoder estimate / max speed
+      0  body forward velocity or supplied sensor-derived estimate / max speed
       1  body lateral velocity (positive right) / max speed, or supplied zero
       2  Unity-convention yaw rate / 10 rad/s
       3  body forward acceleration / 1 g
