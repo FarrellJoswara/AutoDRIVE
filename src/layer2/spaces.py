@@ -73,6 +73,33 @@ def map_steering_action(value: float, mode: SteeringMode = "normal") -> float:
     return -steering if mode == "invert" else steering
 
 
+def transform_policy_action(
+    action: np.ndarray,
+    *,
+    throttle_mode: ThrottleMode = "bidirectional",
+    negative_throttle_mode: NegativeThrottleMode = "allow",
+    steering_mode: SteeringMode = "normal",
+    steering_action_scale: float = 1.0,
+    straight_throttle_gain: float = 1.0,
+    straight_throttle_steering_threshold: float = 0.15,
+) -> tuple[float, float]:
+    """Map one normalized policy action to official throttle/steering commands."""
+    command = np.asarray(action, dtype=np.float32).reshape(2)
+    throttle = (
+        map_policy_throttle(command[0], throttle_mode)
+        if throttle_mode == "forward_only"
+        else map_throttle_action(command[0], negative_throttle_mode)
+    )
+    steering = map_steering_action(command[1], steering_mode)
+    steering = float(steering * float(steering_action_scale))
+    if (
+        throttle > 0.0
+        and abs(steering) < float(straight_throttle_steering_threshold)
+    ):
+        throttle = min(1.0, throttle * float(straight_throttle_gain))
+    return float(throttle), steering
+
+
 def make_observation_space(lidar_beams: int = LIDAR_BEAMS) -> spaces.Dict:
     """Declare canonical range readings and nine individually scaled state values."""
     if lidar_beams != LIDAR_BEAMS:

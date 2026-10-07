@@ -39,6 +39,9 @@ if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \
     --steering-mode "${AICAR_STEERING_MODE:-normal}" \
     --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}" \
+    --steering-action-scale "${AICAR_STEERING_ACTION_SCALE:-1.0}" \
+    --straight-throttle-gain "${AICAR_STRAIGHT_THROTTLE_GAIN:-1.0}" \
+    --straight-throttle-steering-threshold "${AICAR_STRAIGHT_THROTTLE_STEERING_THRESHOLD:-0.15}" \
     --out "${AICAR_EVALUATION_OUTPUT:-/tmp/aicar-iros-evaluation.json}"
 else
   echo "Running competition policy; only allowed sensor and actuator topics are enabled."
@@ -48,7 +51,10 @@ else
     --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-5}" \
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \
     --steering-mode "${AICAR_STEERING_MODE:-normal}" \
-    --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}"
+    --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}" \
+    --steering-action-scale "${AICAR_STEERING_ACTION_SCALE:-1.0}" \
+    --straight-throttle-gain "${AICAR_STRAIGHT_THROTTLE_GAIN:-1.0}" \
+    --straight-throttle-steering-threshold "${AICAR_STRAIGHT_THROTTLE_STEERING_THRESHOLD:-0.15}"
 fi
 
 # Keep the official bridge alive for inspection and rosbag recording after the

@@ -55,6 +55,7 @@ from .spaces import (
     make_observation_space,
     map_policy_throttle,
     snapshot_to_obs,
+    transform_policy_action,
 )
 
 # Nominal control rate used to scale reward/route time by frame_skip. This is
@@ -453,22 +454,13 @@ class AutoDriveEnv(gym.Env):
         -------
         obs, reward, terminated, truncated, info
         """
-        # Coerce / clip to legal continuous controls.
-        action = np.asarray(action, dtype=np.float32).reshape(2)
-        throttle = map_policy_throttle(
-            action[0], getattr(self, "throttle_mode", "bidirectional")
+        throttle, steering = transform_policy_action(
+            action,
+            throttle_mode=getattr(self, "throttle_mode", "bidirectional"),
+            steering_action_scale=self.steering_action_scale,
+            straight_throttle_gain=self.straight_throttle_gain,
+            straight_throttle_steering_threshold=self.straight_throttle_steering_threshold,
         )
-        steering = float(
-            np.clip(action[1], -1.0, 1.0) * self.steering_action_scale
-        )
-        # A small configurable gain lets the car use more of its available
-        # throttle on straights while leaving cornering and reverse commands
-        # untouched. With the default gain of 1.0 this mapping is neutral.
-        if (
-            throttle > 0.0
-            and abs(steering) < self.straight_throttle_steering_threshold
-        ):
-            throttle = min(1.0, throttle * self.straight_throttle_gain)
 
         # Frame skip: repeat the SAME action for N Layer 1 Bridge responses.
         # Explicit mode acknowledges the same simulated interval per response.

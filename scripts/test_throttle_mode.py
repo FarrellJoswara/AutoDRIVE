@@ -5,7 +5,7 @@ import pytest
 
 from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.autodrive_env import AutoDriveEnv
-from src.layer2.spaces import map_policy_throttle
+from src.layer2.spaces import map_policy_throttle, transform_policy_action
 from src.layer4.settings import Settings
 from src.layer3.train import build_arg_parser
 from src.layer3.envs import env_kwargs_from_args
@@ -52,6 +52,32 @@ def test_layer_two_executes_forward_only_mapped_action():
     env.reset()
     env.step(np.asarray([0.0, 0.0], dtype=np.float32))
     assert racer.last_command == pytest.approx((0.5, 0.0))
+
+
+def test_shared_action_transform_matches_training_settings():
+    action = np.asarray([0.5, 0.1], dtype=np.float32)
+    expected = (0.75 * 1.025, 0.1 * 0.946)
+    assert transform_policy_action(
+        action,
+        throttle_mode="forward_only",
+        steering_action_scale=0.946,
+        straight_throttle_gain=1.025,
+        straight_throttle_steering_threshold=0.15,
+    ) == pytest.approx(expected)
+
+
+def test_layer_two_uses_the_shared_transform_for_scaled_commands():
+    racer = CommandRacer()
+    env = AutoDriveEnv(
+        racer=racer,
+        throttle_mode="forward_only",
+        steering_action_scale=0.946,
+        straight_throttle_gain=1.025,
+        straight_throttle_steering_threshold=0.15,
+    )
+    env.reset()
+    env.step(np.asarray([0.5, 0.1], dtype=np.float32))
+    assert racer.last_command == pytest.approx((0.75 * 1.025, 0.1 * 0.946))
 
 
 def test_layer_four_persists_forward_only_through_train_argv():

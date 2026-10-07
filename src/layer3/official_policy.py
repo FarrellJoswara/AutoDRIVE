@@ -38,14 +38,15 @@ def run_policy(
     negative_throttle_mode: str = "allow",
     steering_mode: str = "normal",
     throttle_mode: str = "bidirectional",
+    steering_action_scale: float = 1.0,
+    straight_throttle_gain: float = 1.0,
+    straight_throttle_steering_threshold: float = 0.15,
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
     from src.layer2.spaces import (
-        map_policy_throttle,
-        map_steering_action,
-        map_throttle_action,
         snapshot_to_obs,
+        transform_policy_action,
     )
 
     model = load_policy(model_path, device=device)
@@ -58,12 +59,15 @@ def run_policy(
         while True:
             action, _ = model.predict(observation, deterministic=True)
             command = np.asarray(action, dtype=np.float32).reshape(2)
-            previous_throttle = (
-                map_policy_throttle(float(command[0]), throttle_mode)
-                if throttle_mode == "forward_only"
-                else map_throttle_action(float(command[0]), negative_throttle_mode)
+            previous_throttle, previous_steering = transform_policy_action(
+                command,
+                throttle_mode=throttle_mode,
+                negative_throttle_mode=negative_throttle_mode,
+                steering_mode=steering_mode,
+                steering_action_scale=steering_action_scale,
+                straight_throttle_gain=straight_throttle_gain,
+                straight_throttle_steering_threshold=straight_throttle_steering_threshold,
             )
-            previous_steering = map_steering_action(command[1], steering_mode)
             snap = racer.step(previous_throttle, previous_steering)
             observation = snapshot_to_obs(
                 snap, previous_throttle, previous_steering
@@ -99,6 +103,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="bidirectional",
         help="Map normalized policy throttle into signed or forward-only actuator range",
     )
+    parser.add_argument("--steering-action-scale", type=float, default=1.0)
+    parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
+    parser.add_argument(
+        "--straight-throttle-steering-threshold", type=float, default=0.15
+    )
     args = parser.parse_args(argv)
     run_policy(
         args.model,
@@ -107,6 +116,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         negative_throttle_mode=args.negative_throttle_mode,
         steering_mode=args.steering_mode,
         throttle_mode=args.throttle_mode,
+        steering_action_scale=args.steering_action_scale,
+        straight_throttle_gain=args.straight_throttle_gain,
+        straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
     )
     return 0
 
