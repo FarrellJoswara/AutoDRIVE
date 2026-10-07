@@ -712,3 +712,29 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   about 0.25); more of the same updates have not yet shown repeatable gains.
   Keep the 66.98 s champion and all trial checkpoints; do not promote the
   69.593 s single successful attempt as a reliable record.
+- The bidirectional LiDAR fine-tune's 81,920-step snapshot completed 0/3
+  deterministic local 10-lap attempts: collision after 6 laps, frontier stall
+  after 6 laps, and frontier stall after 1 lap. The run was stopped at 95,400
+  steps after this failure; all logs/checkpoints remain under
+  `logs/rl/lidar_speed_finetune_bidirectional_lr1e5_exploration030_from_action50_20261007`.
+  No checkpoint from this run beats or replaces the preserved 66.9818 s seed.
+- Headless official-image transfer diagnostics use the exact official simulator
+  and API image digests, with the official evaluator and one fresh simulator
+  process per model. The local Docker Desktop graphics path reports `No
+  supported renderers found`, so these diagnostic runs use the competition
+  guide's documented `-batchmode -nographics` simulator mode. Sensor and race
+  telemetry stream, but the headless mode reports unsupported graphics shaders;
+  these are diagnostic transfer checks, not leaderboard-valid Ultra-graphics
+  scores.
+- With the same bidirectional throttle and steering scale 0.945, the 69.593 s
+  local candidate completed one official-image race lap in 14.905 s before
+  reaching 11 collisions and disqualification. Its control rate was 19.44 Hz,
+  median interval 51.10 ms, and the evaluator verified motion. The official-image
+  run of the retained 66.9818 s seed under the identical headless setup completed
+  one lap in 19.136 s, then also reached 11 collisions and was disqualified.
+  Neither produced a valid full-race score. The candidate's faster first lap is
+  only a diagnostic; it does not satisfy the completion/safety gate.
+- Reports: `competition/iros2026/results/bidirectional_lr1e5_81920_official_20261007.json`
+  and `competition/iros2026/results/champion_66982_headless_official_20261007.json`.
+  Next isolate the current candidate's negative-throttle behavior under this same
+  official-image diagnostic before starting another training continuation.
