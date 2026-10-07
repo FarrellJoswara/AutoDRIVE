@@ -38,6 +38,7 @@ if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
     --max-steps "${AICAR_RACE_STEP_GUARD:-150000}" \
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \
     --steering-mode "${AICAR_STEERING_MODE:-normal}" \
+    --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}" \
     --out "${AICAR_EVALUATION_OUTPUT:-/tmp/aicar-iros-evaluation.json}"
 else
   echo "Running competition policy; only allowed sensor and actuator topics are enabled."
@@ -46,7 +47,8 @@ else
     --device cpu \
     --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-5}" \
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \
-    --steering-mode "${AICAR_STEERING_MODE:-normal}"
+    --steering-mode "${AICAR_STEERING_MODE:-normal}" \
+    --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}"
 fi
 
 # Keep the official bridge alive for inspection and rosbag recording after the

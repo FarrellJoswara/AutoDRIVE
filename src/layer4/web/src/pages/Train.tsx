@@ -439,6 +439,23 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             <small className="meta">Official mode uses LiDAR, encoder-derived forward speed, IMU, actuator feedback, and prior actions; it excludes simulator-only lateral speed and pose.</small>
           </label>
           <label className="field">
+            Throttle direction
+            <RewardTip text="Bidirectional maps the policy output directly to reverse and forward throttle. Forward only maps the policy range [-1, 1] onto actuator throttle [0, 1], so a centered initial PPO action means half throttle and the policy cannot command reverse." />
+            <select
+              value={form.throttle_mode}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  throttle_mode: e.target.value as Settings["throttle_mode"],
+                }))
+              }
+            >
+              <option value="bidirectional">Bidirectional</option>
+              <option value="forward_only">Forward only</option>
+            </select>
+            <small className="meta">For race training, forward-only removes reverse actions while retaining continuous throttle control.</small>
+          </label>
+          <label className="field">
             Simulator mode
             <select
               value={form.simulator_mode}

@@ -48,6 +48,7 @@ class Settings(BaseModel):
     simulator_mode: Literal["legacy", "fixed_camera_on", "fixed_camera_off"] = "legacy"
     action_interval_s: Optional[float] = Field(default=None, gt=0)
     observation_profile: Literal["simulator", "official_sensors"] = "simulator"
+    throttle_mode: Literal["bidirectional", "forward_only"] = "bidirectional"
     steering_action_scale: float = Field(default=1.0, ge=0, le=1)
     straight_throttle_gain: float = Field(default=1.0, ge=1.0, le=2.0)
     straight_throttle_steering_threshold: float = Field(default=0.15, ge=0.0, le=1.0)
@@ -208,6 +209,8 @@ class Settings(BaseModel):
             str(self.frame_skip),
             "--observation-profile",
             self.observation_profile,
+            "--throttle-mode",
+            self.throttle_mode,
             "--steering-action-scale",
             str(self.steering_action_scale),
             "--straight-throttle-gain",

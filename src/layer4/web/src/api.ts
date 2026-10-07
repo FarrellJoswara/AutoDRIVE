@@ -146,6 +146,7 @@ export interface Settings {
   simulator_mode: "legacy" | "fixed_camera_on" | "fixed_camera_off";
   action_interval_s: number | null;
   observation_profile: "simulator" | "official_sensors";
+  throttle_mode: "bidirectional" | "forward_only";
   steering_action_scale: number;
   straight_throttle_gain: number;
   straight_throttle_steering_threshold: number;

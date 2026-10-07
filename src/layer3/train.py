@@ -786,6 +786,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="simulator",
         help="Use full simulator telemetry or match the official allowed sensor inputs",
     )
+    p.add_argument(
+        "--throttle-mode",
+        choices=("bidirectional", "forward_only"),
+        default="bidirectional",
+        help="Map normalized PPO throttle to signed throttle or forward-only [0, 1]",
+    )
     # Hard cap so stuck-but-wiggling episodes still reset (~100 s @ frame_skip=4).
     p.add_argument("--max-episode-steps", type=int, default=0)
     p.add_argument("--stagnation-speed-threshold", type=float, default=0.15)

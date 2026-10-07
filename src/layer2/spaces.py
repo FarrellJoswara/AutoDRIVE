@@ -23,6 +23,7 @@ LIDAR_BEAMS: int = 1081
 # observe when the simulator's actuator feedback differs from what was sent.
 STATE_DIM: int = 9
 NegativeThrottleMode = Literal["allow", "zero", "positive_magnitude"]
+ThrottleMode = Literal["bidirectional", "forward_only"]
 SteeringMode = Literal["normal", "invert"]
 
 _SPEED_SCALE_MPS = 22.88  # simulator RoboRacer maximum speed (82.4 km/h)
@@ -48,6 +49,20 @@ def map_throttle_action(value: float, mode: NegativeThrottleMode = "allow") -> f
         if mode == "positive_magnitude":
             return -throttle
     return throttle
+
+
+def map_policy_throttle(value: float, mode: ThrottleMode = "bidirectional") -> float:
+    """Map PPO's normalized throttle action to the vehicle actuator range.
+
+    ``forward_only`` maps [-1, 1] onto [0, 1]. This preserves a centered
+    initial PPO distribution as half throttle while making reverse impossible.
+    """
+    if mode not in ("bidirectional", "forward_only"):
+        raise ValueError(f"Unknown throttle mode: {mode}")
+    normalized = float(np.clip(float(value), -1.0, 1.0))
+    if mode == "forward_only":
+        return 0.5 * (normalized + 1.0)
+    return normalized
 
 
 def map_steering_action(value: float, mode: SteeringMode = "normal") -> float:
@@ -138,8 +153,8 @@ def snapshot_to_obs(
     """Build the normalized policy observation from one Bridge snapshot.
 
     State channels, individually normalized:
-      0  body forward velocity / simulator max speed
-      1  body lateral velocity (positive right) / simulator max speed
+      0  body forward velocity or supplied encoder estimate / max speed
+      1  body lateral velocity (positive right) / max speed, or supplied zero
       2  Unity-convention yaw rate / 10 rad/s
       3  body forward acceleration / 1 g
       4  body lateral acceleration (positive right) / 1 g

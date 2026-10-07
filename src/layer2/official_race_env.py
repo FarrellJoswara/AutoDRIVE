@@ -20,6 +20,7 @@ from .spaces import (
     SteeringMode,
     make_action_space,
     make_observation_space,
+    map_policy_throttle,
     map_throttle_action,
     map_steering_action,
     snapshot_to_obs,
@@ -41,6 +42,7 @@ class OfficialRaceEnv(gym.Env):
         steering_action_scale: float = 1.0,
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
+        throttle_mode: str = "bidirectional",
         negative_throttle_mode: NegativeThrottleMode = "allow",
         steering_mode: SteeringMode = "normal",
         vehicle_id: str = "roboracer_1",
@@ -69,6 +71,8 @@ class OfficialRaceEnv(gym.Env):
         # Validate once during environment construction.
         map_throttle_action(0.0, negative_throttle_mode)
         self.negative_throttle_mode = negative_throttle_mode
+        map_policy_throttle(0.0, throttle_mode)
+        self.throttle_mode = throttle_mode
         map_steering_action(0.0, steering_mode)
         self.steering_mode = steering_mode
         self.action_space = make_action_space()
@@ -113,7 +117,11 @@ class OfficialRaceEnv(gym.Env):
 
     def step(self, action: np.ndarray):
         command = np.asarray(action, dtype=np.float32).reshape(2)
-        throttle = map_throttle_action(command[0], self.negative_throttle_mode)
+        throttle = (
+            map_policy_throttle(command[0], self.throttle_mode)
+            if self.throttle_mode == "forward_only"
+            else map_throttle_action(command[0], self.negative_throttle_mode)
+        )
         steering = map_steering_action(command[1], self.steering_mode)
         steering = float(steering * self.steering_action_scale)
         if throttle > 0 and abs(steering) < self.straight_throttle_steering_threshold:

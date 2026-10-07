@@ -90,6 +90,11 @@ official sensor path without exposing restricted race state to the policy.
 `AICAR_STEERING_MODE` similarly accepts `normal` or `invert`; both controls
 default to the unmodified policy output for competition use.
 
+`AICAR_THROTTLE_MODE` accepts `bidirectional` or `forward_only`. Use the mode
+that matches the model's training configuration. `forward_only` maps PPO's
+normalized throttle output from `[-1, 1]` to actuator throttle `[0, 1]`; it is
+not interchangeable with a bidirectional model's action semantics.
+
 ## Interpretation
 
 Only compare policies tested with these official image tags and this same

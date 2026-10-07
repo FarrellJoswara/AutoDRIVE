@@ -49,7 +49,13 @@ from src.layer1.telemetry import TelemetrySnapshot
 from .rewards import RewardConfig, compute_reward_components
 from .lap_tracker import LapTracker, map_lap_gate_config
 from .route_progress import RouteProgressTracker, map_centerline_path
-from .spaces import LIDAR_BEAMS, make_action_space, make_observation_space, snapshot_to_obs
+from .spaces import (
+    LIDAR_BEAMS,
+    make_action_space,
+    make_observation_space,
+    map_policy_throttle,
+    snapshot_to_obs,
+)
 
 # Nominal control rate used to scale reward/route time by frame_skip. This is
 # not a guarantee of Unity physics steps or simulated seconds per Bridge return.
@@ -155,6 +161,8 @@ class AutoDriveEnv(gym.Env):
         action_interval_s: Optional[float] = None,
         # Scale the normalized steering command before sending it to Unity.
         steering_action_scale: float = 1.0,
+        # Optional forward-only throttle mapping for racing policies.
+        throttle_mode: str = "bidirectional",
         # Optional throttle gain when the executed steering command is small.
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
@@ -181,10 +189,12 @@ class AutoDriveEnv(gym.Env):
             raise ValueError(
                 "observation_profile must be 'simulator' or 'official_sensors'"
             )
+        map_policy_throttle(0.0, throttle_mode)
 
         # Store knobs as instance attributes (used every step).
         self.frame_skip = int(frame_skip)
         self.observation_profile = observation_profile
+        self.throttle_mode = throttle_mode
         self._observation_encoder_positions: Optional[Tuple[float, float]] = None
         injected_interval = getattr(racer, "action_interval_s", None)
         if racer is not None and action_interval_s is not None:
@@ -445,7 +455,9 @@ class AutoDriveEnv(gym.Env):
         """
         # Coerce / clip to legal continuous controls.
         action = np.asarray(action, dtype=np.float32).reshape(2)
-        throttle = float(np.clip(action[0], -1.0, 1.0))
+        throttle = map_policy_throttle(
+            action[0], getattr(self, "throttle_mode", "bidirectional")
+        )
         steering = float(
             np.clip(action[1], -1.0, 1.0) * self.steering_action_scale
         )

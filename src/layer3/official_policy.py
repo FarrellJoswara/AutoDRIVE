@@ -37,10 +37,16 @@ def run_policy(
     timeout_s: float = 5.0,
     negative_throttle_mode: str = "allow",
     steering_mode: str = "normal",
+    throttle_mode: str = "bidirectional",
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
-    from src.layer2.spaces import map_steering_action, map_throttle_action, snapshot_to_obs
+    from src.layer2.spaces import (
+        map_policy_throttle,
+        map_steering_action,
+        map_throttle_action,
+        snapshot_to_obs,
+    )
 
     model = load_policy(model_path, device=device)
     racer = RacerRos2(timeout_s=timeout_s, include_race_metrics=False)
@@ -52,8 +58,10 @@ def run_policy(
         while True:
             action, _ = model.predict(observation, deterministic=True)
             command = np.asarray(action, dtype=np.float32).reshape(2)
-            previous_throttle = map_throttle_action(
-                float(command[0]), negative_throttle_mode
+            previous_throttle = (
+                map_policy_throttle(float(command[0]), throttle_mode)
+                if throttle_mode == "forward_only"
+                else map_throttle_action(float(command[0]), negative_throttle_mode)
             )
             previous_steering = map_steering_action(command[1], steering_mode)
             snap = racer.step(previous_throttle, previous_steering)
@@ -85,6 +93,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="normal",
         help="Map policy steering into the official actuator direction",
     )
+    parser.add_argument(
+        "--throttle-mode",
+        choices=("bidirectional", "forward_only"),
+        default="bidirectional",
+        help="Map normalized policy throttle into signed or forward-only actuator range",
+    )
     args = parser.parse_args(argv)
     run_policy(
         args.model,
@@ -92,6 +106,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         timeout_s=args.timeout_s,
         negative_throttle_mode=args.negative_throttle_mode,
         steering_mode=args.steering_mode,
+        throttle_mode=args.throttle_mode,
     )
     return 0
 
