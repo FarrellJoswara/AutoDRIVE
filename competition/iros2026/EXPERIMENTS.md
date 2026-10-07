@@ -246,3 +246,21 @@ lap and neither is a score comparison.
 - Raw reports: `results/pooled_50ms_checkpoint_diag_30s_20261007.json`,
   `results/pooled_50ms_30k_checkpoint_diag_30s_20261007.json`, and
   `results/pooled_50ms_30k_official_180s_20261007.json`.
+
+### Legacy checkpoint through the current compliant sensor path
+
+- Date: 2026-10-07; tested the preserved
+  `optimization_minimal_updates_20261005/best_evaluated_model.zip` checkpoint
+  with current Layer 1/2 code, the exact official IROS image tags, and its
+  original bidirectional action semantics. Policy mode subscribed only to
+  LiDAR, IMU, encoders, and actuator feedback; the local evaluator alone read
+  lap/collision counters, and no reset command was published.
+- After the 300-second guard: 0 laps, 1 raw collision, 5,915 policy steps,
+  measured action cadence 19.71 Hz. A live topic check showed throttle=-1.0
+  and lap_count=0; the checkpoint remained in full reverse at that point.
+- This corrects the earlier apparent “lap-capable” baseline: the 10-lap,
+  ~13-second result in `transfer_baseline_20261007.json` used the pre-audit
+  odometry-derived speed and restricted reset path, and is not evidence that
+  this checkpoint can race using allowed policy inputs. Preserve it as a
+  historical diagnostic, not a valid baseline.
+- Raw report: `results/legacy_compliant_baseline_20261007.json`.

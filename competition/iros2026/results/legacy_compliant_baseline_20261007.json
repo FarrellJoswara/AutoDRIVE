@@ -1,0 +1,143 @@
+{
+  "model": "/models/policy.zip",
+  "created_utc": "2026-10-07T12:26:29.108376+00:00",
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "deterministic": true,
+  "throttle_mode": "bidirectional",
+  "steering_mode": "normal",
+  "warmup_laps_ignored": 1,
+  "race_laps": 10,
+  "runs": [
+    {
+      "race_laps_completed": 0,
+      "race_lap_times_s": [],
+      "race_time_s": 0,
+      "race_collisions": 0,
+      "collision_penalty_s": 0.0,
+      "adjusted_race_time_s": 0.0,
+      "disqualified": false,
+      "best_lap_s": null,
+      "mean_lap_s": null,
+      "attempt": 1,
+      "steps": 5915,
+      "warmup_lap_times_s": [],
+      "warmup_collisions": 0,
+      "raw_collision_count_at_finish": 1,
+      "race_collision_baseline": null,
+      "total_laps_since_start": 0,
+      "stop_reason": "wall_timeout",
+      "wall_duration_s": 300.0343989310204,
+      "mean_control_rate_hz": 19.714518109500577,
+      "median_control_interval_s": 0.05079621801269241,
+      "median_reported_lidar_scan_rate_hz": 39.99999940395356,
+      "action_observation_diagnostics": {
+        "policy_throttle": {
+          "count": 5915,
+          "min": -1.0,
+          "max": 1.0,
+          "mean": -0.03039064705623778,
+          "std": 0.9725141688409086
+        },
+        "policy_steering": {
+          "count": 5915,
+          "min": -0.21551436185836792,
+          "max": 0.8664985299110413,
+          "mean": 0.20172269507291604,
+          "std": 0.23551051698498093
+        },
+        "applied_throttle": {
+          "count": 5915,
+          "min": -1.0,
+          "max": 1.0,
+          "mean": -0.03039064705623778,
+          "std": 0.9725141688409086
+        },
+        "applied_steering": {
+          "count": 5915,
+          "min": -0.21551436185836792,
+          "max": 0.8664985299110413,
+          "mean": 0.20172269507291604,
+          "std": 0.23551051698498093
+        },
+        "policy_reverse_fraction": 0.49991546914623836,
+        "observation_state": {
+          "forward_speed": {
+            "count": 5915,
+            "min": -1.9849529266357422,
+            "max": 1.7140614986419678,
+            "mean": -0.03390379628687719,
+            "std": 1.0517445231607059
+          },
+          "sideways_speed": {
+            "count": 5915,
+            "min": -0.0,
+            "max": -0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "yaw_rate": {
+            "count": 5915,
+            "min": -0.0652799978852272,
+            "max": 0.06502000242471695,
+            "mean": 0.001960919695094583,
+            "std": 0.012973087811821821
+          },
+          "forward_acceleration": {
+            "count": 5915,
+            "min": -0.5894571542739868,
+            "max": 0.5630668997764587,
+            "mean": 0.0014784455371940203,
+            "std": 0.541770875773933
+          },
+          "sideways_acceleration": {
+            "count": 5915,
+            "min": -0.4557315707206726,
+            "max": 0.11577858030796051,
+            "mean": 0.009740670610976838,
+            "std": 0.03962851218788508
+          },
+          "throttle_feedback": {
+            "count": 5915,
+            "min": -1.0,
+            "max": 1.0,
+            "mean": -0.029943871629107128,
+            "std": 0.9722099839475125
+          },
+          "steering_feedback": {
+            "count": 5915,
+            "min": -0.18239113688468933,
+            "max": 0.8609625697135925,
+            "mean": 0.19554230512819698,
+            "std": 0.2278175059186221
+          },
+          "previous_throttle": {
+            "count": 5915,
+            "min": -1.0,
+            "max": 1.0,
+            "mean": -0.030558755210366977,
+            "std": 0.9724229545448734
+          },
+          "previous_steering": {
+            "count": 5915,
+            "min": -0.21551436185836792,
+            "max": 0.8664985299110413,
+            "mean": 0.20173830423576541,
+            "std": 0.2354940864569836
+          }
+        },
+        "normalized_lidar_minimum": {
+          "count": 5915,
+          "min": 0.017208067700266838,
+          "max": 0.07035691291093826,
+          "mean": 0.04137860185963465,
+          "std": 0.010155570124102503
+        }
+      }
+    }
+  ],
+  "completed_attempts": 0,
+  "median_adjusted_race_time_s": null,
+  "best_adjusted_race_time_s": null
+}
