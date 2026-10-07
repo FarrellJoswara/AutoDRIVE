@@ -47,6 +47,10 @@ class Settings(BaseModel):
     auto_launch: bool = True
     simulator_mode: Literal["legacy", "fixed_camera_on", "fixed_camera_off"] = "legacy"
     action_interval_s: Optional[float] = Field(default=None, gt=0)
+    observation_profile: Literal["simulator", "official_sensors"] = "simulator"
+    steering_action_scale: float = Field(default=1.0, ge=0, le=1)
+    straight_throttle_gain: float = Field(default=1.0, ge=1.0, le=2.0)
+    straight_throttle_steering_threshold: float = Field(default=0.15, ge=0.0, le=1.0)
     connect_timeout: float = Field(default=90.0, gt=0)
     frame_skip: int = Field(default=4, ge=1)
     max_episode_steps: int = Field(default=0, ge=0)
@@ -202,6 +206,14 @@ class Settings(BaseModel):
             str(self.connect_timeout),
             "--frame-skip",
             str(self.frame_skip),
+            "--observation-profile",
+            self.observation_profile,
+            "--steering-action-scale",
+            str(self.steering_action_scale),
+            "--straight-throttle-gain",
+            str(self.straight_throttle_gain),
+            "--straight-throttle-steering-threshold",
+            str(self.straight_throttle_steering_threshold),
             "--max-episode-steps",
             str(self.max_episode_steps),
             "--laps-per-episode",

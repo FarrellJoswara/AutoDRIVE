@@ -423,6 +423,22 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           </label>
           <div className="section-title">Simulator</div>
           <label className="field">
+            Policy observation inputs
+            <select
+              value={form.observation_profile}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  observation_profile: e.target.value as Settings["observation_profile"],
+                }))
+              }
+            >
+              <option value="simulator">Full simulator telemetry</option>
+              <option value="official_sensors">Official allowed sensors</option>
+            </select>
+            <small className="meta">Official mode uses LiDAR, encoder-derived forward speed, IMU, actuator feedback, and prior actions; it excludes simulator-only lateral speed and pose.</small>
+          </label>
+          <label className="field">
             Simulator mode
             <select
               value={form.simulator_mode}
