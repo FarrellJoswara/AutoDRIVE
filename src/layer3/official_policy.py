@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -73,11 +72,8 @@ def run_policy(
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
-    from src.layer2.lidar_odometry import LidarOdometry
-    from src.layer2.spaces import (
-        snapshot_to_obs,
-        transform_policy_action,
-    )
+    from src.layer2.official_race_env import OfficialObservationBuilder
+    from src.layer2.spaces import transform_policy_action
 
     if observation_profile not in ("official_sensors", "official_sensors_history"):
         raise ValueError("official runner supports official sensor observation profiles only")
@@ -86,29 +82,14 @@ def run_policy(
         observation_profile=observation_profile,
     )
     racer = RacerRos2(timeout_s=timeout_s, include_race_metrics=False)
+    observation_builder = OfficialObservationBuilder(
+        observation_profile=observation_profile
+    )
     previous_throttle = 0.0
     previous_steering = 0.0
     try:
         snap = racer.wait_until_ready()
-        speed_estimator = LidarOdometry()
-        speed_estimator.update(snap.lidar_ranges, 0.0)
-        previous_observation_yaw = float(snap.heading_yaw)
-        previous_scans: deque[np.ndarray] = deque(maxlen=3)
-        observation = snapshot_to_obs(
-            snap,
-            previous_throttle,
-            previous_steering,
-            forward_speed_mps=0.0,
-            lateral_speed_mps=0.0,
-        )
-        if observation_profile == "official_sensors_history":
-            previous_scans.extend([observation["lidar"].copy()] * 3)
-            observation = snapshot_to_obs(
-                snap, previous_throttle, previous_steering,
-                forward_speed_mps=0.0,
-                lateral_speed_mps=0.0,
-                lidar_history=list(previous_scans),
-            )
+        observation = observation_builder.reset(snap)
         while True:
             action, _ = model.predict(observation, deterministic=True)
             command = np.asarray(action, dtype=np.float32).reshape(2)
@@ -122,42 +103,12 @@ def run_policy(
                 straight_throttle_steering_threshold=straight_throttle_steering_threshold,
             )
             snap = racer.step(previous_throttle, previous_steering)
-            yaw_delta = float(
-                np.arctan2(
-                    np.sin(float(snap.heading_yaw) - previous_observation_yaw),
-                    np.cos(float(snap.heading_yaw) - previous_observation_yaw),
-                )
+            observation = observation_builder.observe(
+                snap,
+                previous_throttle,
+                previous_steering,
+                elapsed_s=float(racer.last_step_duration_s),
             )
-            motion = speed_estimator.update(
-                snap.lidar_ranges,
-                float(racer.last_step_duration_s),
-                yaw_delta_rad=yaw_delta,
-            )
-            previous_observation_yaw = float(snap.heading_yaw)
-            forward_speed = motion.forward_m if motion.valid else 0.0
-            if observation_profile == "official_sensors_history":
-                current_scan = snapshot_to_obs(
-                    snap,
-                    previous_throttle,
-                    previous_steering,
-                    forward_speed_mps=forward_speed,
-                    lateral_speed_mps=0.0,
-                )["lidar"]
-                observation = snapshot_to_obs(
-                    snap, previous_throttle, previous_steering,
-                    forward_speed_mps=forward_speed,
-                    lateral_speed_mps=0.0,
-                    lidar_history=list(previous_scans),
-                )
-                previous_scans.append(current_scan.copy())
-            else:
-                observation = snapshot_to_obs(
-                    snap,
-                    previous_throttle,
-                    previous_steering,
-                    forward_speed_mps=forward_speed,
-                    lateral_speed_mps=0.0,
-                )
     except KeyboardInterrupt:
         pass
     finally:

@@ -9,7 +9,6 @@ or action path. Collision handling is left to the simulator checkpoint reset.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
-from collections import deque
 
 import gymnasium as gym
 import numpy as np
@@ -71,7 +70,9 @@ class OfficialRaceEnv(gym.Env):
         if observation_profile not in ("official_sensors", "official_sensors_history"):
             raise ValueError("unsupported official race observation profile")
         self.observation_profile = observation_profile
-        self._lidar_history: deque[np.ndarray] = deque(maxlen=3)
+        self._observation_builder = OfficialObservationBuilder(
+            observation_profile=observation_profile
+        )
         self.warmup_laps = int(warmup_laps)
         self.race_laps = int(race_laps)
         self.steering_action_scale = float(steering_action_scale)
@@ -99,9 +100,6 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s: list[float] = []
         self._episode_steps = 0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
-        self._lidar_speed_estimator = LidarOdometry()
-        self._observation_heading_yaw: Optional[float] = None
-        self._last_lidar_forward_speed_mps = 0.0
 
     def reset(
         self,
@@ -125,17 +123,7 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s = []
         self._episode_steps = 0
         self._last_snap = snap
-        self._lidar_speed_estimator.reset()
-        self._observation_heading_yaw = None
-        self._last_lidar_forward_speed_mps = 0.0
-        initial_obs = self._policy_observation(snap, 0.0, 0.0, elapsed_s=0.0)
-        if self.observation_profile == "official_sensors_history":
-            scan = _normalize_lidar(snap)
-            self._lidar_history.clear()
-            self._lidar_history.extend([scan.copy()] * 3)
-            initial_obs = self._policy_observation(
-                snap, 0.0, 0.0, elapsed_s=0.0
-            )
+        initial_obs = self._observation_builder.reset(snap)
         return initial_obs, self._build_info(
             snap, metrics, collision_event=False
         )
@@ -202,22 +190,12 @@ class OfficialRaceEnv(gym.Env):
                 getattr(self.racer, "last_control_interval_s", 0.0)
             ),
         })
-        if self.observation_profile == "official_sensors_history":
-            observation = self._policy_observation(
-                snap,
-                throttle,
-                steering,
-                elapsed_s=float(self.racer.last_step_duration_s),
-                lidar_history=list(self._lidar_history),
-            )
-            self._lidar_history.append(_normalize_lidar(snap))
-        else:
-            observation = self._policy_observation(
-                snap,
-                throttle,
-                steering,
-                elapsed_s=float(self.racer.last_step_duration_s),
-            )
+        observation = self._observation_builder.observe(
+            snap,
+            throttle,
+            steering,
+            elapsed_s=float(self.racer.last_step_duration_s),
+        )
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
         return observation, 0.0, terminated, False, info
@@ -256,14 +234,56 @@ class OfficialRaceEnv(gym.Env):
             "lidar_beams": int(snap.lidar_ranges.size),
         }
 
-    def _policy_observation(
+    def close(self) -> None:
+        if self._owns_racer:
+            self.racer.kill()
+
+
+class OfficialObservationBuilder:
+    """Canonical sensor-only observation transform for official training and race.
+
+    Keep this stateful transform shared: a small difference in speed filtering,
+    scan history, or update ordering changes the policy's effective dynamics.
+    """
+
+    def __init__(self, *, observation_profile: str = "official_sensors") -> None:
+        if observation_profile not in ("official_sensors", "official_sensors_history"):
+            raise ValueError("unsupported official race observation profile")
+        self.observation_profile = observation_profile
+        self._lidar_history: list[np.ndarray] = []
+        self._lidar_speed_estimator = LidarOdometry()
+        self._observation_heading_yaw: Optional[float] = None
+        self._last_lidar_forward_speed_mps = 0.0
+
+    def reset(self, snap: TelemetrySnapshot) -> Dict[str, np.ndarray]:
+        self._lidar_history = []
+        self._lidar_speed_estimator.reset()
+        self._observation_heading_yaw = float(snap.heading_yaw)
+        self._last_lidar_forward_speed_mps = 0.0
+        if self.observation_profile == "official_sensors_history":
+            scan = _normalize_lidar(snap)
+            self._lidar_history = [scan.copy(), scan.copy(), scan.copy()]
+        history = (
+            self._lidar_history
+            if self.observation_profile == "official_sensors_history"
+            else None
+        )
+        return snapshot_to_obs(
+            snap,
+            0.0,
+            0.0,
+            forward_speed_mps=0.0,
+            lateral_speed_mps=0.0,
+            lidar_history=history,
+        )
+
+    def observe(
         self,
         snap: TelemetrySnapshot,
         prev_throttle: float,
         prev_steering: float,
         *,
         elapsed_s: float,
-        lidar_history: Optional[list[np.ndarray]] = None,
     ) -> Dict[str, np.ndarray]:
         previous_yaw = self._observation_heading_yaw
         yaw_delta = None
@@ -289,15 +309,20 @@ class OfficialRaceEnv(gym.Env):
                 elapsed_s,
             )
         self._last_lidar_forward_speed_mps = forward_speed
-        return snapshot_to_obs(
+        history = (
+            self._lidar_history
+            if self.observation_profile == "official_sensors_history"
+            else None
+        )
+        observation = snapshot_to_obs(
             snap,
             prev_throttle,
             prev_steering,
             forward_speed_mps=forward_speed,
             lateral_speed_mps=0.0,
-            lidar_history=lidar_history,
+            lidar_history=history,
         )
-
-    def close(self) -> None:
-        if self._owns_racer:
-            self.racer.kill()
+        if history is not None:
+            self._lidar_history.append(_normalize_lidar(snap))
+            self._lidar_history = self._lidar_history[-3:]
+        return observation

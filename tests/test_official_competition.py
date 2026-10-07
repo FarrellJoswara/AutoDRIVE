@@ -20,6 +20,7 @@ from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.lidar_odometry import acceleration_consistent_lidar_speed
 from src.layer2.official_race_env import (
     OfficialRaceEnv,
+    OfficialObservationBuilder,
 )
 from src.layer2.spaces import map_steering_action, map_throttle_action
 from src.layer3.official_evaluate import (
@@ -366,26 +367,22 @@ def test_official_lidar_speed_accepts_physical_change_and_checkpoint_stop():
 
 def test_official_sensor_observation_profile_uses_lidar_motion_not_wheel_rotation():
     from src.layer2.lidar_odometry import ScanMotion
-    from src.layer2.autodrive_env import AutoDriveEnv
 
     class FixedMotionEstimator:
         def update(self, ranges_m, elapsed_s, *, yaw_delta_rad=None):
             assert elapsed_s == 0.1
             return ScanMotion(forward_m=2.5, valid=True)
 
-    env = object.__new__(AutoDriveEnv)
-    env.observation_profile = "official_sensors"
-    env._lidar_speed_estimator = FixedMotionEstimator()
-    env._observation_heading_yaw = None
+    builder = OfficialObservationBuilder()
     snap = _snapshot(lap=0, last_lap=0.0, collisions=0)
     snap.v_long = 99.0  # simulator-only velocity must not reach this profile
     snap.v_lat = 7.0
     snap.encoder_left = 200.0
     snap.encoder_right = 200.0
     snap.linear_acceleration = (25.0, 0.0, 0.0)
-    obs = env._policy_observation(
-        snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.1
-    )
+    builder.reset(snap)
+    builder._lidar_speed_estimator = FixedMotionEstimator()
+    obs = builder.observe(snap, 0.0, 0.0, elapsed_s=0.1)
     expected_speed = 2.5
     assert np.isclose(obs["state"][0], expected_speed / 22.88)
     assert obs["state"][1] == 0.0
@@ -393,25 +390,52 @@ def test_official_sensor_observation_profile_uses_lidar_motion_not_wheel_rotatio
 
 def test_local_official_sensor_profile_filters_lidar_speed_spike():
     from src.layer2.lidar_odometry import ScanMotion
-    from src.layer2.autodrive_env import AutoDriveEnv
 
     class FixedMotionEstimator:
         def update(self, ranges_m, elapsed_s, *, yaw_delta_rad=None):
             return ScanMotion(forward_m=-10.0, valid=True)
 
-    env = object.__new__(AutoDriveEnv)
-    env.observation_profile = "official_sensors"
-    env._lidar_speed_estimator = FixedMotionEstimator()
-    env._observation_heading_yaw = None
-    env._last_lidar_forward_speed_mps = 0.0
+    builder = OfficialObservationBuilder()
     snap = _snapshot(lap=0, last_lap=0.0, collisions=0)
     snap.linear_acceleration = (-5.0, 0.0, 0.0)
 
-    obs = env._policy_observation(
-        snap, 0.0, 0.0, lidar_beams=1081, elapsed_s=0.05
-    )
+    builder.reset(snap)
+    builder._lidar_speed_estimator = FixedMotionEstimator()
+    obs = builder.observe(snap, 0.0, 0.0, elapsed_s=0.05)
 
     assert np.isclose(float(obs["state"][0]) * 22.88, -0.25)
+
+
+def test_official_policy_and_race_env_share_identical_observation_transform():
+    snapshots = [
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+    ]
+    for snap, speed in zip(snapshots, (0.0, 2.0, 2.25)):
+        snap.v_long = 99.0
+        snap.linear_acceleration = (5.0, 0.0, 0.0)
+        snap.lidar_ranges = np.roll(snap.lidar_ranges, int(speed * 2)).copy()
+
+    for profile in ("official_sensors", "official_sensors_history"):
+        training_transform = OfficialObservationBuilder(observation_profile=profile)
+        deployment_transform = OfficialObservationBuilder(observation_profile=profile)
+        training_initial = training_transform.reset(snapshots[0])
+        deployment_initial = deployment_transform.reset(snapshots[0])
+        for key in training_initial:
+            np.testing.assert_array_equal(training_initial[key], deployment_initial[key])
+        if profile == "official_sensors_history":
+            assert training_initial["lidar"].shape == (4, 1081)
+        for snap in snapshots[1:]:
+            training_obs = training_transform.observe(
+                snap, 0.4, -0.2, elapsed_s=0.05
+            )
+            deployment_obs = deployment_transform.observe(
+                snap, 0.4, -0.2, elapsed_s=0.05
+            )
+            assert training_obs.keys() == deployment_obs.keys()
+            for key in training_obs:
+                np.testing.assert_array_equal(training_obs[key], deployment_obs[key])
 
 
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
