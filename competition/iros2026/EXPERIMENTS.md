@@ -539,3 +539,31 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   continuation should train with the official forward-only action semantics
   and the official sensor observation profile, while leaving all unrelated
   reward/PPO settings fixed.
+
+### Fresh-start forward-only training trial
+
+- Date: 2026-10-07. Started a clean PPO policy in the normal Layer 4 Train
+  workflow with four training environments, Porto, the official sensor profile,
+  forward-only throttle, 50 ms actions, and the existing reward/PPO settings.
+  No existing checkpoint was overwritten or used as the initial policy.
+- The 20,480-step snapshot evaluated one frozen policy three times. Every
+  attempt collided after 1.05 simulated seconds, completed zero laps, advanced
+  about 2.076 m of frontier, and returned about -94.28. Aggregate collision
+  rate was 100%; the three deterministic traces were effectively identical.
+  The initial policy action was approximately `[-0.177, -0.169]`, which became
+  throttle 0.411 and steering -0.160. The car accelerated to 4.50 m/s while
+  the front/side LiDAR minima were already about 0.14/0.12 m at spawn, then
+  collided. Full attempt traces and aggregate diagnostics are retained in
+  `logs/rl/iros_official_forwardonly_50ms_scratch_20261007/evaluation_history.jsonl`.
+- At the snapshot, PPO action standard deviation was 0.80 (its configured
+  maximum) and explained variance was approximately zero. Training reached
+  27,400 steps and 1,102 completed environment episodes before this run was
+  stopped; no lap or evaluation improvement occurred. Its logs and candidate
+  checkpoint remain preserved, and the normal single-simulator pool was
+  restored afterward.
+- Conclusion: random initialization under the current sparse driving signal
+  does not produce a usable starting controller. Do not promote or continue
+  this policy. The next candidate should start from a preserved trained
+  checkpoint, first verify that checkpoint in the official simulator/runtime,
+  then change one training factor at a time. This trial is a development
+  training result, not an official race score.
