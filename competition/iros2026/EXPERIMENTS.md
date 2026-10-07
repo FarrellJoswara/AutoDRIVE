@@ -321,3 +321,16 @@ lap and neither is a score comparison.
   calculation ineffective. The next controlled repeat changes only this
   throttle rule: clamp to zero at/above target speed, retaining the same target
   speed curve, steering, sensor path, and official images.
+- Validity correction: a bounded trace of that repeat showed the official
+  simulator's restricted IPS position stayed at x=0.8001 m throughout a 10 s
+  sample, IMU yaw rate stayed zero, and LiDAR sector distances were effectively
+  unchanged, while encoder angles continued increasing. Thus the car was not
+  traversing the track; encoder-derived wheel speed in this situation reflected
+  wheel rotation, not body progress. The 0-collision/0-lap result is not evidence
+  of a safe controller, and the preceding headless official-image results must
+  not be treated as performance comparisons until vehicle motion is verified.
+  The official technical guide describes Manual as the default mode and calls
+  for a separate Autonomous toggle after connection, while the IROS 2026
+  submission page says connecting should start the car. This run's stationary
+  telemetry shows our headless harness did not reproduce the intended running
+  state. Resolve/verify simulator mode before any more policy tuning or scoring.
