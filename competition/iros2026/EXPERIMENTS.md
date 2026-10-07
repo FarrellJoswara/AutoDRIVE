@@ -738,3 +738,11 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   and `competition/iros2026/results/champion_66982_headless_official_20261007.json`.
   Next isolate the current candidate's negative-throttle behavior under this same
   official-image diagnostic before starting another training continuation.
+- The current candidate was rerun once on the same official-image headless
+  diagnostic with only negative-throttle handling changed from `allow` to
+  `zero`. It again completed one race lap and disqualified at 11 collisions;
+  the lap was 14.756 s versus 14.905 s with `allow` (0.149 s faster), while
+  the policy requested reverse throttle on 16.8% of steps. This small single-run
+  difference does not establish an improvement and neither mapping is safe.
+  Report: `bidirectional_lr1e5_81920_headless_zero_negative_20261007.json`.
+  Next test a reduced steering scale with the other controls fixed.
