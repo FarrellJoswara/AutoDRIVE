@@ -5,6 +5,7 @@ import pytest
 
 from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.autodrive_env import AutoDriveEnv
+from src.layer2.official_race_env import OfficialRaceEnv
 from src.layer2.spaces import map_policy_throttle, transform_policy_action
 from src.layer4.settings import Settings
 from src.layer3.train import build_arg_parser
@@ -64,6 +65,19 @@ def test_shared_action_transform_matches_training_settings():
         straight_throttle_gain=1.025,
         straight_throttle_steering_threshold=0.15,
     ) == pytest.approx(expected)
+
+
+def test_official_race_environment_accepts_shared_transform_modes():
+    env = OfficialRaceEnv(
+        racer=object(),
+        throttle_mode="forward_only",
+        negative_throttle_mode="allow",
+        steering_mode="normal",
+        steering_action_scale=0.946,
+        straight_throttle_gain=1.025,
+    )
+    assert env.throttle_mode == "forward_only"
+    assert env.steering_action_scale == pytest.approx(0.946)
 
 
 def test_layer_two_uses_the_shared_transform_for_scaled_commands():

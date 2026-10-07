@@ -20,6 +20,9 @@ from .spaces import (
     SteeringMode,
     make_action_space,
     make_observation_space,
+    map_policy_throttle,
+    map_throttle_action,
+    map_steering_action,
     snapshot_to_obs,
     transform_policy_action,
 )
