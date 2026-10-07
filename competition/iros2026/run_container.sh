@@ -38,6 +38,7 @@ if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
     --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-180}" \
     --wall-timeout-s "${AICAR_RACE_WALL_TIMEOUT_S:-300}" \
     --max-steps "${AICAR_RACE_STEP_GUARD:-150000}" \
+    --trace-steps "${AICAR_EVALUATION_TRACE_STEPS:-0}" \
     --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}" \
     --steering-mode "${AICAR_STEERING_MODE:-normal}" \
     --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}" \

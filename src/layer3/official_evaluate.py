@@ -99,6 +99,7 @@ def evaluate_attempt(
     wall_timeout_s: float,
     max_steps: int,
     attempt_index: int,
+    trace_steps: int = 0,
 ) -> Dict[str, Any]:
     obs, info = env.reset()
     started = time.monotonic()
@@ -113,6 +114,7 @@ def evaluate_attempt(
     applied_steering: List[float] = []
     observation_states: List[List[float]] = []
     normalized_lidar_minima: List[float] = []
+    action_trace: List[Dict[str, Any]] = []
     while not bool(info.get("race_complete", False)):
         if time.monotonic() - started >= wall_timeout_s:
             stop_reason = "wall_timeout"
@@ -124,9 +126,19 @@ def evaluate_attempt(
         normalized_lidar_minima.append(float(min(obs["lidar"])))
         action, _ = model.predict(obs, deterministic=True)
         command = [float(v) for v in action.reshape(-1)]
+        debug = getattr(model, "last_debug", {})
         policy_throttle.append(command[0])
         policy_steering.append(command[1])
         obs, _, terminated, _, info = env.step(action)
+        if len(action_trace) < max(0, int(trace_steps)):
+            action_trace.append({
+                "step": steps,
+                "policy_throttle": command[0],
+                "policy_steering": command[1],
+                "applied_throttle": float(info.get("throttle_command", 0.0)),
+                "applied_steering": float(info.get("steering_command", 0.0)),
+                **{key: float(value) for key, value in debug.items()},
+            })
         applied_throttle.append(float(info.get("throttle_command", 0.0)))
         applied_steering.append(float(info.get("steering_command", 0.0)))
         steps += 1
@@ -192,6 +204,7 @@ def evaluate_attempt(
             observation_states=observation_states,
             normalized_lidar_minima=normalized_lidar_minima,
         ),
+        "action_trace": action_trace,
     })
     print(json.dumps(result, indent=2), flush=True)
     return result
@@ -213,6 +226,7 @@ def evaluate(
     throttle_mode: str = "bidirectional",
     output_path: Optional[Path] = None,
     controller: str = "ppo",
+    trace_steps: int = 0,
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
@@ -222,6 +236,8 @@ def evaluate(
         raise FileNotFoundError(f"PPO checkpoint not found: {checkpoint}")
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
+    if trace_steps < 0 or trace_steps > 500:
+        raise ValueError("trace_steps must be between 0 and 500")
     if attempts > 1:
         raise ValueError(
             "each official attempt requires a fresh simulator process; the "
@@ -249,6 +265,7 @@ def evaluate(
                 wall_timeout_s=wall_timeout_s,
                 max_steps=max_steps,
                 attempt_index=attempt,
+                trace_steps=trace_steps,
             ))
         completed = [run for run in runs if run["race_laps_completed"] == 10 and run["adjusted_race_time_s"] is not None]
         adjusted = [float(run["adjusted_race_time_s"]) for run in completed]
@@ -314,6 +331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Map normalized policy throttle into signed or forward-only actuator range",
     )
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--trace-steps", type=int, default=0, help="Include a bounded action/sensor trace in the report")
     args = parser.parse_args(argv)
     evaluate(
         args.model,
@@ -330,6 +348,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         throttle_mode=args.throttle_mode,
         output_path=args.out,
         controller=args.controller,
+        trace_steps=args.trace_steps,
     )
     return 0
 

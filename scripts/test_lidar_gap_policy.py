@@ -25,6 +25,8 @@ class LidarGapPolicyTests(unittest.TestCase):
         action = self.policy.action(self.observation(np.ones(1081, dtype=np.float32)))
         self.assertGreater(float(action[0]), 0.0)
         self.assertAlmostEqual(float(action[1]), 0.0, delta=0.02)
+        self.assertAlmostEqual(self.policy.last_debug["target_angle_rad"], 0.0, delta=0.02)
+        self.assertEqual(self.policy.last_debug["forward_min_10deg_m"], 10.0)
 
     def test_obstacle_left_routes_toward_clear_right_gap(self) -> None:
         ranges = np.ones(1081, dtype=np.float32)

@@ -33,6 +33,7 @@ class LidarGapPolicy:
         self.cruise_speed_mps = float(cruise_speed_mps)
         self.minimum_speed_mps = float(minimum_speed_mps)
         self.speed_gain = float(speed_gain)
+        self.last_debug: dict[str, float] = {}
         if min(
             self.max_range_m,
             self.minimum_gap_m,
@@ -112,6 +113,16 @@ class LidarGapPolicy:
         # the nominal speed limit ineffective; negative throttle is reverse,
         # not a service brake, so the policy deliberately coasts instead.
         throttle = float(np.clip(self.speed_gain * (target_speed - speed_mps), 0.0, 0.85))
+        self.last_debug = {
+            "target_angle_rad": target_angle,
+            "nearest_distance_m": nearest_distance,
+            "forward_min_10deg_m": float(np.min(ranges[np.abs(angles) <= np.deg2rad(10.0)])),
+            "forward_min_30deg_m": float(np.min(ranges[np.abs(angles) <= np.deg2rad(30.0)])),
+            "left_min_30_90deg_m": float(np.min(ranges[(angles >= np.deg2rad(30.0)) & (angles <= np.deg2rad(90.0))])),
+            "right_min_30_90deg_m": float(np.min(ranges[(angles <= -np.deg2rad(30.0)) & (angles >= -np.deg2rad(90.0))])),
+            "speed_mps": speed_mps,
+            "target_speed_mps": target_speed,
+        }
         return np.asarray([throttle, steering], dtype=np.float32)
 
     def predict(self, observation: dict[str, np.ndarray], deterministic: bool = True) -> tuple[np.ndarray, None]:
