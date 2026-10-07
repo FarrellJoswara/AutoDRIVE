@@ -36,7 +36,7 @@ export interface EvaluationResult {
   laps_observed: number;
   lap_times_s: number[];
   best_10_lap_time_s: number | null;
-  selection_score?: number;
+  selection_score?: number | null;
   selection_score_median?: number;
   selection_score_mean?: number;
   selection_score_best?: number;
@@ -44,7 +44,7 @@ export interface EvaluationResult {
   successful_attempts?: number;
   collision_rate?: number;
   attempts?: EvaluationAttemptResult[];
-  selection_metric?: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  selection_metric?: "frontier_speed" | "reward_per_simulated_second" | "total_reward" | "ten_lap_time";
   improved?: boolean;
   stale_evaluations?: number;
   exploration_std?: number[];
@@ -73,7 +73,7 @@ export function getEvaluationHistory(): Promise<EvaluationResult[]> {
 export interface EvaluationStatus {
   state: "waiting" | "running" | "complete";
   snapshot_timesteps?: number | null;
-  selection_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  selection_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward" | "ten_lap_time";
   evaluation_runs_per_snapshot?: number;
   best_selection_score?: number | null;
   stale_evaluations: number;
@@ -115,6 +115,8 @@ export interface TrainingPhaseTelemetry {
   phase: "rollout" | "ppo_update" | "stopped";
   step: number;
   run_id: string;
+  runtime?: "custom" | "official";
+  rollout_size?: number;
   ts: string;
 }
 
@@ -127,11 +129,13 @@ export interface Settings {
   plateau_min_improvement_pct: number;
   evaluation_every_timesteps: number;
   evaluation_runs_per_snapshot: number;
-  /** Layer 3 PPO rollout length per environment; supplied by backend. */
-  ppo_n_steps?: number;
-  evaluation_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward";
+  /** PPO rollout transitions collected per environment before each update. */
+  ppo_n_steps: number;
+  evaluation_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward" | "ten_lap_time";
   ppo_learning_rate: number;
   ppo_n_epochs: number;
+  ppo_gamma: number;
+  ppo_gae_lambda: number;
   exploration_std_min: number;
   exploration_std_max: number;
   exploration_improvement_scale: number;
@@ -163,6 +167,8 @@ export interface Settings {
   backward_speed_penalty_scale: number;
   route_progress_scale: number;
   frontier_pace_target_mps: number;
+  frontier_pace_bonus_strength: number;
+  frontier_pace_source: "episode_average" | "current_push";
   time_penalty_per_second: number;
   collision_penalty_magnitude: number;
   collision_reward_percent: number;
@@ -204,6 +210,8 @@ export interface ModelCheckpoint {
 
 export interface MetricsTelemetry {
   kind?: string;
+  runtime?: "custom" | "official";
+  rollout_size?: number;
   step: number;
   reward: number;
   episode: number;
@@ -300,6 +308,8 @@ export interface FleetCar {
 
 export interface FleetTelemetry {
   kind: "fleet";
+  runtime?: "custom" | "official";
+  rollout_size?: number;
   step: number;
   episode: number;
   run_id: string;

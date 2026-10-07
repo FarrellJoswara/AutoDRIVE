@@ -31,6 +31,7 @@ from src.layer3.official_evaluate import (
     summarize_attempt,
     verify_vehicle_motion,
 )
+from src.layer3.hub_callback import _lap_fields
 
 
 def _vector(x=0.0, y=0.0, z=0.0):
@@ -260,7 +261,28 @@ def test_restricted_position_is_reported_as_evaluator_info_not_policy_observatio
     obs, info = env.reset()
 
     assert info["race_position"] == (0.0, 0.0, 0.0)
+    assert info["position"] == info["race_position"]
+    assert info["official_race"] is True
     assert set(obs) == {"lidar", "state"}
+
+
+def test_official_race_fields_adapt_to_watch_lap_telemetry():
+    fields = _lap_fields({
+        "official_race": True,
+        "race_laps_completed": 2,
+        "race_lap_times_s": [7.0, 6.5],
+        "race_last_lap_time_s": 6.5,
+        "race_best_lap_time_s": 6.5,
+    })
+
+    assert fields == {
+        "lap_supported": True,
+        "lap_count": 2,
+        "lap_times_s": [7.0, 6.5],
+        "last_lap_time_s": 6.5,
+        "best_lap_time_s": 6.5,
+        "lap_elapsed_s": None,
+    }
 
 
 def test_race_env_counts_only_collisions_after_warmup():

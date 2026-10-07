@@ -169,7 +169,13 @@ export function getTrainingPhaseHot(): TrainingPhaseTelemetry | null {
 }
 
 export function getTrainingStateHot(): TrainStatus["state"] | null {
-  return state.status?.state ?? null;
+  const statusState = state.status?.state ?? null;
+  if (statusState && statusState !== "idle") return statusState;
+  if (trainingPhaseHot?.runtime === "official") {
+    if (trainingPhaseHot.phase === "stopped") return statusState ?? "idle";
+    if (getTrainingPhaseAgeMs() < 180_000) return "running";
+  }
+  return statusState;
 }
 
 export function getTrainingPhaseAgeMs(): number {

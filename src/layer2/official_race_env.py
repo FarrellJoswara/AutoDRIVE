@@ -208,8 +208,15 @@ class OfficialRaceEnv(gym.Env):
             "laps_since_start": max(0, current_lap_count - self._initial_lap_count),
             "warmup_lap_times_s": list(self._warmup_lap_times_s),
             "race_lap_times_s": list(self._race_lap_times_s),
+            "race_last_lap_time_s": (
+                self._race_lap_times_s[-1] if self._race_lap_times_s else None
+            ),
+            "race_best_lap_time_s": (
+                min(self._race_lap_times_s) if self._race_lap_times_s else None
+            ),
             "lap_times_s": list(self._race_lap_times_s),
             "race_laps_completed": self._race_laps_count,
+            "watch_lap_count": self._race_laps_count,
             "race_collisions": race_collisions,
             "race_collision_baseline": self._race_collision_baseline,
             "warmup_collisions": self._warmup_collision_count,
@@ -306,6 +313,10 @@ class OfficialRaceEnv(gym.Env):
             # Restricted state is monitoring-only: it can support training
             # reward/evaluation but is intentionally excluded from observation.
             "race_position": metrics.position,
+            # Watch may render the restricted training/evaluation position;
+            # this field is not read by the policy observation builder.
+            "position": metrics.position,
+            "yaw": float(snap.heading_yaw),
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
             "throttle": float(snap.throttle),
@@ -317,6 +328,8 @@ class OfficialRaceEnv(gym.Env):
             "lap_time_s": float(metrics.lap_time),
             "last_lap_time_s": float(metrics.last_lap_time),
             "best_lap_time_s": float(metrics.best_lap_time),
+            "official_race": True,
+            "lap_supported": True,
             "lidar_range_min": float(snap.lidar_range_min),
             "lidar_range_max": float(snap.lidar_range_max),
             "lidar_beams": int(snap.lidar_ranges.size),

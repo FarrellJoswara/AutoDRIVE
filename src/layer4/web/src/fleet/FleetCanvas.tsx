@@ -198,7 +198,9 @@ export function FleetCanvas(props: FleetCanvasProps) {
       const rolloutActive = trainActive && phase?.phase === "rollout" && (p.rolloutSize ?? 0) > 0;
       const nextUpdateStep = rolloutActive ? phase.step + (p.rolloutSize ?? 0) : null;
       const ppoProgress = ppoUpdating
-        ? { label: "PPO updating · simulator paused", progress: 1, detail: "Update in progress" }
+        ? phase?.runtime === "official"
+          ? { label: "PPO updating · last action held", progress: 1, detail: "Pose refreshes next rollout" }
+          : { label: "PPO updating · simulator paused", progress: 1, detail: "Update in progress" }
           : rolloutActive && !stale && nextUpdateStep != null
           ? {
             label: `${Math.max(0, nextUpdateStep - currentStep).toLocaleString()} steps until PPO update`,

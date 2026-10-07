@@ -106,6 +106,7 @@ docker build -f competition/iros2026/Dockerfile -t aicar-iros2026 .
 docker run --rm --name aicar-official-train-api `
   --network aicar-official-train --network-alias api `
   -e AICAR_MODE=train -e AICAR_TRAIN_TIMESTEPS=1000000 `
+  -e HUB_URL=http://host.docker.internal:8090 `
   -e AICAR_TRAIN_OUT=/runs/official `
   -v "${PWD}/logs/rl/official_training:/runs/official" `
   aicar-iros2026
@@ -124,7 +125,10 @@ docker run --rm --name aicar-official-train-sim `
 `AICAR_MODE=train` is a development/training mode, not a submission mode. It
 enables restricted reward/reset handling only inside the trainer. `AICAR_MODE=policy`
 remains the race path and cannot publish reset or subscribe to restricted
-metrics. Training charges simulated time throughout warm-up and the scored
+metrics. When `HUB_URL` points to the local Layer 4 hub, official training
+publishes the simulator car, normalized LiDAR display, lap/collision counters,
+PPO metrics, and rollout progress to the Watch page. Training charges simulated
+time throughout warm-up and the scored
 race, gives a lap-completion bonus for both the required warm-up and scored
 laps, and applies official escalating collision penalties during scored laps;
 disqualification or the full-episode watchdog receives a large failure cost.

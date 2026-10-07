@@ -44,6 +44,7 @@ def train_official(
     from stable_baselines3.common.logger import configure
 
     from src.layer2.official_race_env import OfficialRaceEnv
+    from src.layer3.hub_callback import maybe_hub_callback
     from src.layer3.train import make_model
 
     out_dir = Path(out_dir).resolve()
@@ -146,9 +147,17 @@ def train_official(
             save_path=str(out_dir / "checkpoints"),
             name_prefix="official_ppo",
         )
+        hub_callback = maybe_hub_callback(out_dir.name, runtime="official")
+        callbacks = [checkpoint_callback]
+        if hub_callback is not None:
+            callbacks.append(hub_callback)
+            print(
+                f"Watch telemetry enabled: HUB_URL is set (run_id={out_dir.name})",
+                flush=True,
+            )
         model.learn(
             total_timesteps=total_timesteps,
-            callback=checkpoint_callback,
+            callback=callbacks,
             progress_bar=False,
             reset_num_timesteps=resume is None,
         )

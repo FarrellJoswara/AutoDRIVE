@@ -61,11 +61,11 @@ def _min_pool_lidar(arr: np.ndarray, target_beams: int) -> List[float]:
 def _lap_fields(info: Dict[str, Any]) -> Dict[str, Any]:
     """Forward Layer 2 lap diagnostics without doing route math in the hub."""
     return {
-        "lap_supported": bool(info.get("lap_supported", False)),
-        "lap_count": int(info.get("lap_count", 0)),
-        "lap_times_s": list(info.get("lap_times_s", [])),
-        "last_lap_time_s": info.get("last_lap_time_s"),
-        "best_lap_time_s": info.get("best_lap_time_s"),
+        "lap_supported": bool(info.get("lap_supported", info.get("official_race", False))),
+        "lap_count": int(info.get("race_laps_completed", info.get("lap_count", 0))),
+        "lap_times_s": list(info.get("race_lap_times_s", info.get("lap_times_s", []))),
+        "last_lap_time_s": info.get("race_last_lap_time_s", info.get("last_lap_time_s")),
+        "best_lap_time_s": info.get("race_best_lap_time_s", info.get("best_lap_time_s")),
         "lap_elapsed_s": info.get("lap_elapsed_s"),
     }
 
@@ -155,6 +155,7 @@ class HubTelemetryCallback(BaseCallback):
         fleet_hz: float = 15.0,
         lidar_beams: int = 120,
         lidar_max_envs: int = 4,
+        runtime: str = "custom",
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose)
@@ -164,6 +165,8 @@ class HubTelemetryCallback(BaseCallback):
         self.fleet_hz = max(0.1, float(fleet_hz))
         self.lidar_beams = max(1, int(lidar_beams))
         self.lidar_max_envs = max(0, int(lidar_max_envs))
+        self.runtime = str(runtime)
+        self.rollout_size = 1
         self._pub: Optional[_Publisher] = None
         self._last_fleet_t = 0.0
         self._episode_count = 0
@@ -188,6 +191,7 @@ class HubTelemetryCallback(BaseCallback):
     def _on_training_start(self) -> None:
         self._pub = _Publisher(self.hub_url)
         n = getattr(self.training_env, "num_envs", 1)
+        self.rollout_size = max(1, int(n) * int(getattr(self.model, "n_steps", 1)))
         self._ep_returns = np.zeros(n, dtype=np.float64)
         self._last_episode_laps = {}
         self._completed_laps = 0
@@ -209,6 +213,8 @@ class HubTelemetryCallback(BaseCallback):
                 "phase": phase,
                 "step": int(self.num_timesteps),
                 "run_id": self.run_id,
+                "runtime": self.runtime,
+                "rollout_size": self.rollout_size,
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "_endpoint": self.hub_url.rstrip("/") + "/api/train/phase",
             })
@@ -276,11 +282,13 @@ class HubTelemetryCallback(BaseCallback):
         if infos is not None:
             for i, raw in enumerate(infos):
                 info = raw if isinstance(raw, dict) else {}
-                current_laps = max(0, int(info.get("lap_count", 0) or 0))
+                current_laps = max(0, int(
+                    info.get("race_laps_completed", info.get("lap_count", 0)) or 0
+                ))
                 previous_laps = self._last_episode_laps.get(i, 0)
                 self._completed_laps += max(0, current_laps - previous_laps)
                 self._last_episode_laps[i] = current_laps
-                lap_time = info.get("best_lap_time_s")
+                lap_time = info.get("race_best_lap_time_s", info.get("best_lap_time_s"))
                 if lap_time is not None:
                     try:
                         lap_time = float(lap_time)
@@ -291,7 +299,7 @@ class HubTelemetryCallback(BaseCallback):
                             )
                     except (TypeError, ValueError):
                         pass
-                raw_lap_times = info.get("lap_times_s")
+                raw_lap_times = info.get("race_lap_times_s", info.get("lap_times_s"))
                 if isinstance(raw_lap_times, (list, tuple)):
                     seen = self._ten_lap_seen_splits.get(i, 0)
                     if len(raw_lap_times) < seen:
@@ -338,6 +346,8 @@ class HubTelemetryCallback(BaseCallback):
 
             payload = {
                 "kind": "metrics",
+                "runtime": self.runtime,
+                "rollout_size": self.rollout_size,
                 "step": int(self.num_timesteps),
                 "reward": mean_r,
                 "episode": int(self._episode_count),
@@ -417,7 +427,9 @@ class HubTelemetryCallback(BaseCallback):
         counts: List[int] = []
         for i, raw in enumerate(infos):
             info = raw if isinstance(raw, dict) else {}
-            current = max(0, int(info.get("collision_count", 0)))
+            current = max(0, int(
+                info.get("race_collisions", info.get("collision_count", 0))
+            ))
             previous = self._last_collision_counts.get(i)
             delta = 0 if previous is None or current < previous else current - previous
             self._last_collision_counts[i] = current
@@ -559,6 +571,8 @@ class HubTelemetryCallback(BaseCallback):
             return None
         return {
             "kind": "fleet",
+            "runtime": self.runtime,
+            "rollout_size": self.rollout_size,
             "step": int(self.num_timesteps),
             "episode": int(self._episode_count),
             "run_id": self.run_id,
@@ -578,7 +592,9 @@ class HubTelemetryCallback(BaseCallback):
             self._pub = None
 
 
-def maybe_hub_callback(run_id: str) -> Optional[HubTelemetryCallback]:
+def maybe_hub_callback(
+    run_id: str, *, runtime: str = "custom"
+) -> Optional[HubTelemetryCallback]:
     """Return a callback when HUB_URL is set; else None (CLI parity)."""
     hub = os.environ.get("HUB_URL", "").strip()
     if not hub:
@@ -590,4 +606,5 @@ def maybe_hub_callback(run_id: str) -> Optional[HubTelemetryCallback]:
         fleet_hz=_env_float("AICAR_FLEET_HZ", 15.0),
         lidar_beams=_env_int("AICAR_LIDAR_DISPLAY_BEAMS", 120),
         lidar_max_envs=_env_int("AICAR_TELEMETRY_LIDAR_MAX_ENVS", 4),
+        runtime=runtime,
     )

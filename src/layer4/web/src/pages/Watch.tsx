@@ -14,7 +14,7 @@ import {
   type Settings,
 } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
-import { getMetricsHistoryHot, useHubStore } from "../store";
+import { getMetricsHistoryHot, getTrainingPhaseAgeMs, useHubStore } from "../store";
 import { formatLapDuration } from "./lapTiming";
 
 interface RewardSample {
@@ -36,49 +36,109 @@ const PPO_METRIC_GROUPS: Array<{
   {
     title: "Policy update",
     metrics: [
-      { key: "approx_kl", label: "Approx. KL", unit: "", help: "How far the updated policy moved from the policy that collected this rollout. Large spikes can indicate updates that are too aggressive; interpret alongside clip fraction and driving results." },
-      { key: "clip_fraction", label: "Clip fraction", unit: "%", help: "Share of PPO optimization samples whose policy change was clipped. A persistently high value can mean updates are pushing hard against PPO’s trust-region limit." },
-      { key: "policy_gradient_loss", label: "Policy gradient loss", unit: "", help: "The policy-optimization loss. Its sign and magnitude are not a driving score; use its trend with KL, clipping, and actual reward." },
+      { key: "approx_kl", label: "Policy change", unit: "", help: "How much the policy changed in the latest update. The meter is a rough scale, not a pass or fail. Check reward and driving results too." },
+      { key: "clip_fraction", label: "Update limits used", unit: "%", help: "Share of training samples where PPO limited the update. A high value over many updates can mean policy changes are aggressive." },
+      { key: "policy_gradient_loss", label: "Policy update loss", unit: "loss units", help: "An optimizer value used to adjust the policy. It is not a reward or driving score; watch its trend with reward." },
     ],
   },
   {
     title: "Exploration",
     metrics: [
-      { key: "std", label: "Action std", unit: "", help: "Standard deviation of the policy’s continuous action distribution. Higher values mean noisier sampled steering/throttle actions; it does not directly measure driving quality." },
-      { key: "entropy_loss", label: "Entropy loss", unit: "", help: "Tracks policy randomness as used by SB3’s optimization objective. It is usually negative; changes are meaningful as a trend, not as a score." },
+      { key: "std", label: "Action variation", unit: "", help: "How much steering and throttle choices vary between similar situations. More variation means more exploration, not necessarily better driving." },
+      { key: "entropy_loss", label: "Exploration loss", unit: "loss units", help: "A training signal related to action variety. It is not a score; use the action variation and reward trends for context." },
     ],
   },
   {
     title: "Value estimates",
     metrics: [
-      { key: "explained_variance", label: "Explained variance", unit: "", help: "How well the value network predicts returns. Near 1 is strong prediction, around 0 is no better than predicting a constant, and below 0 is worse. This diagnoses the critic, not driving skill." },
-      { key: "value_loss", label: "Value loss", unit: "", help: "Error in the value network’s return predictions. Its scale depends on reward magnitudes, so compare its trend within a run rather than against other runs." },
+      { key: "explained_variance", label: "Value prediction fit", unit: "", help: "How well the value model predicts future reward. Higher is better for these predictions, but this does not directly measure driving skill." },
+      { key: "value_loss", label: "Value prediction error", unit: "loss units", help: "How far reward predictions are from observed returns. The scale depends on this run; compare its trend only within this run." },
     ],
   },
   {
     title: "Optimization health",
     metrics: [
-      { key: "fps", label: "Training throughput", unit: "steps/s", help: "Environment steps processed per second by training. This measures throughput, not how quickly the policy is learning." },
-      { key: "learning_rate", label: "Learning rate", unit: "", help: "Optimizer step size used for this PPO update. It can remain constant or follow the configured schedule." },
-      { key: "loss", label: "Total loss", unit: "", help: "Combined optimization loss reported by SB3. It is not episode reward or a policy-quality score; use the task and evaluator metrics to judge driving." },
+      { key: "fps", label: "Training speed", unit: "steps/s", help: "How many simulator steps training processes per second. This is throughput, not learning speed." },
+      { key: "learning_rate", label: "Optimizer step size", unit: "", help: "How large each optimizer adjustment is. This is not how fast the car is learning; the bar compares it with the configured starting value." },
+      { key: "loss", label: "Combined optimizer loss", unit: "loss units", help: "Combined optimizer value. It is not episode reward or a driving score; use rewards and evaluator results to judge progress." },
     ],
   },
 ];
 
 function formatPpoValue(key: PpoMetricKey, value: number): string {
   if (key === "fps") return Math.round(value).toLocaleString();
-  if (key === "learning_rate") return value.toExponential(2);
+  if (key === "learning_rate") return value.toLocaleString(undefined, { maximumFractionDigits: 7 });
   if (key === "clip_fraction") return `${(value * 100).toFixed(1)}%`;
-  if (key === "explained_variance") return value.toFixed(3);
-  return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(4);
+  if (key === "explained_variance") return `${Math.round(value * 100)}%`;
+  if (key === "std") return value.toFixed(2);
+  if (key === "approx_kl") return Number(value.toPrecision(3)).toLocaleString(undefined, { maximumFractionDigits: 7 });
+  return Number(value.toPrecision(3)).toLocaleString(undefined, { maximumFractionDigits: 5 });
+}
+
+function ppoMetricMeter(key: PpoMetricKey, value: number, initialLearningRate: number) {
+  if (key === "approx_kl") {
+    const pct = Math.max(0, Math.min(100, value / 0.03 * 100));
+    const label = value < 0.003 ? "small policy change" : value < 0.01 ? "moderate policy change" : "large policy change";
+    return { pct, label, ends: "0 · 0.03+", title: "Rough policy-change scale; lower is a smaller update." };
+  }
+  if (key === "clip_fraction") {
+    return { pct: Math.max(0, Math.min(100, value / 0.5 * 100)), label: `${(value * 100).toFixed(1)}% of samples limited`, ends: "0% · 50%+", title: "Share of samples where PPO limited the update." };
+  }
+  if (key === "explained_variance") {
+    const pct = Math.max(0, Math.min(100, (value + 1) / 2 * 100));
+    const label = value < 0 ? "predictions need work" : value < 0.5 ? "some predictive signal" : "stronger prediction fit";
+    return { pct, label, ends: "−1 · +1", title: "Value prediction fit scale; this is not a driving score." };
+  }
+  if (key === "learning_rate" && initialLearningRate > 0) {
+    const ratio = value / initialLearningRate;
+    return {
+      pct: Math.max(0, Math.min(100, ratio / 1.5 * 100)),
+      label: `${Math.round(ratio * 100)}% of starting step size`,
+      ends: "0% · 150%+",
+      title: "Current optimizer step size relative to the configured starting value.",
+    };
+  }
+  return null;
+}
+
+function ppoMetricReading(key: PpoMetricKey, value: number, previous: number | undefined, initialLearningRate: number): string {
+  const trend = previous == null || value === previous ? "steady" : value > previous ? "rising" : "falling";
+  switch (key) {
+    case "approx_kl":
+      return value < 0.003 ? "Small policy change" : value < 0.01 ? "Moderate policy change" : "Large policy change";
+    case "clip_fraction":
+      return value < 0.1 ? "Few updates limited" : value < 0.3 ? "Some updates limited" : "Many updates limited";
+    case "policy_gradient_loss":
+      return `Optimizer signal ${trend}`;
+    case "std":
+      return previous == null || value === previous ? "Action variation steady" : value > previous ? "Action variation increasing" : "Action variation decreasing";
+    case "entropy_loss":
+      return previous == null || value === previous ? "Exploration steady" : value < previous ? "More action randomness" : "Less action randomness";
+    case "explained_variance":
+      return value < 0 ? "Prediction fit is poor" : value < 0.5 ? "Prediction fit is developing" : "Prediction fit is strong";
+    case "value_loss":
+      return `Prediction error ${trend}`;
+    case "fps":
+      return `Training throughput ${trend}`;
+    case "learning_rate":
+      return initialLearningRate > 0
+        ? `${Math.round(value / initialLearningRate * 100)}% of starting step size`
+        : `Optimizer step size ${trend}`;
+    case "loss":
+      return `Combined optimizer loss ${trend}`;
+    default:
+      return `Trend ${trend}`;
+  }
 }
 
 function PpoMetricCard({
   metric,
   points,
+  initialLearningRate,
 }: {
   metric: (typeof PPO_METRIC_GROUPS)[number]["metrics"][number];
   points: PpoPoint[];
+  initialLearningRate: number;
 }) {
   const latest = points[points.length - 1];
   const min = Math.min(...points.map((point) => point.value));
@@ -89,6 +149,8 @@ function PpoMetricCard({
     const y = 34 - (span > 1e-12 ? (point.value - min) / span * 28 : 14);
     return `${x},${y}`;
   }).join(" ");
+  const meter = latest ? ppoMetricMeter(metric.key, latest.value, initialLearningRate) : null;
+  const previous = points.length > 1 ? points[points.length - 2].value : undefined;
   return (
     <article className="ppo-metric-card">
       <div className="ppo-metric-heading">
@@ -97,6 +159,12 @@ function PpoMetricCard({
       </div>
       <strong>{latest ? formatPpoValue(metric.key, latest.value) : "—"}</strong>
       {metric.unit && <span className="ppo-metric-unit">{metric.unit}</span>}
+      {meter && <>
+        <div className="ppo-metric-meter" role="img" aria-label={`${metric.label}: ${meter.label}`} title={meter.title}>
+          <span style={{ width: `${meter.pct}%` }} />
+        </div>
+        <div className="ppo-metric-meter-label"><span>{meter.label}</span><span>{meter.ends}</span></div>
+      </>}
       {points.length > 1 ? (
         <svg className="ppo-sparkline" viewBox="0 0 100 40" role="img" aria-label={`${metric.label} trend over PPO updates`}>
           <line x1="0" x2="100" y1="34" y2="34" />
@@ -109,6 +177,7 @@ function PpoMetricCard({
           })}
         </svg>
       ) : <div className="ppo-sparkline-empty">{points.length ? "Trend begins with the next update" : "Waiting for PPO update"}</div>}
+      {latest && <p className="ppo-metric-summary">{ppoMetricReading(metric.key, latest.value, previous, initialLearningRate)}</p>}
       <small>{points.length ? `step ${latest?.step.toLocaleString()} · ${points.length} updates` : "No samples yet"}</small>
     </article>
   );
@@ -247,7 +316,23 @@ export function WatchPage() {
   const [selectedEnvId, setSelectedEnvId] = useState<number | null>(null);
   const mapsRef = useRef<MapCatalogEntry[]>([]);
   const lastAppliedMapIdRef = useRef<string | null>(null);
-  const rolloutSize = Math.max(1, (watchSettings?.n_envs ?? 1) * (watchSettings?.ppo_n_steps ?? 1024));
+  const configuredRolloutSize = Math.max(
+    1,
+    (watchSettings?.n_envs ?? 1) * (watchSettings?.ppo_n_steps ?? 1024),
+  );
+  const rolloutSize = Math.max(
+    1,
+    metrics?.runtime === "official"
+      ? (metrics.rollout_size ?? fleet?.rollout_size ?? configuredRolloutSize)
+      : configuredRolloutSize,
+  );
+  const officialRuntime =
+    metrics?.runtime === "official" || fleet?.runtime === "official" || trainingPhase?.runtime === "official";
+  const officialTrainingActive =
+    trainingPhase?.runtime === "official" &&
+    trainingPhase.phase !== "stopped" &&
+    getTrainingPhaseAgeMs() < 180_000;
+  const trainingActive = status?.state === "running" || officialTrainingActive;
   mapsRef.current = maps;
 
   const applyMapId = (mid: string, list: MapCatalogEntry[]) => {
@@ -333,12 +418,14 @@ export function WatchPage() {
 
   const ppoSeries = useMemo(() => {
     const history = getMetricsHistoryHot();
-    const runId = persistedPpoRunId ?? metrics?.run_id ?? history[history.length - 1]?.run_id;
+    const runId = metrics?.runtime === "official"
+      ? metrics.run_id
+      : persistedPpoRunId ?? metrics?.run_id ?? history[history.length - 1]?.run_id;
     if (metrics && metrics.run_id === runId && !history.some((sample) => sample.run_id === metrics.run_id && sample.step === metrics.step)) {
       history.push(metrics);
     }
     const updates = new Map<number, NonNullable<MetricsTelemetry["ppo"]>>(
-      persistedPpoUpdates.map((update) => [update.step, update.values]),
+      metrics?.runtime === "official" ? [] : persistedPpoUpdates.map((update) => [update.step, update.values]),
     );
     for (const sample of history) {
       if (sample.run_id !== runId || !sample.ppo || !Number.isFinite(sample.ppo_step)) continue;
@@ -362,14 +449,13 @@ export function WatchPage() {
     .map((result, index) => ({
       index,
       step: result.timesteps,
-      score: result.selection_score ?? (result.selection_metric === "total_reward"
-        ? result.total_reward
-        : result.selection_metric === "reward_per_simulated_second"
-          ? result.reward_per_simulated_second
-          : result.frontier_speed_mps),
+      // This chart is specifically about ten-lap pace, independent of the
+      // metric currently used to select evaluator checkpoints.
+      score: result.best_10_lap_time_s,
+      attempts: result.attempts ?? [],
       improved: result.improved ?? false,
     }))
-    .filter((point): point is { index: number; step: number; score: number; improved: boolean } =>
+    .filter((point): point is { index: number; step: number; score: number; attempts: NonNullable<EvaluationResult["attempts"]>; improved: boolean } =>
       typeof point.score === "number" && Number.isFinite(point.score)), [evaluationHistory]);
   const evaluatorChartPoints = useMemo(
     () => downsampleChartPoints(evaluatorScores, (point) => point.score),
@@ -400,7 +486,7 @@ export function WatchPage() {
   );
   const staleEvaluations = Math.max(0, evaluation?.stale_evaluations ?? 0);
   const stalePercent = Math.min(100, staleEvaluations / evaluatorPatience * 100);
-  const evaluatorTracking = evaluation != null || ["starting", "running", "stopping"].includes(status?.state ?? "");
+  const evaluatorTracking = !officialRuntime && (evaluation != null || ["starting", "running", "stopping"].includes(status?.state ?? ""));
   const evaluationInterval = watchSettings?.evaluation_every_timesteps ?? 0;
   const lastEvaluatedStep = evaluation?.latest_result?.timesteps ?? 0;
   const nextEvaluationThreshold = evaluationInterval > 0
@@ -519,9 +605,14 @@ export function WatchPage() {
     () => selectedEnvId == null ? null : cars.find((c) => c.env_id === selectedEnvId) ?? null,
     [cars, selectedEnvId]
   );
+  useEffect(() => {
+    if (officialRuntime && selectedEnvId == null && cars.length === 1) {
+      setSelectedEnvId(cars[0].env_id);
+    }
+  }, [officialRuntime, selectedEnvId, cars]);
   const lapSupported = cars.filter((c) => c.lap_supported);
   const evaluatorCar: EvaluatorCarTelemetry | null =
-    evaluation?.state === "running" ? evaluation.evaluator_car ?? null : null;
+    !officialRuntime && evaluation?.state === "running" ? evaluation.evaluator_car ?? null : null;
   const liveEvaluationResult = evaluation?.state === "running"
     ? evaluation.live_result ?? null
     : null;
@@ -540,9 +631,11 @@ export function WatchPage() {
     ? "reward per simulated second"
     : selectionMetric === "total_reward"
       ? "total reward per attempt"
-      : "frontier pace (m/s)";
-  const currentTrainingStep = metrics?.step ?? fleet?.step ?? 0;
-  const ppoIsUpdating = status?.state === "running" && trainingPhase?.phase === "ppo_update";
+      : selectionMetric === "ten_lap_time"
+        ? "median completed 10-lap time (s; lower is better)"
+        : "frontier pace (m/s)";
+  const currentTrainingStep = Math.max(metrics?.step ?? 0, fleet?.step ?? 0);
+  const ppoIsUpdating = trainingActive && trainingPhase?.phase === "ppo_update";
   const nextPpoStep = trainingPhase?.phase === "rollout"
     ? trainingPhase.step + rolloutSize
     : (Math.floor(currentTrainingStep / rolloutSize) + 1) * rolloutSize;
@@ -552,7 +645,7 @@ export function WatchPage() {
 
   return (
     <section className="panel fleet-panel">
-      <h2>Watch</h2>
+      <h2>Watch {officialRuntime && <small className="watch-runtime-badge">Official simulator</small>}</h2>
 
       {evaluatorTracking && (
         <section className="plateau-progress evaluator-plateau-top" aria-live="polite">
@@ -661,22 +754,22 @@ export function WatchPage() {
           />
           Fleet
         </label>
-        <label className="check-inline">
+        {!officialRuntime && <label className="check-inline">
           <input
             type="checkbox"
             checked={showFrontier}
             onChange={(e) => setShowFrontier(e.target.checked)}
           />
           Frontier
-        </label>
-        <label className="check-inline">
+        </label>}
+        {!officialRuntime && <label className="check-inline">
           <input
             type="checkbox"
             checked={showCurrentProgress}
             onChange={(e) => setShowCurrentProgress(e.target.checked)}
           />
           Current position
-        </label>
+        </label>}
         <label className="check-inline">
           <input
             type="checkbox"
@@ -722,12 +815,18 @@ export function WatchPage() {
 
       <div className="fleet-layout">
         <div className="fleet-canvas-stack">
-          {status?.state === "running" && rolloutSize > 0 && (
+          {trainingActive && rolloutSize > 0 && (
             <div className="ppo-rollout-indicator" role="status" aria-live="polite">
               <div className="ppo-rollout-copy">
-                <strong>{ppoIsUpdating ? "PPO updating · simulator paused" : `${Math.max(0, nextPpoStep - currentTrainingStep).toLocaleString()} steps until PPO update`}</strong>
+                <strong>{ppoIsUpdating
+                  ? trainingPhase?.runtime === "official"
+                    ? "PPO updating · last action held"
+                    : "PPO updating · simulator paused"
+                  : `${Math.max(0, nextPpoStep - currentTrainingStep).toLocaleString()} steps until PPO update`}</strong>
                 <span>{ppoIsUpdating
-                  ? "Policy update in progress"
+                  ? trainingPhase?.runtime === "official"
+                    ? "Pose refreshes when the next rollout begins"
+                    : "Policy update in progress"
                   : `Step ${currentTrainingStep.toLocaleString()} of ${nextPpoStep.toLocaleString()} · ${rolloutSize.toLocaleString()} steps per rollout`}</span>
               </div>
               <div className="ppo-rollout-track" role="progressbar" aria-label="Progress to next PPO update" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ppoIsUpdating ? 100 : Math.round(rolloutProgress * 100)}>
@@ -746,18 +845,16 @@ export function WatchPage() {
             mapYamlUrl={selectedMap?.yaml_url ?? null}
             fleetPanel={fleet}
             evaluatorCar={evaluatorCar}
-            evaluatorActive={evaluation?.state === "running"}
+            evaluatorActive={!officialRuntime && evaluation?.state === "running"}
             evaluatorSnapshotTimesteps={evaluation?.snapshot_timesteps ?? null}
             trainingStep={metrics?.step}
             rolloutSize={rolloutSize}
           />
           <div className="canvas-legend" aria-hidden>
             <span className="leg-car">▸ car</span>
-            <span className="leg-evaluator">◆ evaluator</span>
+            {officialRuntime ? <span>official training simulator</span> : <span className="leg-evaluator">◆ evaluator</span>}
             <span className="leg-collision">red car · collision event</span>
-            <span className="leg-current">━ current route position</span>
-            <span className="leg-frontier">┄ best progress</span>
-            <span className="leg-lap">┄ finish gate</span>
+            {!officialRuntime && <><span className="leg-current">━ current route position</span><span className="leg-frontier">┄ best progress</span><span className="leg-lap">┄ finish gate</span></>}
           </div>
         </div>
 
@@ -768,8 +865,8 @@ export function WatchPage() {
               {cars.length === 0 ? <p className="meta">No fleet sample yet. Start a train job with HUB_URL set.</p> : <>
                 {lapSupported.length > 0 && (
                   <div className="fleet-lap-summary">
-                    <span>Best 10-lap time</span>
-                    <strong>{formatLapDuration(fleet?.best_10_lap_time_s)}</strong>
+                    <div><span>Best 10-lap time</span><strong>{formatLapDuration(fleet?.best_10_lap_time_s)}</strong></div>
+                    <div><span>Average lap time <small>(10-lap time ÷ 10)</small></span><strong>{formatLapDuration(fleet?.best_10_lap_time_s == null ? null : fleet.best_10_lap_time_s / 10)}</strong></div>
                   </div>
                 )}
                 {lapSupported.length === 0 ? <p className="meta">Lap tracking is unavailable on this map.</p> :
@@ -789,7 +886,7 @@ export function WatchPage() {
                     ))}
                   </div>}
               </>}
-              <details className="lap-disclosure evaluator-disclosure">
+              {!officialRuntime ? <details className="lap-disclosure evaluator-disclosure">
                 <summary>
                   <span>Evaluator</span>
                   <strong>{evaluation?.state ?? "waiting"}</strong>
@@ -835,12 +932,14 @@ export function WatchPage() {
                           <summary>Individual attempts</summary>
                           <ol>
                             {completedEvaluationResult.attempts.map((attempt, index) => {
-                              const score = selectionMetric === "frontier_speed"
+                              const score = selectionMetric === "ten_lap_time"
+                                ? attempt.best_10_lap_time_s
+                                : selectionMetric === "frontier_speed"
                                 ? attempt.frontier_speed_mps
                                 : selectionMetric === "reward_per_simulated_second"
                                   ? attempt.reward_per_simulated_second
                                   : attempt.total_reward;
-                              return <li key={index}>Attempt {index + 1}: score {score.toFixed(3)} · {attempt.laps_observed}/10 laps · {attempt.collisions} collisions</li>;
+                              return <li key={index}>Attempt {index + 1}: {selectionMetric === "ten_lap_time" ? `10-lap time ${score == null ? "incomplete" : `${score.toFixed(2)} s`}` : `score ${score?.toFixed(3) ?? "—"}`} · {attempt.laps_observed}/10 laps · {attempt.collisions} collisions</li>;
                             })}
                           </ol>
                         </details>
@@ -863,6 +962,10 @@ export function WatchPage() {
                       <span>Best 10-lap time</span>
                       <strong>{shownTenLapTime != null ? `${shownTenLapTime.toFixed(2)} s` : `Pending (${shownLapTimes.length}/10 laps)`}</strong>
                     </div>
+                    {shownTenLapTime != null && <div className="evaluator-ten-lap-time">
+                      <span>Average lap time <small>(10-lap time ÷ 10)</small></span>
+                      <strong>{(shownTenLapTime / 10).toFixed(2)} s/lap</strong>
+                    </div>}
                   </div>
                   {evaluation?.state === "running" && evaluation.latest_result && (
                     <p className="meta">{liveEvaluationResult ? "Live pace and distance update during this snapshot; checkpoint score updates when it finishes." : "Latest completed evaluation remains visible while this snapshot runs."}</p>
@@ -870,7 +973,7 @@ export function WatchPage() {
                 </>
               ) : <p className="meta">{evaluation?.state === "running" ? "Waiting for live evaluator telemetry." : "No evaluation result yet."}</p>}
                 </div>
-              </details>
+              </details> : <p className="meta">Official simulator training telemetry is shown here. The custom evaluator is a separate runtime and is not attached to this run.</p>}
             </>
           ) : (
             <dl className="fleet-stats">
@@ -1091,45 +1194,50 @@ export function WatchPage() {
             <h4>{group.title}</h4>
             <div className="ppo-metric-grid">
               {group.metrics.map((metric) => (
-                <PpoMetricCard key={metric.key} metric={metric} points={ppoSeries.series[metric.key] ?? []} />
+                <PpoMetricCard key={metric.key} metric={metric} points={ppoSeries.series[metric.key] ?? []} initialLearningRate={watchSettings?.ppo_learning_rate ?? 0} />
               ))}
             </div>
           </div>
         ))}
       </section>
 
-      <section className="training-progress-panel evaluator-history-panel" aria-label="Evaluator performance">
+      {!officialRuntime && <section className="training-progress-panel evaluator-history-panel" aria-label="Evaluator performance">
         <div className="training-progress-heading">
           <div>
-            <h3>Median snapshot score</h3>
-            <p className="meta">Each point is the median selected score across the configured attempts · metric: {selectionMetricLabel}. The mean and best attempt are shown in the evaluator details above.</p>
+            <h3>10-lap time by evaluation</h3>
+            <p className="meta">Each point is the median 10-lap time across completed attempts. Hover a point to see its average lap time and each recorded lap split.</p>
           </div>
           <strong className="evaluator-history-count">{evaluatorScores.length} evaluations</strong>
         </div>
         {evaluatorScores.length > 1 && evaluatorRange ? (
           <>
-            <svg className="reward-chart" viewBox="0 0 720 170" role="img" aria-label="Evaluator score across all completed evaluations">
+            <svg className="reward-chart" viewBox="0 0 720 170" role="img" aria-label="Median ten-lap time across all completed evaluations">
               {[17, 81, 145].map((y) => <line key={y} x1="60" x2="712" y1={y} y2={y} className="reward-chart-grid" />)}
               {[evaluatorRange.max, (evaluatorRange.max + evaluatorRange.min) / 2, evaluatorRange.min].map((value, index) => (
-                <text key={index} x="53" y={[21, 85, 149][index]} textAnchor="end" className="reward-chart-axis-label">{value.toFixed(2)}</text>
+                <text key={index} x="53" y={[21, 85, 149][index]} textAnchor="end" className="reward-chart-axis-label">{value.toFixed(2)} s</text>
               ))}
               <polyline points={evaluatorPolyline} className="evaluator-chart-line" />
               {evaluatorChartPoints.map(({ point, index }) => {
                 const span = evaluatorRange.max - evaluatorRange.min;
                 const normalized = span > 1e-8 ? (point.score - evaluatorRange.min) / span : 0.5;
+                const averageLap = point.score / 10;
+                const lapDetails = point.attempts.map((attempt, attemptIndex) => {
+                  const splits = (attempt.lap_times_s ?? []).filter((time) => Number.isFinite(time) && time > 0);
+                  return splits.length ? `Attempt ${attemptIndex + 1}: ${splits.map((time) => `${time.toFixed(2)} s`).join(", ")}` : null;
+                }).filter((line): line is string => line != null);
                 return <circle key={`${point.index}-${point.step}`} cx={64 + index / (evaluatorScores.length - 1) * 648} cy={145 - normalized * 128} r="3.2" className={point.improved ? "evaluator-chart-point improved" : "evaluator-chart-point"}>
-                  <title>{`Evaluation ${index + 1} · step ${point.step.toLocaleString()} · score ${point.score.toFixed(3)}${point.improved ? " · improved" : ""}`}</title>
+                  <title>{[`Evaluation ${point.index + 1} · step ${point.step.toLocaleString()}`, `Median 10-lap time: ${point.score.toFixed(2)} s`, `Average lap time (10-lap time ÷ 10): ${averageLap.toFixed(2)} s/lap`, ...lapDetails, ...(point.improved ? ["Improved"] : [])].join("\n")}</title>
                 </circle>;
               })}
             </svg>
             <div className="reward-chart-labels"><span>Evaluation 1</span><span>{evaluatorScores.length} total saved runs</span><span>Evaluation {evaluatorScores.length}</span></div>
           </>
         ) : evaluatorScores.length === 1 ? (
-          <p className="meta reward-chart-empty">First score: {evaluatorScores[0]?.score.toFixed(3)} at step {evaluatorScores[0]?.step.toLocaleString()}. The chart will connect it to later evaluations.</p>
+          <p className="meta reward-chart-empty">First 10-lap time: {evaluatorScores[0]?.score.toFixed(2)} s at step {evaluatorScores[0]?.step.toLocaleString()}. The chart will connect it to later evaluations.</p>
         ) : (
           <p className="meta reward-chart-empty">No completed evaluator runs have been saved yet.</p>
         )}
-      </section>
+      </section>}
     </section>
   );
 }
