@@ -334,3 +334,6 @@ lap and neither is a score comparison.
   submission page says connecting should start the car. This run's stationary
   telemetry shows our headless harness did not reproduce the intended running
   state. Resolve/verify simulator mode before any more policy tuning or scoring.
+  Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
+  `results/lidar_gap_trace_30s_20261007.json`, and
+  `results/lidar_gap_encoder_verify_15s_20261007.json`.
