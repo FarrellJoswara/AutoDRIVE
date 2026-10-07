@@ -226,3 +226,23 @@ lap and neither is a score comparison.
   saved checkpoint through the unmodified official simulator + Devkit images.
   Do not call a training-only result an official score; require completed
   official laps for a valid race-time comparison.
+
+- Outcome: the trial resumed from the 20k checkpoint and changed only the Layer 2
+  action interval to 50 ms. At the 20,480-step snapshot, all three deterministic
+  attempts collided after 0.95 simulated seconds, averaging 1.59 m frontier
+  distance; none completed a lap. A later local checkpoint had essentially zero
+  explained variance and still no lap progress.
+- On the official images, the 20k checkpoint ran at 19.53 actions/s and recorded
+  30 raw collisions with no lap in 30 seconds. The 30k checkpoint ran at 19.49
+  actions/s and recorded 42 raw collisions in 30 seconds. A 180-second official
+  run of that 30k checkpoint completed 0 laps and recorded 259 raw collisions.
+  The images and policy mapping were unchanged; diagnostics are not race scores.
+- Conclusion: 50 ms training did not produce an official-compatible driver. It
+  did not change official control cadence relative to the 25 ms checkpoint
+  (19.73 actions/s), and its later checkpoint became more action-variable while
+  accumulating more collisions. Do not promote this branch. Keep all checkpoints
+  for diagnosis; resume optimization from a known lap-capable legacy checkpoint
+  or address the observation/action transfer with a separately controlled test.
+- Raw reports: `results/pooled_50ms_checkpoint_diag_30s_20261007.json`,
+  `results/pooled_50ms_30k_checkpoint_diag_30s_20261007.json`, and
+  `results/pooled_50ms_30k_official_180s_20261007.json`.
