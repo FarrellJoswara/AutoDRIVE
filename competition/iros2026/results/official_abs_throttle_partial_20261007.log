@@ -1,0 +1,17 @@
+Running local evaluation monitor; restricted score topics are read for measurement only.
+/usr/local/lib/python3.10/dist-packages/numpy/core/getlimits.py:499: UserWarning: The value of the smallest subnormal for <class 'numpy.float32'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/usr/local/lib/python3.10/dist-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float32'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+[INFO] [launch]: All log files can be found below /root/.ros/log/2026-10-07-15-43-35-342416-0ac009c0c128-17
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [autodrive_bridge-1]: process started with pid [39]
+[autodrive_bridge-1] Connected!
+{"event": "devkit_socket_connected"}
+{"event": "devkit_connected", "devkit_url": "http://127.0.0.1:4567"}
+{"event": "relay_listening", "host": "0.0.0.0", "port": 4568}
+{"event": "simulator_connected", "sid": "18490878b41a444f9d5396cbbb934a66"}
+{"event": "incomplete_startup_frame", "sid": "18490878b41a444f9d5396cbbb934a66", "missing_fields": ["V1 LIDAR Range Array"], "action": "neutral_controls"}
+{"event": "first_complete_frame_forwarded", "keys": ["V1 Angular Velocity", "V1 Best Lap Time", "V1 Collisions", "V1 Encoder Angles", "V1 Encoder Ticks", "V1 Front Camera Image", "V1 LIDAR Range Array", "V1 LIDAR Scan Rate", "V1 Lap Count", "V1 Lap Time", "V1 Last Lap Time", "V1 Linear Acceleration", "V1 Linear Velocity", "V1 Orientation Euler Angles", "V1 Orientation Quaternion", "V1 Position", "V1 Steering", "V1 Throttle"]}
+{"event": "upstream_emit_returned"}
+{"event": "first_devkit_command_received", "keys": ["V1 Reset", "V1 Steering", "V1 Throttle"]}

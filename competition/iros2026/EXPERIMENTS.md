@@ -441,3 +441,11 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `collision_disqualification_limit`, preserving diagnostics and avoiding
   wasted watchdog time. Focused unit tests cover the official threshold and
   saved disqualification status.
+- Throttle-absolute-value probe (`bidirectional` throttle with negative
+  outputs remapped to their positive magnitude): aborted during warm-up. At
+  the observation point, official lap count was still 0, lap timer was
+  103.19 s, position remained near the initial point, and raw collision count
+  had reached 104. This is an unsafe diagnostic, not a race collision count or
+  score; reject `abs(throttle)` as a transfer fix. Report and raw container log:
+  `results/official_abs_throttle_partial_20261007.json` and
+  `results/official_abs_throttle_partial_20261007.log`.

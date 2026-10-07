@@ -1,0 +1,26 @@
+{
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "observation_date": "2026-10-07",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "simulator_release": "official Windows IROS 2026 compete release, batch/no-graphics",
+  "model": "logs/rl/optimization_control0946_gain1025_lr2e6_20261007_20261007_063151/best_evaluated_model.zip",
+  "controller": "ppo",
+  "throttle_mode": "bidirectional",
+  "negative_throttle_mode": "positive_magnitude",
+  "steering_mode": "normal",
+  "steering_action_scale": 0.946,
+  "straight_throttle_gain": 1.025,
+  "status": "aborted_diagnostic",
+  "stop_reason": "manual_early_abort_high_warmup_collisions",
+  "valid_for_comparison": false,
+  "laps_completed_since_start_at_observation": 0,
+  "current_lap_time_s_at_observation": 103.18990325927734,
+  "raw_collision_count_at_observation": 104,
+  "position_at_observation_m": [
+    0.8,
+    -2.4189,
+    0.0546
+  ],
+  "interpretation": "The car had not completed the ignored warm-up lap and remained near its initial position when the observed cumulative collision count reached 104. This diagnostic was stopped before the scored race; the collision count is not a race score."
+}
