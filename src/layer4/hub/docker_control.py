@@ -221,7 +221,10 @@ def restart_compose_sims(*, timeout_s: int = 20) -> List[str]:
     return restarted
 
 
-def create_replay_sim(map_id: str, *, port: int = 4583) -> str:
+def create_replay_sim(
+    map_id: str, *, port: int = 4583,
+    env_overrides: Optional[Dict[str, str]] = None,
+) -> str:
     """Start an isolated simulator container for the Layer 3 replay process."""
     templates = _list_compose_containers(service="sim", all_containers=True)
     if not templates:
@@ -235,9 +238,16 @@ def create_replay_sim(map_id: str, *, port: int = 4583) -> str:
 
     template = _request("GET", f"/containers/{templates[0]['Id']}/json")
     config = template["Config"]
+    overrides = dict(env_overrides or {})
+    reserved = {"AICAR_EXPECTED_SIMS", "PORT", "BASE_PORT", "BRAIN_HOST", "AICAR_MAP_ID"}
+    if reserved.intersection(overrides):
+        raise ValueError("replay simulator overrides cannot replace its reserved network settings")
     env = [
         item for item in config.get("Env", [])
-        if not item.startswith(("AICAR_EXPECTED_SIMS=", "PORT=", "BASE_PORT=", "AICAR_MAP_ID="))
+        if not item.startswith((
+            "AICAR_EXPECTED_SIMS=", "PORT=", "BASE_PORT=", "AICAR_MAP_ID=",
+            *(f"{key}=" for key in overrides),
+        ))
     ]
     env.extend((
         "AICAR_EXPECTED_SIMS=1",
@@ -246,6 +256,7 @@ def create_replay_sim(map_id: str, *, port: int = 4583) -> str:
         "BRAIN_HOST=brain",
         f"AICAR_MAP_ID={map_id}",
     ))
+    env.extend(f"{key}={value}" for key, value in overrides.items() if value)
     labels = dict(config.get("Labels") or {})
     labels["com.docker.compose.service"] = "replay"
     labels.pop("com.docker.compose.container-number", None)

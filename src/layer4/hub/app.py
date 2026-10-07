@@ -723,9 +723,23 @@ async def replay_start(request: Request) -> Dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"unknown map: {map_id}")
         if map_entry.get("mesh_status") != "ready":
             raise HTTPException(status_code=400, detail=f"map is not ready for replay: {map_id}")
+    replay_settings = _settings
+    in_docker = os.environ.get("AICAR_IN_DOCKER", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
     try:
         return await asyncio.to_thread(
-            replay_job.start, model_path=model_path, map_id=map_id, seed=seed, device=device
+            replay_job.start,
+            model_path=model_path,
+            map_id=map_id,
+            seed=seed,
+            device=device,
+            simulator_env=replay_settings.simulator_env(),
+            env_kwargs=replay_settings.to_env_kwargs(
+                headless=True,
+                auto_launch=not in_docker,
+                map_id=map_id,
+            ),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import signal
@@ -258,7 +259,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--collision-penalty", type=float, default=0.0)
     p.add_argument("--map-id", type=str, default="none")
     p.add_argument("--stop-file", type=Path, default=None)
+    p.add_argument("--env-kwargs-json", type=str, default="{}")
     return p
+
+
+def env_kwargs_from_play_args(args: argparse.Namespace) -> dict:
+    """Merge replay runtime settings over the CLI defaults."""
+    try:
+        supplied = json.loads(args.env_kwargs_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("--env-kwargs-json must be a JSON object") from exc
+    if not isinstance(supplied, dict):
+        raise ValueError("--env-kwargs-json must be a JSON object")
+    from src.layer3.envs import env_kwargs_from_args
+
+    kwargs = env_kwargs_from_args(args)
+    kwargs.update(supplied)
+    return kwargs
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -272,15 +289,13 @@ def main(argv: Optional[list] = None) -> int:
             print(f"ERROR: model not found: {args.model}")
             return 1
 
-    from src.layer3.envs import env_kwargs_from_args
-
     return rollout(
         model_path=args.model,
         port=args.port,
         steps=args.steps,
         seed=args.seed,
         device=args.device,
-        env_kwargs=env_kwargs_from_args(args),
+        env_kwargs=env_kwargs_from_play_args(args),
         stop_file=args.stop_file,
     )
 

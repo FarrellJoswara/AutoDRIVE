@@ -166,6 +166,44 @@ class Settings(BaseModel):
             "AICAR_SIMULATOR_PATH": fixed_path,
         }
 
+    def to_env_kwargs(
+        self, *, headless: bool = True, auto_launch: bool = False,
+        map_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return the Layer 2 environment settings used by replay/playback."""
+        return {
+            "headless": headless,
+            "auto_launch": auto_launch,
+            "connect_timeout": self.connect_timeout,
+            "frame_skip": self.frame_skip,
+            "action_interval_s": self.effective_action_interval(),
+            "steering_action_scale": self.steering_action_scale,
+            "throttle_mode": self.throttle_mode,
+            "straight_throttle_gain": self.straight_throttle_gain,
+            "straight_throttle_steering_threshold": self.straight_throttle_steering_threshold,
+            "observation_profile": self.observation_profile,
+            "max_episode_steps": self.max_episode_steps,
+            "stagnation_speed_threshold": self.stagnation_speed_threshold,
+            "stagnation_steps": self.stagnation_steps,
+            "map_id": self.map_id if map_id is None else map_id,
+            "laps_per_episode": self.laps_per_episode,
+            "frontier_stagnation_seconds": self.frontier_stagnation_seconds,
+            "terminate_on_collision": self.terminate_on_collision,
+            "route_progress_scale": self.route_progress_scale,
+            "frontier_pace_target_mps": self.frontier_pace_target_mps,
+            "frontier_pace_bonus_strength": self.frontier_pace_bonus_strength,
+            "frontier_pace_source": self.frontier_pace_source,
+            "time_penalty_per_second": self.time_penalty_per_second,
+            "forward_scale": self.forward_scale,
+            "backward_speed_penalty_scale": self.backward_speed_penalty_scale,
+            "collision_penalty_magnitude": self.collision_penalty_magnitude,
+            "collision_reward_percent": self.collision_reward_percent,
+            "episode_failure_penalty_magnitude": self.episode_failure_penalty_magnitude,
+            "episode_failure_reward_percent": self.episode_failure_reward_percent,
+            "slip_penalty": self.slip_penalty,
+            "steer_jerk_penalty": self.steer_jerk_penalty,
+        }
+
     def to_train_argv(self) -> List[str]:
         """Build argv list for `python -m src.layer3.train` (flags only, no module)."""
         out = self.resolve_out()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -63,7 +64,11 @@ class ReplayJob:
             except Exception:
                 pass
 
-    def start(self, *, model_path: Path, map_id: str, seed: int, device: str = "auto") -> Dict[str, Any]:
+    def start(
+        self, *, model_path: Path, map_id: str, seed: int, device: str = "auto",
+        simulator_env: Optional[Dict[str, str]] = None,
+        env_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         with self._lock:
             if self.state in {"starting", "running", "stopping"}:
                 raise RuntimeError(f"replay already {self.state}")
@@ -80,6 +85,8 @@ class ReplayJob:
                 "map_id": map_id,
                 "seed": int(seed),
                 "device": device,
+                "simulator_env": dict(simulator_env or {}),
+                "env_kwargs": dict(env_kwargs or {}),
             }
             run_dir = ROOT / "logs" / "replay"
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +103,7 @@ class ReplayJob:
             if docker:
                 from src.layer4.hub.docker_control import create_replay_sim
 
-                create_replay_sim(map_id, port=REPLAY_PORT)
+                create_replay_sim(map_id, port=REPLAY_PORT, env_overrides=simulator_env)
                 sim_created = True
             cmd = [
                 sys.executable, "-m", "src.layer3.play",
@@ -106,6 +113,7 @@ class ReplayJob:
                 "--seed", str(int(seed)),
                 "--device", device,
                 "--map-id", map_id,
+                "--env-kwargs-json", json.dumps(env_kwargs or {}, separators=(",", ":")),
                 "--connect-timeout", "90",
                 "--stop-file", str(self.stop_file),
                 "--headless",
@@ -116,6 +124,7 @@ class ReplayJob:
                 "HUB_URL": self.hub_url,
                 "AICAR_MAP_ID": map_id,
                 "AICAR_FLEET_HZ": "12",
+                **(simulator_env or {}),
             }
             log_file = open(self.log_path, "w", encoding="utf-8", buffering=1)
             popen_kwargs: Dict[str, Any] = {
