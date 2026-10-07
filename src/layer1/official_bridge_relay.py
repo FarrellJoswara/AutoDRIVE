@@ -69,6 +69,8 @@ class OfficialBridgeRelay:
         self.pending: Dict[str, Dict[str, Any]] = {}
         self._warned_missing: set[tuple[str, ...]] = set()
         self._forwarded_frames = 0
+        self._commands_received = 0
+        self._response_timeouts = 0
 
         @self.upstream.on("connect")
         def on_devkit_connect() -> None:
@@ -82,18 +84,21 @@ class OfficialBridgeRelay:
         def on_devkit_command(command: Any) -> None:
             # The official bridge broadcasts its actuator response to connected
             # Socket.IO clients. Only forward the command to the pending sim.
+            self._commands_received += 1
             for response in tuple(self.pending.values()):
                 response["command"] = command
-                print(json.dumps({
-                    "event": "devkit_command",
-                    "keys": sorted(command) if isinstance(command, dict) else [],
-                }), flush=True)
+                if self._commands_received == 1:
+                    print(json.dumps({
+                        "event": "first_devkit_command_received",
+                        "keys": sorted(command) if isinstance(command, dict) else [],
+                    }), flush=True)
                 break
             else:
-                print(json.dumps({
-                    "event": "unsolicited_devkit_command",
-                    "keys": sorted(command) if isinstance(command, dict) else [],
-                }), flush=True)
+                if self._commands_received == 1:
+                    print(json.dumps({
+                        "event": "unsolicited_devkit_command",
+                        "keys": sorted(command) if isinstance(command, dict) else [],
+                    }), flush=True)
 
         @self.sio.on("connect")
         def on_simulator_connect(sid: str, environ: Dict[str, Any]) -> None:
@@ -142,11 +147,14 @@ class OfficialBridgeRelay:
                 if isinstance(command, dict):
                     self.sio.emit("Bridge", data=command, to=sid)
                     return
-                print(json.dumps({
-                    "event": "devkit_response_timeout",
-                    "sid": sid,
-                    "timeout_s": self.response_timeout_s,
-                }), flush=True)
+                self._response_timeouts += 1
+                if self._response_timeouts == 1 or self._response_timeouts % 100 == 0:
+                    print(json.dumps({
+                        "event": "devkit_response_timeout",
+                        "count": self._response_timeouts,
+                        "sid": sid,
+                        "timeout_s": self.response_timeout_s,
+                    }), flush=True)
                 self.sio.emit("Bridge", data=NEUTRAL_COMMAND, to=sid)
             except Exception as exc:
                 print(json.dumps({

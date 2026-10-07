@@ -109,3 +109,25 @@ unlocalized; neither attempt is a policy performance result.
   official Devkit image, the ROS LiDAR topic then produced 1081-beam scans at
   the advertised 40 Hz. This proves the transport and sensor path only; it is
   not a race-time result.
+
+## Policy transfer: throttle-sign diagnostics
+
+These short tests use the same preserved checkpoint and exact official image
+tags above. They diagnose action semantics only; neither produced a completed
+lap and neither is a score comparison.
+
+- Signed pass-through (`allow`): the deterministic policy repeatedly commanded
+  full reverse (`throttle=-1.0`); both permitted rear-wheel encoder positions
+  decreased. No lap completed. This confirms that the current checkpoint's
+  output is actively reversing under the official actuator mapping.
+- Positive-magnitude mapping (`positive_magnitude`): the same negative output
+  became full forward throttle (`throttle=+1.0`) and wheel encoder positions
+  increased. The car registered 47 collisions and completed no lap before the
+  diagnostic was stopped. This mapping changes direction but is not a viable
+  fix by itself; steering/observation/action transfer still needs diagnosis.
+- The evaluator now records policy and applied throttle/steering distributions,
+  reverse-action fraction, normalized state-channel distributions, and minimum
+  normalized LiDAR readings. It excludes pose, lap count, and collision count
+  from policy observations. The three controlled throttle mappings live in
+  Layer 2 and are exposed by the Layer 3 evaluator/runner; the Layer 1 bridge
+  continues to relay official telemetry and actuator commands.

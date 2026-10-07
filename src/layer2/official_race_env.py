@@ -15,7 +15,13 @@ import numpy as np
 
 from src.layer1.ros2_racer import RacerRos2
 from src.layer1.telemetry import TelemetrySnapshot
-from .spaces import make_action_space, make_observation_space, snapshot_to_obs
+from .spaces import (
+    NegativeThrottleMode,
+    make_action_space,
+    make_observation_space,
+    map_throttle_action,
+    snapshot_to_obs,
+)
 
 
 class OfficialRaceEnv(gym.Env):
@@ -33,6 +39,7 @@ class OfficialRaceEnv(gym.Env):
         steering_action_scale: float = 1.0,
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
+        negative_throttle_mode: NegativeThrottleMode = "allow",
         vehicle_id: str = "roboracer_1",
     ) -> None:
         super().__init__()
@@ -56,6 +63,9 @@ class OfficialRaceEnv(gym.Env):
         self.steering_action_scale = float(steering_action_scale)
         self.straight_throttle_gain = float(straight_throttle_gain)
         self.straight_throttle_steering_threshold = float(straight_throttle_steering_threshold)
+        # Validate once during environment construction.
+        map_throttle_action(0.0, negative_throttle_mode)
+        self.negative_throttle_mode = negative_throttle_mode
         self.action_space = make_action_space()
         self.observation_space = make_observation_space()
         self._initial_lap_count = 0
@@ -98,7 +108,7 @@ class OfficialRaceEnv(gym.Env):
 
     def step(self, action: np.ndarray):
         command = np.asarray(action, dtype=np.float32).reshape(2)
-        throttle = float(np.clip(command[0], -1.0, 1.0))
+        throttle = map_throttle_action(command[0], self.negative_throttle_mode)
         steering = float(np.clip(command[1], -1.0, 1.0) * self.steering_action_scale)
         if throttle > 0 and abs(steering) < self.straight_throttle_steering_threshold:
             throttle = min(1.0, throttle * self.straight_throttle_gain)

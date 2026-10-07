@@ -41,6 +41,57 @@ def summarize_attempt(
     }
 
 
+def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
+    """Summarize a bounded stream of policy or observation values."""
+    if not values:
+        return {"count": 0, "min": None, "max": None, "mean": None, "std": None}
+    array = [float(value) for value in values]
+    return {
+        "count": len(array),
+        "min": min(array),
+        "max": max(array),
+        "mean": statistics.fmean(array),
+        "std": statistics.pstdev(array),
+    }
+
+
+def action_observation_diagnostics(
+    *,
+    policy_throttle: List[float],
+    policy_steering: List[float],
+    applied_throttle: List[float],
+    applied_steering: List[float],
+    observation_states: List[List[float]],
+    normalized_lidar_minima: List[float],
+) -> Dict[str, Any]:
+    """Report allowed policy I/O only; excludes pose, laps, and collisions."""
+    state_names = (
+        "forward_speed", "sideways_speed", "yaw_rate", "forward_acceleration",
+        "sideways_acceleration", "throttle_feedback", "steering_feedback",
+        "previous_throttle", "previous_steering",
+    )
+    if observation_states:
+        states = list(zip(*observation_states))
+        state_summary = {
+            name: _distribution(list(channel))
+            for name, channel in zip(state_names, states)
+        }
+    else:
+        state_summary = {}
+    return {
+        "policy_throttle": _distribution(policy_throttle),
+        "policy_steering": _distribution(policy_steering),
+        "applied_throttle": _distribution(applied_throttle),
+        "applied_steering": _distribution(applied_steering),
+        "policy_reverse_fraction": (
+            sum(value < 0.0 for value in policy_throttle) / len(policy_throttle)
+            if policy_throttle else None
+        ),
+        "observation_state": state_summary,
+        "normalized_lidar_minimum": _distribution(normalized_lidar_minima),
+    }
+
+
 def evaluate_attempt(
     model: Any,
     env: Any,
@@ -56,6 +107,12 @@ def evaluate_attempt(
     steps = 0
     control_intervals_s: List[float] = []
     scan_rates_hz: List[float] = []
+    policy_throttle: List[float] = []
+    policy_steering: List[float] = []
+    applied_throttle: List[float] = []
+    applied_steering: List[float] = []
+    observation_states: List[List[float]] = []
+    normalized_lidar_minima: List[float] = []
     while not bool(info.get("race_complete", False)):
         if time.monotonic() - started >= wall_timeout_s:
             stop_reason = "wall_timeout"
@@ -63,8 +120,15 @@ def evaluate_attempt(
         if steps >= max_steps:
             stop_reason = "step_guard"
             break
+        observation_states.append([float(v) for v in obs["state"]])
+        normalized_lidar_minima.append(float(min(obs["lidar"])))
         action, _ = model.predict(obs, deterministic=True)
+        command = [float(v) for v in action.reshape(-1)]
+        policy_throttle.append(command[0])
+        policy_steering.append(command[1])
         obs, _, terminated, _, info = env.step(action)
+        applied_throttle.append(float(info.get("throttle_command", 0.0)))
+        applied_steering.append(float(info.get("steering_command", 0.0)))
         steps += 1
         interval = float(info.get("control_interval_s", 0.0))
         scan_rate = float(info.get("lidar_scan_rate_hz", 0.0))
@@ -120,6 +184,14 @@ def evaluate_attempt(
         "median_reported_lidar_scan_rate_hz": (
             statistics.median(scan_rates_hz) if scan_rates_hz else None
         ),
+        "action_observation_diagnostics": action_observation_diagnostics(
+            policy_throttle=policy_throttle,
+            policy_steering=policy_steering,
+            applied_throttle=applied_throttle,
+            applied_steering=applied_steering,
+            observation_states=observation_states,
+            normalized_lidar_minima=normalized_lidar_minima,
+        ),
     })
     print(json.dumps(result, indent=2), flush=True)
     return result
@@ -136,6 +208,7 @@ def evaluate(
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
+    negative_throttle_mode: str = "allow",
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
@@ -160,6 +233,7 @@ def evaluate(
         steering_action_scale=steering_action_scale,
         straight_throttle_gain=straight_throttle_gain,
         straight_throttle_steering_threshold=straight_throttle_steering_threshold,
+        negative_throttle_mode=negative_throttle_mode,
     )
     runs: List[Dict[str, Any]] = []
     try:
@@ -212,6 +286,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--steering-action-scale", type=float, default=1.0)
     parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
     parser.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
+    parser.add_argument(
+        "--negative-throttle-mode",
+        choices=("allow", "zero", "positive_magnitude"),
+        default="allow",
+        help="How to map negative policy throttle actions to the actuator",
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
     evaluate(
@@ -224,6 +304,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         steering_action_scale=args.steering_action_scale,
         straight_throttle_gain=args.straight_throttle_gain,
         straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,
+        negative_throttle_mode=args.negative_throttle_mode,
         output_path=args.out,
     )
     return 0

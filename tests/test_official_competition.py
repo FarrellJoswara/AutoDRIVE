@@ -17,7 +17,12 @@ from src.layer1.official_bridge_relay import (
 )
 from src.layer1.telemetry import TelemetrySnapshot
 from src.layer2.official_race_env import OfficialRaceEnv
-from src.layer3.official_evaluate import collision_penalty_seconds, summarize_attempt
+from src.layer2.spaces import map_throttle_action
+from src.layer3.official_evaluate import (
+    action_observation_diagnostics,
+    collision_penalty_seconds,
+    summarize_attempt,
+)
 
 
 def _vector(x=0.0, y=0.0, z=0.0):
@@ -222,3 +227,28 @@ def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
         "V1 Steering": "0.0000",
         "V1 Reset": "False",
     }
+
+
+def test_negative_throttle_mapping_modes_are_explicit_and_bounded():
+    assert map_throttle_action(-0.8, "allow") == -0.8
+    assert map_throttle_action(-0.8, "zero") == 0.0
+    assert map_throttle_action(-0.8, "positive_magnitude") == 0.8
+    assert map_throttle_action(1.4, "allow") == 1.0
+    assert map_throttle_action(-1.4, "positive_magnitude") == 1.0
+
+
+def test_evaluation_diagnostics_capture_only_policy_io():
+    result = action_observation_diagnostics(
+        policy_throttle=[-1.0, 0.5],
+        policy_steering=[-0.25, 0.25],
+        applied_throttle=[0.0, 0.5],
+        applied_steering=[-0.25, 0.25],
+        observation_states=[[0.1] * 9, [0.3] * 9],
+        normalized_lidar_minima=[0.2, 0.4],
+    )
+    assert result["policy_reverse_fraction"] == 0.5
+    assert result["policy_throttle"]["mean"] == -0.25
+    assert result["applied_throttle"]["mean"] == 0.25
+    assert result["observation_state"]["forward_speed"]["mean"] == 0.2
+    assert result["normalized_lidar_minimum"]["min"] == 0.2
+    assert "lap" not in result and "collision" not in result

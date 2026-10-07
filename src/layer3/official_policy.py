@@ -35,10 +35,11 @@ def run_policy(
     *,
     device: str = "cpu",
     timeout_s: float = 5.0,
+    negative_throttle_mode: str = "allow",
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
-    from src.layer2.spaces import snapshot_to_obs
+    from src.layer2.spaces import map_throttle_action, snapshot_to_obs
 
     model = load_policy(model_path, device=device)
     racer = RacerRos2(timeout_s=timeout_s, include_race_metrics=False)
@@ -50,7 +51,9 @@ def run_policy(
         while True:
             action, _ = model.predict(observation, deterministic=True)
             command = np.asarray(action, dtype=np.float32).reshape(2)
-            previous_throttle = float(np.clip(command[0], -1.0, 1.0))
+            previous_throttle = map_throttle_action(
+                float(command[0]), negative_throttle_mode
+            )
             previous_steering = float(np.clip(command[1], -1.0, 1.0))
             snap = racer.step(previous_throttle, previous_steering)
             observation = snapshot_to_obs(
@@ -69,8 +72,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--model", type=Path, default=Path("/models/policy.zip"))
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--timeout-s", type=float, default=5.0)
+    parser.add_argument(
+        "--negative-throttle-mode",
+        choices=("allow", "zero", "positive_magnitude"),
+        default="allow",
+        help="How to map negative policy throttle actions to the actuator",
+    )
     args = parser.parse_args(argv)
-    run_policy(args.model, device=args.device, timeout_s=args.timeout_s)
+    run_policy(
+        args.model,
+        device=args.device,
+        timeout_s=args.timeout_s,
+        negative_throttle_mode=args.negative_throttle_mode,
+    )
     return 0
 
 

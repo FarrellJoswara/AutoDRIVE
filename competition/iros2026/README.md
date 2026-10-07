@@ -80,6 +80,14 @@ simulator's documented `-ip <relay-host> -port 4568` arguments. For repeatable
 local comparisons, start a fresh simulator process for every attempt and
 preserve the exact image tags.
 
+For controlled transfer diagnostics, `AICAR_NEGATIVE_THROTTLE_MODE` accepts
+`allow` (the policy's signed output is passed through), `zero` (negative
+throttle becomes coasting), or `positive_magnitude` (negative output is mapped
+to the same positive magnitude). The default is `allow`; alternate mappings
+are experiments, not competition defaults. Evaluation output includes action
+and allowed-observation distributions so a mapping can be assessed from the
+official sensor path without exposing restricted race state to the policy.
+
 ## Interpretation
 
 Only compare policies tested with these official image tags and this same

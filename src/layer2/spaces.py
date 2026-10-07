@@ -8,7 +8,7 @@ it does not communicate with Unity.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Literal
 
 import numpy as np
 from gymnasium import spaces
@@ -22,6 +22,7 @@ LIDAR_BEAMS: int = 1081
 # Normalized state channels, kept distinct from policy commands so PPO can
 # observe when the simulator's actuator feedback differs from what was sent.
 STATE_DIM: int = 9
+NegativeThrottleMode = Literal["allow", "zero", "positive_magnitude"]
 
 _SPEED_SCALE_MPS = 22.88  # simulator RoboRacer maximum speed (82.4 km/h)
 _YAW_RATE_SCALE_RAD_S = 10.0  # leaves headroom above observed peak ~5.5 rad/s
@@ -33,6 +34,19 @@ _STATE_CLIP = 5.0
 def make_action_space() -> spaces.Box:
     """Throttle/brake and steering commands, both in [-1, 1]."""
     return spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+
+
+def map_throttle_action(value: float, mode: NegativeThrottleMode = "allow") -> float:
+    """Map a normalized policy throttle into the competition actuator command."""
+    if mode not in ("allow", "zero", "positive_magnitude"):
+        raise ValueError(f"Unknown negative throttle mode: {mode}")
+    throttle = float(np.clip(float(value), -1.0, 1.0))
+    if throttle < 0.0:
+        if mode == "zero":
+            return 0.0
+        if mode == "positive_magnitude":
+            return -throttle
+    return throttle
 
 
 def make_observation_space(lidar_beams: int = LIDAR_BEAMS) -> spaces.Dict:
