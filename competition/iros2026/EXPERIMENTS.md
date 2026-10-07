@@ -71,3 +71,17 @@ simulator-process evaluation is required before drawing conclusions.
 - The failed run's containers were stopped. Existing training and checkpoint
   artifacts were left intact. Do not compare this attempt as a performance
   result.
+
+### Compliance-path smoke retry: GPU passthrough corrected, telemetry still absent
+
+- Date: 2026-10-07; same official image tags, same preserved policy, fresh
+  simulator process. The simulator was started with Docker `--gpus all`, as in
+  the official container instructions; `nvidia-smi` inside the simulator
+  confirmed the host RTX 3060 was visible.
+- The Devkit again logged a Socket.IO connection followed by a control-only
+  `Bridge` payload missing `V1 LIDAR Range Array`. No LiDAR frame reached the
+  evaluator within 60 seconds, so it stopped before policy inference and
+  produced no lap result.
+- GPU passthrough was missing in the prior smoke setup, but correcting that
+  did not resolve the stream. The telemetry/handshake failure remains
+  unlocalized; neither attempt is a policy performance result.
