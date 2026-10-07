@@ -334,7 +334,7 @@ lap and neither is a score comparison.
   submission page says connecting should start the car. This run's stationary
   telemetry shows our headless harness did not reproduce the intended running
   state. Resolve/verify simulator mode before any more policy tuning or scoring.
-  Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
+Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `results/lidar_gap_trace_30s_20261007.json`, and
   `results/lidar_gap_encoder_verify_15s_20261007.json`.
 - Attempted to activate the documented GUI mode under Xvfb without changing the
@@ -363,3 +363,38 @@ lap and neither is a score comparison.
   policy-observation isolation, and incomplete-score handling. No new official
   race result is claimed until this guard is exercised against the official
   runtime with the car visibly traversing the course.
+
+## Local policy action-scale sweep (development-only)
+
+- Date: 2026-10-07. This uses the repository's fixed-step Porto development
+  simulator and the preserved `optimization_control0946_gain1025_lr2e6` policy.
+  It is not an official-image evaluation or a competition score; the official
+  runtime still needs a verified moving-car evaluation before promotion.
+- Replay-path fix: replay had been cloning the simulator with inherited
+  environment variables while Layer 2 used the selected run's environment
+  settings. Commit `c82ae22` makes replay pass the same simulator and Layer 2
+  configuration used by training/evaluation. Focused coverage: 4 tests pass.
+- Baseline: 25 ms action interval, frame skip 1, throttle gain 1.025, steering
+  scale 0.946; 10/10 laps, 0 collisions, 63.921 s.
+- One-factor steering-scale probe (all other settings and policy unchanged):
+
+  | Steering scale | 10-lap time | Completion | Collisions |
+  | ---: | ---: | ---: | ---: |
+  | 0.85 | 63.823 s | 10/10 | 0 |
+  | 0.90 | 63.821 s (two identical runs) | 10/10 | 0 |
+  | 0.91 | 63.997 s | 10/10 | 0 |
+  | 0.92 | 63.696 s (two identical runs) | 10/10 | 0 |
+  | 0.93 | 63.773 s | 10/10 | 0 |
+  | 0.946 baseline | 63.921 s | 10/10 | 0 |
+  | 1.00 | 64.548 s | 10/10 | 0 |
+
+- The 0.92 challenger repeats exactly and is 0.225 s (0.35%) faster than the
+  baseline in this deterministic local harness. Treat 0.92 as a local runtime
+  candidate only; leave the competition/default setting and checkpoint
+  unchanged until the same policy is tested in the unmodified official runtime
+  with verified vehicle movement.
+- Straight-throttle gain 1.05 was tested twice with the same policy and other
+  settings. Both runs stopped after 9 laps at 70.25 simulated seconds with
+  `frontier_stagnation` and 0 collisions, so reject this setting. Its artifacts
+  and all sweep outputs remain under
+  `logs/rl/throttle_gain_25ms_retest_20261007/`.
