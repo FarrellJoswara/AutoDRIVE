@@ -343,3 +343,23 @@ lap and neither is a score comparison.
   was rejected), so the GUI toggle could not be exercised here. Until the
   simulator can be started in Autonomous mode on a supported display, stop
   controller tuning and reject any run that lacks verified body movement.
+
+## Evaluation validity guard
+
+- Date: 2026-10-07.
+- The stationary-run diagnosis exposed two evaluator defects: encoder rotation
+  was mistaken for body motion, and a zero-lap attempt was serialized as a
+  `0.0 s` adjusted score. Neither value should be mistaken for a result.
+- In the local `AICAR_MODE=evaluate` path only, Layer 1 now reads restricted
+  `/autodrive/roboracer_1/ips` alongside the evaluator's existing restricted
+  race counters. The policy transport (`AICAR_MODE=policy`) does not subscribe
+  to IPS; the pose is kept out of the observation/action path and used only to
+  validate that the vehicle moved at least 0.25 m within 3 seconds.
+- A stationary run now stops with `vehicle_motion_not_verified`. Incomplete
+  races and disqualified races have no adjusted comparison score; a valid
+  candidate must complete all 10 timed laps, pass the motion check, and remain
+  within the collision limit.
+- Validation: unit tests cover stationary and moving IPS traces, early abort,
+  policy-observation isolation, and incomplete-score handling. No new official
+  race result is claimed until this guard is exercised against the official
+  runtime with the car visibly traversing the course.

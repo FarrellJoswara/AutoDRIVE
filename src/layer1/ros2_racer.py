@@ -18,13 +18,14 @@ from .telemetry import TelemetrySnapshot
 
 @dataclass(frozen=True)
 class RaceMetrics:
-    """Restricted simulator counters for evaluation-only instrumentation."""
+    """Restricted simulator data for evaluation-only instrumentation."""
 
     lap_count: int = 0
     lap_time: float = 0.0
     last_lap_time: float = 0.0
     best_lap_time: float = 0.0
     collision_count: int = 0
+    position: Optional[tuple[float, float, float]] = None
 
 
 def _xyz(value: Any) -> str:
@@ -133,6 +134,7 @@ class RacerRos2:
         self._rclpy = None
         if node is None:
             import rclpy
+            from geometry_msgs.msg import Point
             from sensor_msgs.msg import Imu, JointState, LaserScan
             from std_msgs.msg import Float32, Int32
 
@@ -143,6 +145,7 @@ class RacerRos2:
             self._msg_types = {
                 "Float32": Float32,
                 "Int32": Int32,
+                "Point": Point,
                 "Imu": Imu,
                 "JointState": JointState,
                 "LaserScan": LaserScan,
@@ -196,6 +199,10 @@ class RacerRos2:
             (f"{prefix}/last_lap_time", types["Float32"], "last_lap_time"),
             (f"{prefix}/best_lap_time", types["Float32"], "best_lap_time"),
             (f"{prefix}/collision_count", types["Int32"], "collision_count"),
+            # Restricted IPS is subscribed only by the local evaluation
+            # transport. It is never present in the deployed policy path and
+            # is used solely to reject runs where wheel encoders spin in place.
+            (f"{prefix}/ips", types["Point"], "position"),
         ) if self.include_race_metrics else ()
         for topic, message_type, name in (*callbacks, *metric_callbacks):
             self._subscriptions.append(
@@ -216,6 +223,14 @@ class RacerRos2:
         with self._condition:
             self._raw[field] = message
             self._raw_receipts[field] = now
+            if field == "position":
+                self._race_metrics = replace(
+                    self._race_metrics,
+                    position=(float(message.x), float(message.y), float(message.z)),
+                )
+                self._race_metrics_received.add(field)
+                self._condition.notify_all()
+                return
             if field in {
                 "lap_count", "lap_time", "last_lap_time", "best_lap_time", "collision_count"
             }:
@@ -317,13 +332,18 @@ class RacerRos2:
     def wait_for_race_metrics(self) -> RaceMetrics:
         if not self.include_race_metrics:
             raise RuntimeError("Race metrics are disabled for the policy transport")
-        required = {"lap_count", "lap_time", "last_lap_time", "best_lap_time", "collision_count"}
+        required = {
+            "lap_count", "lap_time", "last_lap_time", "best_lap_time",
+            "collision_count", "position",
+        }
         deadline = time.monotonic() + self.timeout_s
         with self._condition:
             while not required.issubset(self._race_metrics_received):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError("Official race metric topics were not ready")
+                    raise TimeoutError(
+                        "Official evaluator topics were not ready (race counters and IPS motion check)"
+                    )
                 self._condition.wait(remaining)
             return self._race_metrics
 

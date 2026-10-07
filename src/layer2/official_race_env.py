@@ -197,6 +197,10 @@ class OfficialRaceEnv(gym.Env):
         collision_event: bool,
     ) -> Dict[str, Any]:
         return {
+            # Evaluation-only restricted pose used to validate that the
+            # simulator body moves. This is intentionally excluded from the
+            # observation returned to the policy.
+            "race_position": metrics.position,
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
             "throttle": float(snap.throttle),

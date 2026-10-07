@@ -68,6 +68,11 @@ docker run --rm --name aicar-iros-policy `
 The runner starts the official Devkit launch unchanged and runs the continuous
 policy by default. For a local diagnostic, set `AICAR_MODE=evaluate`; that mode
 observes restricted lap/collision topics but does not feed them to the policy.
+It also subscribes to restricted IPS only for an evaluator-side motion-validity
+check: if the car does not move at least 0.25 m within 3 seconds, the attempt
+stops as `vehicle_motion_not_verified` and cannot be included in score
+comparisons. The competition `AICAR_MODE=policy` path does not subscribe to or
+use IPS.
 Each additional attempt requires a newly launched simulator process. The report
 is written to `/tmp/aicar-iros-evaluation.json` by default.
 `AICAR_RACE_WALL_TIMEOUT_S` and `AICAR_RACE_STEP_GUARD` are local safety guards,

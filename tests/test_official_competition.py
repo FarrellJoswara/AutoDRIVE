@@ -5,6 +5,7 @@ import time
 import numpy as np
 
 from src.layer1.ros2_racer import (
+    RaceMetrics,
     RacerRos2,
     _encoder_forward_speed_mps,
     _next_scan_deadline,
@@ -21,7 +22,9 @@ from src.layer2.spaces import map_steering_action, map_throttle_action
 from src.layer3.official_evaluate import (
     action_observation_diagnostics,
     collision_penalty_seconds,
+    evaluate_attempt,
     summarize_attempt,
+    verify_vehicle_motion,
 )
 
 
@@ -76,6 +79,92 @@ def test_official_collision_penalties_are_cumulative_steps():
     result = summarize_attempt(lap_times_s=[5.0] * 10, race_collisions=2)
     assert result["race_time_s"] == 50.0
     assert result["adjusted_race_time_s"] == 80.0
+
+
+def test_incomplete_attempts_are_not_scored_as_zero_time():
+    no_laps = summarize_attempt(lap_times_s=[], race_collisions=0)
+    partial = summarize_attempt(lap_times_s=[6.0, 5.0], race_collisions=1)
+
+    assert no_laps["race_time_s"] is None
+    assert no_laps["adjusted_race_time_s"] is None
+    assert no_laps["complete"] is False
+    assert partial["race_time_s"] == 11.0
+    assert partial["adjusted_race_time_s"] is None
+    assert partial["complete"] is False
+
+
+def test_motion_preflight_rejects_stationary_ips_and_accepts_displacement():
+    stationary = verify_vehicle_motion([[1.0, 0.0, 2.0], [1.0, 0.0, 2.0]], 3.0)
+    moving = verify_vehicle_motion([[1.0, 0.0, 2.0], [1.3, 0.0, 2.0]], 1.0)
+
+    assert stationary["verified"] is False
+    assert stationary["max_displacement_m"] == 0.0
+    assert moving["verified"] is True
+    assert np.isclose(moving["max_displacement_m"], 0.3)
+
+
+def test_motion_preflight_waits_until_window_when_position_is_static():
+    pending = verify_vehicle_motion([[0.0, 0.0, 0.0]], 1.0)
+    unavailable = verify_vehicle_motion([], 3.0)
+
+    assert pending["verified"] is None
+    assert unavailable["available"] is False
+    assert unavailable["verified"] is None
+
+
+def test_evaluator_stops_stationary_run_and_marks_it_invalid():
+    class Model:
+        def predict(self, obs, deterministic=True):
+            return np.zeros(2, dtype=np.float32), None
+
+    class Env:
+        def reset(self):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                {"race_position": (1.0, 0.0, 2.0), "race_complete": False},
+            )
+
+        def step(self, action):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                0.0,
+                False,
+                False,
+                {
+                    "race_position": (1.0, 0.0, 2.0),
+                    "race_complete": False,
+                    "control_interval_s": 0.05,
+                    "lidar_scan_rate_hz": 40.0,
+                    "race_lap_times_s": [],
+                    "race_collisions": 0,
+                    "throttle_command": 0.0,
+                    "steering_command": 0.0,
+                },
+            )
+
+    result = evaluate_attempt(
+        Model(), Env(), wall_timeout_s=2.0, max_steps=1000, attempt_index=1
+    )
+
+    assert result["stop_reason"] == "vehicle_motion_not_verified"
+    assert result["motion_verification"]["verified"] is False
+    assert result["race_time_s"] is None
+    assert result["adjusted_race_time_s"] is None
+    assert result["score_status"] == "vehicle_motion_not_verified"
+    assert result["valid_for_comparison"] is False
+
+
+def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
+    racer = object.__new__(RacerRos2)
+    racer.include_race_metrics = True
+    racer._condition = threading.Condition()
+    racer._race_metrics = RaceMetrics()
+    racer._race_metrics_received = set()
+    racer._raw = {}
+    racer._raw_receipts = {}
+    racer._on_message("position", _vector(1.0, 2.0, 3.0))
+    assert racer.race_metrics.position == (1.0, 2.0, 3.0)
+    assert "position" in racer._race_metrics_received
 
 
 class FakeRacer:
@@ -140,6 +229,15 @@ def test_official_env_starts_from_live_spawn_without_reset_command():
     env = OfficialRaceEnv(racer=racer)
     env.reset()
     assert racer.ready_calls == 1
+
+
+def test_restricted_position_is_reported_as_evaluator_info_not_policy_observation():
+    racer = FakeRacer([_snapshot(lap=0, last_lap=0.0, collisions=0)])
+    env = OfficialRaceEnv(racer=racer)
+    obs, info = env.reset()
+
+    assert info["race_position"] == (0.0, 0.0, 0.0)
+    assert set(obs) == {"lidar", "state"}
 
 
 def test_race_env_counts_only_collisions_after_warmup():

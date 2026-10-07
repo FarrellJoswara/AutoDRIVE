@@ -25,19 +25,63 @@ def summarize_attempt(
     disqualification_limit: int = 10,
 ) -> Dict[str, Any]:
     valid_times = [float(value) for value in lap_times_s if math.isfinite(float(value)) and float(value) > 0]
-    race_time = sum(valid_times) if len(valid_times) == len(lap_times_s) else None
+    race_time = (
+        sum(valid_times)
+        if valid_times and len(valid_times) == len(lap_times_s)
+        else None
+    )
     disqualified = int(race_collisions) > int(disqualification_limit)
     penalty = collision_penalty_seconds(race_collisions)
+    complete = len(valid_times) == 10 and len(valid_times) == len(lap_times_s)
     return {
         "race_laps_completed": len(lap_times_s),
         "race_lap_times_s": list(lap_times_s),
         "race_time_s": race_time,
         "race_collisions": int(race_collisions),
         "collision_penalty_s": penalty,
-        "adjusted_race_time_s": None if disqualified or race_time is None else race_time + penalty,
+        "adjusted_race_time_s": (
+            None if disqualified or not complete or race_time is None
+            else race_time + penalty
+        ),
         "disqualified": disqualified,
+        "complete": complete,
         "best_lap_s": min(valid_times) if valid_times else None,
         "mean_lap_s": statistics.fmean(valid_times) if valid_times else None,
+    }
+
+
+def verify_vehicle_motion(
+    positions: List[List[float]],
+    elapsed_s: float,
+    *,
+    check_after_s: float = 3.0,
+    minimum_displacement_m: float = 0.25,
+) -> Dict[str, Any]:
+    """Use evaluator-only IPS to reject stationary simulator attempts.
+
+    IPS is restricted and deliberately used only as a test-validity diagnostic;
+    it is never included in policy observations or actions.
+    """
+    common = {
+        "source": "restricted_ips_diagnostic_only",
+        "available": bool(positions),
+        "elapsed_s": float(elapsed_s),
+        "check_after_s": float(check_after_s),
+        "minimum_displacement_m": float(minimum_displacement_m),
+    }
+    if not positions:
+        return {**common, "verified": None, "max_displacement_m": None}
+    origin = positions[0]
+    max_displacement = max(
+        math.sqrt(sum((float(point[i]) - float(origin[i])) ** 2 for i in range(3)))
+        for point in positions
+    )
+    moved = max_displacement >= minimum_displacement_m
+    verified = True if moved else (False if elapsed_s >= check_after_s else None)
+    return {
+        **common,
+        "verified": verified,
+        "max_displacement_m": max_displacement,
     }
 
 
@@ -100,6 +144,8 @@ def evaluate_attempt(
     max_steps: int,
     attempt_index: int,
     trace_steps: int = 0,
+    motion_check_after_s: float = 3.0,
+    motion_minimum_displacement_m: float = 0.25,
 ) -> Dict[str, Any]:
     obs, info = env.reset()
     started = time.monotonic()
@@ -115,6 +161,18 @@ def evaluate_attempt(
     observation_states: List[List[float]] = []
     normalized_lidar_minima: List[float] = []
     action_trace: List[Dict[str, Any]] = []
+    initial_position = info.get("race_position")
+    position_trace: List[List[float]] = (
+        [[float(value) for value in initial_position]]
+        if initial_position is not None else []
+    )
+    control_elapsed_s = 0.0
+    motion_status = verify_vehicle_motion(
+        position_trace,
+        control_elapsed_s,
+        check_after_s=motion_check_after_s,
+        minimum_displacement_m=motion_minimum_displacement_m,
+    )
     while not bool(info.get("race_complete", False)):
         if time.monotonic() - started >= wall_timeout_s:
             stop_reason = "wall_timeout"
@@ -146,8 +204,18 @@ def evaluate_attempt(
         scan_rate = float(info.get("lidar_scan_rate_hz", 0.0))
         if math.isfinite(interval) and interval > 0:
             control_intervals_s.append(interval)
+            control_elapsed_s += interval
         if math.isfinite(scan_rate) and scan_rate > 0:
             scan_rates_hz.append(scan_rate)
+        current_position = info.get("race_position")
+        if current_position is not None:
+            position_trace.append([float(value) for value in current_position])
+        motion_status = verify_vehicle_motion(
+            position_trace,
+            control_elapsed_s,
+            check_after_s=motion_check_after_s,
+            minimum_displacement_m=motion_minimum_displacement_m,
+        )
 
         lap_times = list(info.get("race_lap_times_s", []))
         while laps_reported < len(lap_times):
@@ -168,6 +236,9 @@ def evaluate_attempt(
         if terminated:
             stop_reason = "race_complete"
             break
+        if motion_status["verified"] is False:
+            stop_reason = "vehicle_motion_not_verified"
+            break
     else:
         stop_reason = "race_complete"
 
@@ -175,6 +246,16 @@ def evaluate_attempt(
         lap_times_s=list(info.get("race_lap_times_s", [])),
         race_collisions=int(info.get("race_collisions", 0)),
     )
+    if motion_status["verified"] is not True:
+        score_status = "vehicle_motion_not_verified"
+    elif result["disqualified"]:
+        score_status = "disqualified"
+    elif not result["complete"]:
+        score_status = "incomplete"
+    else:
+        score_status = "valid"
+    if score_status != "valid":
+        result["adjusted_race_time_s"] = None
     result.update({
         "attempt": attempt_index,
         "steps": steps,
@@ -205,6 +286,9 @@ def evaluate_attempt(
             normalized_lidar_minima=normalized_lidar_minima,
         ),
         "action_trace": action_trace,
+        "motion_verification": motion_status,
+        "score_status": score_status,
+        "valid_for_comparison": score_status == "valid",
     })
     print(json.dumps(result, indent=2), flush=True)
     return result
@@ -267,7 +351,11 @@ def evaluate(
                 attempt_index=attempt,
                 trace_steps=trace_steps,
             ))
-        completed = [run for run in runs if run["race_laps_completed"] == 10 and run["adjusted_race_time_s"] is not None]
+        completed = [
+            run for run in runs
+            if run.get("valid_for_comparison") is True
+            and run["adjusted_race_time_s"] is not None
+        ]
         adjusted = [float(run["adjusted_race_time_s"]) for run in completed]
         result: Dict[str, Any] = {
             "model": str(checkpoint),
