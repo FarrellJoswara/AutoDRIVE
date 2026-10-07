@@ -459,8 +459,9 @@ def test_official_training_reward_matches_race_time_collision_and_dq_rules():
     env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=0.0)
     env.reset()
 
-    _, warmup_reward, terminated, truncated, _ = env.step(np.zeros(2, dtype=np.float32))
-    assert warmup_reward == 0.0
+    _, warmup_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+    assert warmup_reward == 99.0
+    assert info["training_reward_components"]["warmup_completion"] == 100.0
     assert not terminated and not truncated
 
     _, lap_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
@@ -479,6 +480,28 @@ def test_official_training_reward_matches_race_time_collision_and_dq_rules():
     assert info["race_disqualified"] is True
     assert info["race_complete"] is False
     assert info["termination_reason"] == "disqualified"
+
+
+def test_official_training_watchdog_covers_warmup():
+    class TrainingRacer(FakeRacer):
+        def reset_simulation_for_training(self):
+            self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            return self.telemetry
+
+    racer = TrainingRacer([
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+    ])
+    racer.last_step_duration_s = 2.0
+    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=1.0)
+    env.reset()
+
+    _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+
+    assert reward == -1002.0
+    assert not terminated and truncated
+    assert info["termination_reason"] == "training_watchdog_timeout"
+    assert info["training_elapsed_s"] == 2.0
 
 
 def test_official_training_cost_uses_time_between_actions_not_only_last_scan():

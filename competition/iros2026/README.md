@@ -124,9 +124,13 @@ docker run --rm --name aicar-official-train-sim `
 `AICAR_MODE=train` is a development/training mode, not a submission mode. It
 enables restricted reward/reset handling only inside the trainer. `AICAR_MODE=policy`
 remains the race path and cannot publish reset or subscribe to restricted
-metrics. The initial training reward adds per-lap completion shaping to exact
-simulated-time cost and official escalating collision penalties; disqualification
-receives a large failure cost. Those shaping weights are recorded in each run's
+metrics. Training charges simulated time throughout warm-up and the scored
+race, gives a lap-completion bonus for both the required warm-up and scored
+laps, and applies official escalating collision penalties during scored laps;
+disqualification or the full-episode watchdog receives a large failure cost.
+The watchdog covers warm-up too, so a policy that cannot reach the scored race
+cannot run indefinitely without feedback. These training-only signals never
+enter policy observations. Shaping weights are recorded in each run's
 `config.json` and must be evaluated by completed official races, not rollout
 reward alone.
 

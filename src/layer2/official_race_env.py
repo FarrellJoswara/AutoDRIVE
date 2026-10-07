@@ -157,6 +157,7 @@ class OfficialRaceEnv(gym.Env):
 
         race_was_active = self._race_collision_baseline is not None
         previous_race_laps = self._race_laps_count
+        previous_lap_count = self._last_lap_count
         previous_race_collisions = self._race_collisions(self._last_collision_count)
         snap = self.racer.step(throttle, steering)
         self._episode_steps += 1
@@ -231,14 +232,31 @@ class OfficialRaceEnv(gym.Env):
         truncated = False
         if self.training_mode:
             reward_components = {
-                "race_time_cost": 0.0,
+                "race_time_cost": -step_duration_s,
+                "warmup_completion": 0.0,
                 "lap_completion": 0.0,
                 "collision_penalty": 0.0,
                 "failure_penalty": 0.0,
             }
+            self._training_elapsed_s += step_duration_s
+            warmup_laps_completed = max(
+                0,
+                min(
+                    self.warmup_laps,
+                    current_lap_count - self._initial_lap_count,
+                ),
+            )
+            warmup_laps_completed_previous = max(
+                0,
+                min(
+                    self.warmup_laps,
+                    previous_lap_count - self._initial_lap_count,
+                ),
+            )
+            reward_components["warmup_completion"] = self.training_lap_reward * max(
+                0, warmup_laps_completed - warmup_laps_completed_previous
+            )
             if race_was_active:
-                self._training_elapsed_s += step_duration_s
-                reward_components["race_time_cost"] = -step_duration_s
                 new_collisions = max(0, race_collisions - previous_race_collisions)
                 reward_components["collision_penalty"] = -sum(
                     10.0 * collision_index
@@ -252,8 +270,7 @@ class OfficialRaceEnv(gym.Env):
                 if race_disqualified:
                     reward_components["failure_penalty"] = -self.training_failure_penalty
             if (
-                race_was_active
-                and not terminated
+                not terminated
                 and self.training_timeout_s > 0
                 and self._training_elapsed_s >= self.training_timeout_s
             ):

@@ -121,8 +121,10 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": 1.0,
                 "lap_completion_bonus": 100.0,
+                "warmup_lap_completion_bonus": 100.0,
                 "collision_penalty_seconds": "10 * collision_number",
                 "disqualification_or_watchdog_penalty": 1000.0,
+                "watchdog_scope": "full episode including warm-up",
                 "restricted_topics_used_only_for_reward_and_episode_control": True,
                 "restricted_topics_in_policy_observation": False,
             },
