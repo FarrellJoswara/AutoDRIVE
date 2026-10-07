@@ -23,6 +23,7 @@ from src.layer3.official_evaluate import (
     action_observation_diagnostics,
     collision_penalty_seconds,
     evaluate_attempt,
+    _policy_observation_trace,
     summarize_attempt,
     verify_vehicle_motion,
 )
@@ -91,6 +92,18 @@ def test_incomplete_attempts_are_not_scored_as_zero_time():
     assert partial["race_time_s"] == 11.0
     assert partial["adjusted_race_time_s"] is None
     assert partial["complete"] is False
+
+
+def test_official_trace_records_only_policy_input_observations_compactly():
+    trace = _policy_observation_trace({
+        "lidar": np.asarray([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]),
+        "state": np.arange(9, dtype=np.float32),
+    })
+
+    assert trace["observation_state"] == list(map(float, range(9)))
+    assert trace["lidar_min_left"] == 0.1
+    assert trace["lidar_min_front"] == 0.4
+    assert trace["lidar_min_right"] == 0.7
 
 
 def test_motion_preflight_rejects_stationary_ips_and_accepts_displacement():

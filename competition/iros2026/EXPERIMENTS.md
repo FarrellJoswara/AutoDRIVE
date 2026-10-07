@@ -745,4 +745,23 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   the policy requested reverse throttle on 16.8% of steps. This small single-run
   difference does not establish an improvement and neither mapping is safe.
   Report: `bidirectional_lr1e5_81920_headless_zero_negative_20261007.json`.
-  Next test a reduced steering scale with the other controls fixed.
+  A reduced-scale steering test at 0.92 still completed only one race lap
+  (18.018 s) before reaching 11 race collisions and disqualification. At the
+  trained scale 0.945, a repeat completed one lap in 15.287 s before the same
+  disqualification. These headless diagnostics do not establish a valid score;
+  reducing steering did not improve the candidate's collision behavior and
+  slowed its first scored lap. Results:
+  `bidirectional_lr1e5_81920_headless_steer092_20261007.json` and
+  `bidirectional_lr1e5_81920_headless_trace_0945_20261007.json`.
+- The official evaluator's optional trace now records the policy's pre-action
+  normalized state vector and compact left/front/right LiDAR minima beside each
+  action. It records only observations already supplied to the policy; restricted
+  race metrics remain evaluator-only. The 0.945 replay saw normalized front
+  clearance minima near 0.07 (about 0.75 m under the official 0.06–10 m sensor
+  range) while emitting both reverse throttle and substantial steering. This
+  trace does not change the competition policy path. It lets the next diagnosis
+  focus on the policy's response to near-obstacle sensor input instead of
+  guessing from aggregate collision counts. The full run log is
+  `bidirectional_lr1e5_81920_headless_trace_0945_20261007.log`.
+  Next inspect the aligned sensor/action trace and isolate the turn response
+  before selecting another training change.

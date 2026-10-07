@@ -99,6 +99,20 @@ def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def _policy_observation_trace(observation: Dict[str, Any]) -> Dict[str, Any]:
+    """Return compact diagnostics from only the observation given to the policy."""
+    lidar_values = [float(value) for value in observation["lidar"]]
+    state_values = [float(value) for value in observation["state"]]
+    left_end = max(1, len(lidar_values) // 3)
+    right_start = min(len(lidar_values) - 1, (2 * len(lidar_values)) // 3)
+    return {
+        "observation_state": state_values,
+        "lidar_min_left": min(lidar_values[:left_end]),
+        "lidar_min_front": min(lidar_values[left_end:right_start]),
+        "lidar_min_right": min(lidar_values[right_start:]),
+    }
+
+
 def action_observation_diagnostics(
     *,
     policy_throttle: List[float],
@@ -183,6 +197,11 @@ def evaluate_attempt(
             break
         observation_states.append([float(v) for v in obs["state"]])
         normalized_lidar_minima.append(float(min(obs["lidar"])))
+        trace_observation = (
+            _policy_observation_trace(obs)
+            if len(action_trace) < max(0, int(trace_steps))
+            else {}
+        )
         action, _ = model.predict(obs, deterministic=True)
         command = [float(v) for v in action.reshape(-1)]
         debug = getattr(model, "last_debug", {})
@@ -192,6 +211,7 @@ def evaluate_attempt(
         if len(action_trace) < max(0, int(trace_steps)):
             action_trace.append({
                 "step": steps,
+                **trace_observation,
                 "policy_throttle": command[0],
                 "policy_steering": command[1],
                 "applied_throttle": float(info.get("throttle_command", 0.0)),
