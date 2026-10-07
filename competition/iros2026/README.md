@@ -27,6 +27,8 @@ official simulator resets the car to its checkpoint. Their cumulative penalty
 is 10 seconds for the first collision, 20 for the second, 30 for the third,
 etc. A race with more than 10 counted collisions is marked disqualified. The
 cool-down lap is not required for completion.
+The local evaluator stops and saves diagnostics as soon as the race collision
+count exceeds 10, because the attempt is already officially disqualified.
 The competition policy never publishes `/autodrive/reset_command`. Restricted
 score topics are enabled only in the local test evaluator, separately from the
 continuous policy runner.

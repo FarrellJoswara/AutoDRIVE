@@ -10,6 +10,19 @@ from typing import Any, Optional
 import numpy as np
 
 
+class StraightLineDiagnostic:
+    """Fixed throttle pulse for validating the official simulator control path."""
+
+    def __init__(self, throttle: float = 0.35) -> None:
+        if not 0.0 < throttle <= 1.0:
+            raise ValueError("diagnostic throttle must be in (0, 1]")
+        self.throttle = float(throttle)
+
+    def predict(self, observation: Any, deterministic: bool = True):
+        del observation, deterministic
+        return np.asarray([self.throttle, 0.0], dtype=np.float32), None
+
+
 def load_policy(
     model_path: Path, *, device: str = "cpu", controller: str = "ppo",
     observation_profile: str = "official_sensors",
@@ -18,6 +31,8 @@ def load_policy(
         from src.layer3.lidar_gap_policy import load_gap_policy
 
         return load_gap_policy()
+    if controller == "straight":
+        return StraightLineDiagnostic()
     if controller != "ppo":
         raise ValueError(f"Unknown official controller: {controller}")
     """Load a saved PPO policy using the current canonical Layer 2 spaces."""
@@ -115,7 +130,7 @@ def run_policy(
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=Path("/models/policy.zip"))
-    parser.add_argument("--controller", choices=("ppo", "lidar_gap"), default="ppo")
+    parser.add_argument("--controller", choices=("ppo", "lidar_gap", "straight"), default="ppo")
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history"),

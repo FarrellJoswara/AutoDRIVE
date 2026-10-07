@@ -398,3 +398,46 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `frontier_stagnation` and 0 collisions, so reject this setting. Its artifacts
   and all sweep outputs remain under
   `logs/rl/throttle_gain_25ms_retest_20261007/`.
+
+### Official Windows simulator transfer checks
+
+- Date: 2026-10-07. All results below use the official IROS API and simulator
+  image tags, the official Windows simulator release in batch/no-graphics mode,
+  its native control cadence, the Porto competition track, and the preserved
+  `optimization_control0946_gain1025_lr2e6_20261007` checkpoint. Each attempt
+  uses a fresh simulator process. Local watchdog duration is not simulated race
+  time. Only a complete, non-disqualified 10-lap attempt is a score comparison.
+- Control-path validation: Layer 3's fixed-throttle diagnostic moved at least
+  19.47 m in 30 s, confirming the official Windows simulator connects and
+  accepts commands. The fixed straight controller had 61 raw collisions, as
+  expected for an intentionally non-driving diagnostic; it is not a candidate.
+  Report: `results/official_straight_control_path_20261007.json`.
+- Unmodified bidirectional policy baseline: 120 s, 2,267 control steps,
+  18.89 Hz, verified 2.05 m displacement, no completed warm-up or race laps,
+  and one raw collision at finish. In this policy's observed actions, throttle
+  was frequently negative; this is consistent with its near-zero net movement.
+  No score comparison. Report:
+  `results/official_ppo_baseline_120s_20261007.json`.
+- One-factor forward-only transfer (`[-1,1]` policy throttle mapped to
+  `[0,1]` actuator throttle; steering scale 0.946 and gain 1.025 unchanged):
+  the 120 s pilot completed its ignored warm-up in 118.68 s, with 3 warm-up
+  collisions, then timed out before a scored lap. A longer attempt completed
+  scored laps in 121.805 s and 122.145 s, but had accumulated 8 race collisions
+  by lap 2. It was stopped as a losing diagnostic before exhausting its
+  900-second watchdog. Therefore it is not a valid or promotable race result.
+  The full 120 s report and partial longer-run event log are retained at
+  `results/official_forward_only_120s_20261007.json` and
+  `results/official_forward_only_900s_partial_20261007.log`.
+- Interpretation: forward-only mapping prevents reverse commands and proves
+  that the policy can complete laps on the official build, but its current
+  official-runtime pace and collision rate are far from the target. The model's
+  frequent reverse outputs become zero throttle under this mapping, which
+  explains the low average drive input; mapping them to forward throttle is a
+  candidate hypothesis, not yet evidence of a faster or safer policy. Do not
+  compare these incomplete laps with the official 10-lap leaderboard or change
+  the saved champion based on them.
+- Evaluator improvement: after race collisions exceed the official limit of
+  10, Layer 3 now ends the attempt immediately with
+  `collision_disqualification_limit`, preserving diagnostics and avoiding
+  wasted watchdog time. Focused unit tests cover the official threshold and
+  saved disqualification status.

@@ -1,0 +1,439 @@
+{
+  "model": "/models/policy.zip",
+  "created_utc": "2026-10-07T15:26:13.364446+00:00",
+  "competition": "RoboRacer Sim Racing League @ IROS 2026",
+  "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "deterministic": true,
+  "controller": "straight",
+  "observation_profile": "official_sensors",
+  "throttle_mode": "bidirectional",
+  "steering_mode": "normal",
+  "warmup_laps_ignored": 1,
+  "race_laps": 10,
+  "runs": [
+    {
+      "race_laps_completed": 0,
+      "race_lap_times_s": [],
+      "race_time_s": null,
+      "race_collisions": 0,
+      "collision_penalty_s": 0.0,
+      "adjusted_race_time_s": null,
+      "disqualified": false,
+      "complete": false,
+      "best_lap_s": null,
+      "mean_lap_s": null,
+      "attempt": 1,
+      "steps": 569,
+      "warmup_lap_times_s": [],
+      "warmup_collisions": 0,
+      "raw_collision_count_at_finish": 61,
+      "race_collision_baseline": null,
+      "total_laps_since_start": 0,
+      "stop_reason": "wall_timeout",
+      "wall_duration_s": 30.017546778020915,
+      "mean_control_rate_hz": 18.95593203759397,
+      "median_control_interval_s": 0.052274228481110185,
+      "median_reported_lidar_scan_rate_hz": 39.99999940395356,
+      "action_observation_diagnostics": {
+        "policy_throttle": {
+          "count": 569,
+          "min": 0.3499999940395355,
+          "max": 0.3499999940395355,
+          "mean": 0.3499999940395355,
+          "std": 0.0
+        },
+        "policy_steering": {
+          "count": 569,
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "applied_throttle": {
+          "count": 569,
+          "min": 0.3499999940395355,
+          "max": 0.3499999940395355,
+          "mean": 0.3499999940395355,
+          "std": 0.0
+        },
+        "applied_steering": {
+          "count": 569,
+          "min": 0.0,
+          "max": 0.0,
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "policy_reverse_fraction": 0.0,
+        "observation_state": {
+          "forward_speed": {
+            "count": 569,
+            "min": 0.0,
+            "max": 0.6340997815132141,
+            "mean": 0.3807384752012095,
+            "std": 0.034304892078996195
+          },
+          "sideways_speed": {
+            "count": 569,
+            "min": -0.0,
+            "max": -0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "yaw_rate": {
+            "count": 569,
+            "min": -0.0,
+            "max": -0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "forward_acceleration": {
+            "count": 569,
+            "min": -0.0035792039707303047,
+            "max": 1.5539965629577637,
+            "mean": 0.5250278827861397,
+            "std": 0.2204356052131111
+          },
+          "sideways_acceleration": {
+            "count": 569,
+            "min": -0.005730804987251759,
+            "max": 0.00021414041111711413,
+            "mean": -7.150558168466979e-05,
+            "std": 0.0005473364578956342
+          },
+          "throttle_feedback": {
+            "count": 569,
+            "min": 0.0,
+            "max": 0.3499999940395355,
+            "mean": 0.3481546513644589,
+            "std": 0.025346886114259965
+          },
+          "steering_feedback": {
+            "count": 569,
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "previous_throttle": {
+            "count": 569,
+            "min": 0.0,
+            "max": 0.3499999940395355,
+            "mean": 0.34938487981451,
+            "std": 0.014659863900553297
+          },
+          "previous_steering": {
+            "count": 569,
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0
+          }
+        },
+        "normalized_lidar_minimum": {
+          "count": 569,
+          "min": 0.010773763060569763,
+          "max": 0.08905069530010223,
+          "mean": 0.042645767548813864,
+          "std": 0.015087844980435514
+        }
+      },
+      "action_trace": [
+        {
+          "step": 0,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 1,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 2,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 3,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 4,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 5,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 6,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 7,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 8,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 9,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 10,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 11,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 12,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 13,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 14,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 15,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 16,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 17,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 18,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 19,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 20,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 21,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 22,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 23,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 24,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 25,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 26,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 27,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 28,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 29,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 30,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 31,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 32,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 33,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 34,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 35,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 36,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 37,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 38,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        },
+        {
+          "step": 39,
+          "policy_throttle": 0.3499999940395355,
+          "policy_steering": 0.0,
+          "applied_throttle": 0.3499999940395355,
+          "applied_steering": 0.0
+        }
+      ],
+      "motion_verification": {
+        "source": "restricted_ips_diagnostic_only",
+        "available": true,
+        "elapsed_s": 29.964234882965684,
+        "check_after_s": 3.0,
+        "minimum_displacement_m": 0.25,
+        "verified": true,
+        "max_displacement_m": 19.469698108085804
+      },
+      "score_status": "incomplete",
+      "valid_for_comparison": false
+    }
+  ],
+  "completed_attempts": 0,
+  "median_adjusted_race_time_s": null,
+  "best_adjusted_race_time_s": null
+}

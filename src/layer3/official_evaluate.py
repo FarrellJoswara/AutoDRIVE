@@ -146,6 +146,7 @@ def evaluate_attempt(
     trace_steps: int = 0,
     motion_check_after_s: float = 3.0,
     motion_minimum_displacement_m: float = 0.25,
+    disqualification_limit: int = 10,
 ) -> Dict[str, Any]:
     obs, info = env.reset()
     started = time.monotonic()
@@ -233,6 +234,9 @@ def evaluate_attempt(
                 f"penalty now {collision_penalty_seconds(collisions_reported):.0f}s",
                 flush=True,
             )
+        if collisions > int(disqualification_limit):
+            stop_reason = "collision_disqualification_limit"
+            break
         if terminated:
             stop_reason = "race_complete"
             break
@@ -355,6 +359,7 @@ def evaluate(
                 max_steps=max_steps,
                 attempt_index=attempt,
                 trace_steps=trace_steps,
+                disqualification_limit=10,
             ))
         completed = [
             run for run in runs
@@ -397,7 +402,7 @@ def evaluate(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--controller", choices=("ppo", "lidar_gap"), default="ppo")
+    parser.add_argument("--controller", choices=("ppo", "lidar_gap", "straight"), default="ppo")
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history"),
