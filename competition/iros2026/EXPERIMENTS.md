@@ -92,6 +92,13 @@ reset command, a fresh simulator process, and a complete race.
   Keep the checkpoint and original training stack. The next candidate needs a
   policy/control improvement that changes both sustained pace and collision
   rate, verified by complete official races.
+- As a direct action-semantics check, the same 120,000-step checkpoint was run
+  with bidirectional throttle (all other settings unchanged). It completed
+  zero laps in 300 s, had no collisions, and moved at most 2.35 m. Its output
+  remained negative on about 50% of actions. The forward-only mapping is the
+  better of these two mappings for this checkpoint, but it still is not a
+  viable policy; the raw comparison is in
+  `results/ppo120k_bidirectional_official_300s_20261007.json`.
 
 ## Transfer baseline: callback-rate control
 
