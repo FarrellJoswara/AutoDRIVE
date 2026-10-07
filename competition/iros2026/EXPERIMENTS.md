@@ -337,3 +337,9 @@ lap and neither is a score comparison.
   Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   `results/lidar_gap_trace_30s_20261007.json`, and
   `results/lidar_gap_encoder_verify_15s_20261007.json`.
+- Attempted to activate the documented GUI mode under Xvfb without changing the
+  simulator binary. The official `2026-iros-compete` image's player exited with
+  `No supported renderers found` (Vulkan detection 0; its Xvfb OpenGL renderer
+  was rejected), so the GUI toggle could not be exercised here. Until the
+  simulator can be started in Autonomous mode on a supported display, stop
+  controller tuning and reject any run that lacks verified body movement.
