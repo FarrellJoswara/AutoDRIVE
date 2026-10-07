@@ -49,3 +49,75 @@ class LidarStateExtractor(BaseFeaturesExtractor):
         state = observations["state"].float()
         fused = torch.cat([self.lidar_net(lidar), self.state_net(state)], dim=1)
         return self.merge(fused)
+
+
+class PooledLidarStateExtractor(BaseFeaturesExtractor):
+    """Encode a LiDAR scan while retaining local obstacle proximity by sector.
+
+    The legacy extractor flattens 271 x 64 convolution activations into a dense
+    projection. This version pools them to 64 ordered scan sectors first. Both
+    average and maximum pooling preserve broad geometry and narrow close returns,
+    while reducing the projection input from 17,408 to 8,256 values.
+    """
+
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 256):
+        super().__init__(observation_space, features_dim=features_dim)
+
+        n_lidar = int(observation_space.spaces["lidar"].shape[0])
+        n_state = int(observation_space.spaces["state"].shape[0])
+        self.lidar_net = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=5, stride=2, padding=2),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),
+            nn.ReLU(),
+        )
+        self.lidar_average = nn.AdaptiveAvgPool1d(64)
+        self.lidar_nearest = nn.AdaptiveMaxPool1d(64)
+        with torch.no_grad():
+            features = self.lidar_net(torch.zeros(1, 1, n_lidar))
+            average = self.lidar_average(features)
+            nearest = self.lidar_nearest(features)
+            lidar_out_dim = int(average.shape[1] * average.shape[2] + nearest.shape[1] * nearest.shape[2])
+
+        self.state_net = nn.Sequential(
+            nn.Linear(n_state, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+        )
+        self.merge = nn.Sequential(
+            nn.Linear(lidar_out_dim + 64, features_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, observations: dict) -> torch.Tensor:
+        lidar = observations["lidar"].float().unsqueeze(1)
+        state = observations["state"].float()
+        features = self.lidar_net(lidar)
+        pooled = torch.cat(
+            [
+                self.lidar_average(features).flatten(start_dim=1),
+                self.lidar_nearest(features).flatten(start_dim=1),
+            ],
+            dim=1,
+        )
+        return self.merge(torch.cat([pooled, self.state_net(state)], dim=1))
+
+
+def policy_kwargs_for_architecture(architecture: str) -> dict:
+    """Return SB3 policy kwargs for a named, checkpoint-compatible network."""
+    extractors = {
+        "lidar_cnn": LidarStateExtractor,
+        "lidar_cnn_pooled": PooledLidarStateExtractor,
+    }
+    try:
+        extractor = extractors[architecture]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown policy architecture {architecture!r}; expected one of {tuple(extractors)}"
+        ) from exc
+    return {
+        "features_extractor_class": extractor,
+        "features_extractor_kwargs": {"features_dim": 256},
+        "net_arch": dict(pi=[128, 128], vf=[128, 128]),
+    }

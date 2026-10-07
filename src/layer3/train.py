@@ -133,25 +133,25 @@ def _resolve_device(requested: str) -> str:
 def make_model(
     vec_env, *, device: str, seed: int, tensorboard_log: Optional[str],
     learning_rate: float = _PPO_LR, n_epochs: int = _PPO_N_EPOCHS,
+    n_steps: int = _PPO_N_STEPS,
+    gamma: float = _PPO_GAMMA,
+    gae_lambda: float = _PPO_GAE_LAMBDA,
+    policy_architecture: str = "lidar_cnn",
 ):
     from stable_baselines3 import PPO
 
-    from src.layer3.extractors import LidarStateExtractor
+    from src.layer3.extractors import policy_kwargs_for_architecture
 
-    policy_kwargs = dict(
-        features_extractor_class=LidarStateExtractor,
-        features_extractor_kwargs=dict(features_dim=256),
-        net_arch=dict(pi=[128, 128], vf=[128, 128]),
-    )
+    policy_kwargs = policy_kwargs_for_architecture(policy_architecture)
     return PPO(
         policy="MultiInputPolicy",
         env=vec_env,
         learning_rate=learning_rate,
-        n_steps=_PPO_N_STEPS,
+        n_steps=n_steps,
         batch_size=_PPO_BATCH_SIZE,
         n_epochs=n_epochs,
-        gamma=_PPO_GAMMA,
-        gae_lambda=_PPO_GAE_LAMBDA,
+        gamma=gamma,
+        gae_lambda=gae_lambda,
         clip_range=_PPO_CLIP_RANGE,
         ent_coef=_PPO_ENT_COEF,
         vf_coef=_PPO_VF_COEF,
