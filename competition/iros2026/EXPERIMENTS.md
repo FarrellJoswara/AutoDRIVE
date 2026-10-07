@@ -603,3 +603,14 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   remain essentially a 50/50 forward/reverse policy. Next, test forward-only
   actuator mapping on this exact checkpoint as a one-factor official-runtime
   screen before spending more training compute.
+- One-factor forward-only screen on that same checkpoint: it completed the
+  ignored warm-up lap in 129.90 s, then one scored lap in 123.73 s, with three
+  warm-up collisions and five race collisions by the 300 s wall guard. The
+  attempt remains incomplete and has no valid comparison score. Applied
+  throttle averaged 0.436, while raw reverse outputs remained 50.03% and were
+  mapped to zero throttle. Report:
+  `results/action50_lr3e6_forwardonly_official_300s_20261007.json`.
+- This mapping restores forward motion enough to finish a lap, but is nowhere
+  near a competitive pace and accumulates collisions rapidly. It supports
+  forward-only semantics as a necessary transfer adaptation, not as a complete
+  fix; the learned steering/control behavior still needs improvement.
