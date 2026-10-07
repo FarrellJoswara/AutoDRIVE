@@ -10,6 +10,51 @@ from src.layer3.train import EvaluationCallback
 
 
 class EvaluationSummaryTests(unittest.TestCase):
+    def test_evaluation_records_per_lap_speed_throttle_and_steering(self) -> None:
+        class FakeModel:
+            def predict(self, _obs, *, deterministic):
+                self.assert_deterministic = deterministic
+                return [0.0], None
+
+        class FakeEnv:
+            def reset(self):
+                self.steps = 0
+                return [[0.0]]
+
+            def step(self, _action):
+                self.steps += 1
+                info = {
+                    "frontier_advanced_m": 0.5,
+                    "collision_event": False,
+                    "lap_times_s": [10.0] if self.steps == 2 else [],
+                    "step_duration_s": 1.0,
+                    "true_speed": 4.0 if self.steps == 1 else 6.0,
+                    "v_long": 3.0 if self.steps == 1 else 5.0,
+                    "current_route_speed_mps": 4.0 if self.steps == 1 else 6.0,
+                    "throttle_command": 0.5 if self.steps == 1 else 1.0,
+                    "steering_command": -0.4 if self.steps == 1 else 0.2,
+                }
+                return [[0.0]], [1.0], [False], [info]
+
+        observed = []
+        result = evaluate_until_episode_end(
+            FakeModel(), FakeEnv(), frame_skip=1, lap_target=1,
+            on_step=observed.append,
+        )
+
+        diagnostic = result["lap_diagnostics"][0]
+        self.assertEqual(diagnostic["lap"], 1)
+        self.assertEqual(diagnostic["lap_time_s"], 10.0)
+        self.assertAlmostEqual(diagnostic["mean_speed_mps"], 5.0)
+        self.assertEqual(diagnostic["max_speed_mps"], 6.0)
+        self.assertAlmostEqual(diagnostic["mean_forward_speed_mps"], 4.0)
+        self.assertAlmostEqual(diagnostic["mean_route_speed_mps"], 5.0)
+        self.assertAlmostEqual(diagnostic["mean_throttle"], 0.75)
+        self.assertAlmostEqual(diagnostic["full_throttle_fraction"], 0.5)
+        self.assertAlmostEqual(diagnostic["mean_steering"], -0.1)
+        self.assertAlmostEqual(diagnostic["max_abs_steering"], 0.4)
+        self.assertEqual(observed[-1]["_evaluation_metrics"]["lap_diagnostics"], [diagnostic])
+
     def test_live_evaluation_metrics_publish_without_pose_data(self) -> None:
         callback = EvaluationCallback.__new__(EvaluationCallback)
         callback._live_result = None

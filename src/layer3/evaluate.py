@@ -31,6 +31,9 @@ def evaluate_until_episode_end(
     total_reward = frontier_distance = simulated_seconds = 0.0
     collisions = failed_episodes = completed_laps = 0
     lap_times: List[float] = []
+    lap_diagnostics: List[Dict[str, Any]] = []
+    lap_samples: List[Dict[str, float]] = []
+    initial_action_trace: List[Dict[str, Any]] = []
     current_life_laps: List[float] = []
     seen_lap_times = 0
     best_10_lap_time_s: Optional[float] = None
@@ -38,7 +41,8 @@ def evaluate_until_episode_end(
 
     stop_reason: Optional[str] = None
     while stop_reason is None:
-        action, _ = model.predict(obs, deterministic=True)
+        policy_obs = obs
+        action, _ = model.predict(policy_obs, deterministic=True)
         obs, rewards, dones, infos = env.step(action)
         total_reward += float(rewards[0])
         info = infos[0] if infos else {}
@@ -49,15 +53,62 @@ def evaluate_until_episode_end(
         simulated_seconds += duration
         if not isinstance(info, dict):
             continue
+        # A short, bounded trace makes deterministic failures diagnosable: it
+        # shows the exact policy command alongside the sensor state used to
+        # choose it, without changing the policy observation or action path.
+        if len(initial_action_trace) < 64:
+            try:
+                import numpy as np
+
+                action_values = np.asarray(action, dtype=float).reshape(-1, 2)[0]
+                lidar_values = np.asarray(policy_obs["lidar"], dtype=float).reshape(-1, 1081)[0]
+                state_values = np.asarray(policy_obs["state"], dtype=float).reshape(-1, 9)[0]
+                initial_action_trace.append({
+                    "step": len(initial_action_trace) + 1,
+                    "simulated_seconds": simulated_seconds,
+                    "policy_action": [float(action_values[0]), float(action_values[1])],
+                    "throttle_command": info.get("throttle_command"),
+                    "steering_command": info.get("steering_command"),
+                    "forward_speed_mps": info.get("v_long"),
+                    "speed_mps": info.get("true_speed"),
+                    "yaw_rad": info.get("yaw"),
+                    "position": list(info["position"]) if "position" in info else None,
+                    "state": [float(value) for value in state_values],
+                    "lidar_min_left": float(np.min(lidar_values[:360])),
+                    "lidar_min_front": float(np.min(lidar_values[360:721])),
+                    "lidar_min_right": float(np.min(lidar_values[721:])),
+                })
+            except (KeyError, IndexError, TypeError, ValueError):
+                # Test doubles and legacy observation wrappers may not expose
+                # the canonical dict observation; omit trace data in that case.
+                pass
         frontier_distance += max(0.0, float(info.get("frontier_advanced_m", 0.0) or 0.0))
         collisions += int(bool(info.get("collision_event", False)))
         if bool(info.get("collision_event", False)):
             stop_reason = "collision"
+        sample: Dict[str, float] = {}
+        for output_key, input_key in (
+            ("speed_mps", "true_speed"),
+            ("forward_speed_mps", "v_long"),
+            ("route_speed_mps", "current_route_speed_mps"),
+            ("throttle", "throttle_command"),
+            ("steering", "steering_command"),
+        ):
+            try:
+                value = float(info[input_key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                sample[output_key] = value
+        if sample:
+            sample["step_duration_s"] = duration
+            lap_samples.append(sample)
         times = info.get("lap_times_s")
         if isinstance(times, (list, tuple)):
             if len(times) < seen_lap_times:
                 seen_lap_times = 0
-            for raw in times[seen_lap_times:]:
+            new_lap_times = times[seen_lap_times:]
+            for raw in new_lap_times:
                 try:
                     lap_time = float(raw)
                 except (TypeError, ValueError):
@@ -66,6 +117,45 @@ def evaluate_until_episode_end(
                     lap_times.append(lap_time)
                     current_life_laps.append(lap_time)
                     completed_laps += 1
+                    diagnostic: Dict[str, Any] = {
+                        "lap": completed_laps,
+                        "lap_time_s": lap_time,
+                        "samples": len(lap_samples),
+                    }
+                    metric_inputs = {
+                        "speed_mps": "speed_mps",
+                        "forward_speed_mps": "forward_speed_mps",
+                        "route_speed_mps": "route_speed_mps",
+                        "throttle": "throttle",
+                        "steering": "steering",
+                    }
+                    for metric, sample_key in metric_inputs.items():
+                        values = [
+                            (item[sample_key], item["step_duration_s"])
+                            for item in lap_samples
+                            if sample_key in item
+                        ]
+                        weight = sum(item[1] for item in values)
+                        diagnostic[f"mean_{metric}"] = (
+                            sum(value * seconds for value, seconds in values) / weight
+                            if weight > 0 else None
+                        )
+                    speeds = [item["speed_mps"] for item in lap_samples if "speed_mps" in item]
+                    steerings = [item["steering"] for item in lap_samples if "steering" in item]
+                    throttle_samples = [item for item in lap_samples if "throttle" in item]
+                    throttle_duration = sum(item["step_duration_s"] for item in throttle_samples)
+                    diagnostic["max_speed_mps"] = max(speeds) if speeds else None
+                    diagnostic["max_abs_steering"] = max(map(abs, steerings)) if steerings else None
+                    diagnostic["full_throttle_fraction"] = (
+                        sum(
+                            item["step_duration_s"]
+                            for item in throttle_samples
+                            if item["throttle"] >= 0.99
+                        ) / throttle_duration
+                        if throttle_duration > 0 else None
+                    )
+                    lap_diagnostics.append(diagnostic)
+                    lap_samples = []
                     if len(current_life_laps) >= 10:
                         total_10 = sum(current_life_laps[-10:])
                         best_10_lap_time_s = (
@@ -81,10 +171,12 @@ def evaluate_until_episode_end(
                 "simulated_seconds": simulated_seconds,
                 "laps_observed": completed_laps,
                 "lap_times_s": list(lap_times),
+                "lap_diagnostics": list(lap_diagnostics),
                 "best_10_lap_time_s": best_10_lap_time_s,
                 "reward_per_simulated_second": total_reward / simulated_seconds,
                 "total_reward": total_reward,
                 "collisions": collisions,
+                "initial_action_trace": list(initial_action_trace),
             }
             on_step(live_info)
         if completed_laps >= lap_target:
@@ -108,6 +200,8 @@ def evaluate_until_episode_end(
         "failed_episodes": failed_episodes,
         "laps_observed": completed_laps,
         "lap_times_s": lap_times,
+        "lap_diagnostics": lap_diagnostics,
+        "initial_action_trace": initial_action_trace,
         "best_10_lap_time_s": best_10_lap_time_s,
         "termination_reasons": termination_reasons,
         "stop_reason": stop_reason,
