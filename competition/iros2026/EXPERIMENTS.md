@@ -264,3 +264,18 @@ lap and neither is a score comparison.
   this checkpoint can race using allowed policy inputs. Preserve it as a
   historical diagnostic, not a valid baseline.
 - Raw report: `results/legacy_compliant_baseline_20261007.json`.
+
+### Full-resolution LiDAR CNN challenger (planned)
+
+- Hypothesis: the pooled extractor may discard angular detail needed for
+  last-second wall avoidance. Compare the default full-resolution `lidar_cnn`
+  against `lidar_cnn_pooled` while holding the four-environment local simulator,
+  Porto map, official-sensor observation profile, forward-only action mapping,
+  50 ms action interval, reward, and PPO settings fixed.
+- Start fresh because the two policy architectures are checkpoint-incompatible;
+  preserve all pooled checkpoints. Keep the 20,480-step deterministic
+  three-attempt evaluator and record both local and official-image diagnostics.
+- A candidate is not promoted unless it completes laps on the permitted
+  observation path and then passes the official-image evaluation without
+  disqualification. The legacy checkpoint's pre-audit laps are excluded from
+  this criterion because that path used restricted inputs/reset.
