@@ -33,6 +33,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=40)
     parser.add_argument("--throttle", type=float, default=0.5)
     parser.add_argument("--steering", type=float, default=0.0)
+    parser.add_argument(
+        "--action-interval-s",
+        type=float,
+        default=None,
+        help="Use a fixed-step simulator only when it advertises the step protocol; default uses the installed legacy build.",
+    )
     parser.add_argument("--timeout", type=float, default=90.0)
     args = parser.parse_args()
     if args.steps < 1:
@@ -45,7 +51,7 @@ def main() -> int:
         auto_launch=False,
         connect_timeout=args.timeout,
         frame_skip=1,
-        action_interval_s=0.025,
+        action_interval_s=args.action_interval_s,
         observation_profile="official_sensors",
         laps_per_episode=0,
         max_episode_steps=0,
