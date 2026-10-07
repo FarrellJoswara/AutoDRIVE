@@ -25,6 +25,11 @@ def main() -> int:
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--steps", type=int, default=10_000,
                         help="sensor/action collection steps per environment")
+    parser.add_argument("--frame-skip", type=int, default=1)
+    parser.add_argument(
+        "--action-interval-s", type=float, default=None,
+        help="use only with a simulator build advertising the explicit-step protocol",
+    )
     parser.add_argument("--map-id", default="porto")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="auto")
@@ -50,8 +55,8 @@ def main() -> int:
         auto_launch=False,
         observation_profile="official_sensors",
         map_id=args.map_id,
-        frame_skip=1,
-        action_interval_s=0.025,
+        frame_skip=args.frame_skip,
+        action_interval_s=args.action_interval_s,
         steering_action_scale=0.946,
         straight_throttle_gain=1.025,
         straight_throttle_steering_threshold=0.15,
@@ -92,6 +97,8 @@ def main() -> int:
             "teacher_observation_profile": "simulator",
             "n_envs": args.n_envs,
             "steps_per_environment": args.steps,
+            "frame_skip": args.frame_skip,
+            "action_interval_s": args.action_interval_s,
             "collection": collection,
             "behavior_cloning": cloning,
             "runtime_policy_inputs": ["lidar", "state"],
