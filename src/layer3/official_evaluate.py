@@ -128,44 +128,31 @@ def evaluate_attempt(
 def evaluate(
     model_path: Path,
     *,
-    attempts: int = 3,
+    attempts: int = 1,
     device: str = "cpu",
     wall_timeout_s: float = 300.0,
     max_steps: int = 150_000,
     timeout_s: float = 180.0,
-    reset_at_start: bool = True,
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    from stable_baselines3 import PPO
-
     from src.layer2.official_race_env import OfficialRaceEnv
-    from src.layer2.spaces import make_action_space, make_observation_space
+    from src.layer3.official_policy import load_policy
 
     checkpoint = Path(model_path).resolve()
     if not checkpoint.is_file():
         raise FileNotFoundError(f"PPO checkpoint not found: {checkpoint}")
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
+    if attempts > 1:
+        raise ValueError(
+            "each official attempt requires a fresh simulator process; the "
+            "restricted reset command is not used by the scored path"
+        )
 
-    # Older checkpoints serialize their last NumPy observations in SB3's
-    # metadata. Reconstruct spaces from current Layer 2 and discard only those
-    # stale rollout buffers; the learned policy and optimizer weights remain
-    # untouched. This keeps inference compatible with the Devkit's ROS stack.
-    custom_objects = {
-        "observation_space": make_observation_space(),
-        "action_space": make_action_space(),
-        "_last_obs": None,
-        "_last_episode_starts": None,
-        "_last_original_obs": None,
-        # SB3 schedule classes moved between major versions. These values are
-        # training metadata only; inference does not consult either schedule.
-        "clip_range": lambda _: 0.2,
-        "lr_schedule": lambda _: 1e-5,
-    }
-    model = PPO.load(str(checkpoint), device=device, custom_objects=custom_objects)
+    model = load_policy(checkpoint, device=device)
     env = OfficialRaceEnv(
         timeout_s=timeout_s,
         warmup_laps=1,
@@ -173,7 +160,6 @@ def evaluate(
         steering_action_scale=steering_action_scale,
         straight_throttle_gain=straight_throttle_gain,
         straight_throttle_steering_threshold=straight_throttle_steering_threshold,
-        reset_at_start=reset_at_start,
     )
     runs: List[Dict[str, Any]] = []
     try:
@@ -218,12 +204,11 @@ def evaluate(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--wall-timeout-s", type=float, default=300.0)
     parser.add_argument("--max-steps", type=int, default=150_000, help="Failsafe guard per race, not a scoring cutoff")
     parser.add_argument("--timeout-s", type=float, default=180.0, help="Wait for initial official sensor topics")
-    parser.add_argument("--reset-at-start", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--steering-action-scale", type=float, default=1.0)
     parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
     parser.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
@@ -236,7 +221,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         wall_timeout_s=args.wall_timeout_s,
         max_steps=args.max_steps,
         timeout_s=args.timeout_s,
-        reset_at_start=args.reset_at_start,
         steering_action_scale=args.steering_action_scale,
         straight_throttle_gain=args.straight_throttle_gain,
         straight_throttle_steering_threshold=args.straight_throttle_steering_threshold,

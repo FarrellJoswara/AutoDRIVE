@@ -19,14 +19,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 -m src.layer3.official_evaluate \
-  --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \
-  --attempts "${AICAR_EVALUATION_ATTEMPTS:-1}" \
-  --device cpu \
-  --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-180}" \
-  --wall-timeout-s "${AICAR_RACE_WALL_TIMEOUT_S:-300}" \
-  --max-steps "${AICAR_RACE_STEP_GUARD:-150000}" \
-  --out "${AICAR_EVALUATION_OUTPUT:-/tmp/aicar-iros-evaluation.json}"
+if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
+  echo "Running local evaluation monitor; restricted score topics are read for measurement only."
+  python3 -m src.layer3.official_evaluate \
+    --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \
+    --attempts "${AICAR_EVALUATION_ATTEMPTS:-1}" \
+    --device cpu \
+    --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-180}" \
+    --wall-timeout-s "${AICAR_RACE_WALL_TIMEOUT_S:-300}" \
+    --max-steps "${AICAR_RACE_STEP_GUARD:-150000}" \
+    --out "${AICAR_EVALUATION_OUTPUT:-/tmp/aicar-iros-evaluation.json}"
+else
+  echo "Running competition policy; only allowed sensor and actuator topics are enabled."
+  python3 -m src.layer3.official_policy \
+    --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \
+    --device cpu \
+    --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-5}"
+fi
 
 # Keep the official bridge alive for inspection and rosbag recording after the
 # race, as required by the organizer's workflow.

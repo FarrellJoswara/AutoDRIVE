@@ -1,9 +1,9 @@
 """Layer 2 Gymnasium adapter for the official RoboRacer ROS 2 race.
 
-This environment has no map, centerline, or simulator-side access. It consumes
-only the official ROS 2 sensor/telemetry topics through Layer 1 and stops after
-the warm-up plus configured race laps. Collision handling is left to the
-official simulator, which resets the vehicle to its checkpoint.
+This local evaluator builds observations only from permitted sensor topics.
+Restricted lap/collision counters are read by Layer 1's evaluation-only
+monitor and affect reporting/termination only; they never enter the observation
+or action path. Collision handling is left to the simulator checkpoint reset.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ class OfficialRaceEnv(gym.Env):
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
         vehicle_id: str = "roboracer_1",
-        reset_at_start: bool = True,
     ) -> None:
         super().__init__()
         if warmup_laps < 0 or race_laps < 1:
@@ -46,14 +45,17 @@ class OfficialRaceEnv(gym.Env):
         if not 0.0 <= straight_throttle_steering_threshold <= 1.0:
             raise ValueError("straight_throttle_steering_threshold must be in [0, 1]")
 
-        self.racer = racer or RacerRos2(vehicle_id=vehicle_id, timeout_s=timeout_s)
+        self.racer = racer or RacerRos2(
+            vehicle_id=vehicle_id,
+            timeout_s=timeout_s,
+            include_race_metrics=True,
+        )
         self._owns_racer = racer is None
         self.warmup_laps = int(warmup_laps)
         self.race_laps = int(race_laps)
         self.steering_action_scale = float(steering_action_scale)
         self.straight_throttle_gain = float(straight_throttle_gain)
         self.straight_throttle_steering_threshold = float(straight_throttle_steering_threshold)
-        self.reset_at_start = bool(reset_at_start)
         self.action_space = make_action_space()
         self.observation_space = make_observation_space()
         self._initial_lap_count = 0
@@ -75,10 +77,11 @@ class OfficialRaceEnv(gym.Env):
         options: Optional[dict] = None,
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         super().reset(seed=seed)
-        snap = self.racer.reset() if self.reset_at_start else self.racer.wait_until_ready()
-        self._initial_lap_count = int(snap.lap_count)
+        snap = self.racer.wait_until_ready()
+        metrics = self.racer.wait_for_race_metrics()
+        self._initial_lap_count = int(metrics.lap_count)
         self._last_lap_count = self._initial_lap_count
-        self._last_collision_count = int(snap.collision_count)
+        self._last_collision_count = int(metrics.collision_count)
         self._initial_collision_count = self._last_collision_count
         self._race_collision_baseline = (
             self._last_collision_count if self.warmup_laps == 0 else None
@@ -89,7 +92,9 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s = []
         self._episode_steps = 0
         self._last_snap = snap
-        return snapshot_to_obs(snap, 0.0, 0.0), self._build_info(snap, collision_event=False)
+        return snapshot_to_obs(snap, 0.0, 0.0), self._build_info(
+            snap, metrics, collision_event=False
+        )
 
     def step(self, action: np.ndarray):
         command = np.asarray(action, dtype=np.float32).reshape(2)
@@ -100,14 +105,15 @@ class OfficialRaceEnv(gym.Env):
 
         snap = self.racer.step(throttle, steering)
         self._episode_steps += 1
-        collision_count = int(snap.collision_count)
+        metrics = self.racer.race_metrics
+        collision_count = int(metrics.collision_count)
         collision_event = collision_count > self._last_collision_count
-        current_lap_count = int(snap.lap_count)
+        current_lap_count = int(metrics.lap_count)
         completed_since_last = max(0, current_lap_count - self._last_lap_count)
         if completed_since_last:
             for offset in range(completed_since_last):
                 relative_laps = self._last_lap_count - self._initial_lap_count + offset + 1
-                lap_time = float(snap.last_lap_time)
+                lap_time = float(metrics.last_lap_time)
                 if relative_laps <= self.warmup_laps:
                     if lap_time > 0:
                         self._warmup_lap_times_s.append(lap_time)
@@ -126,7 +132,7 @@ class OfficialRaceEnv(gym.Env):
         terminated = self._race_laps_count >= self.race_laps
         self._last_collision_count = collision_count
         self._last_snap = snap
-        info = self._build_info(snap, collision_event=collision_event)
+        info = self._build_info(snap, metrics, collision_event=collision_event)
         info.update({
             "throttle_command": throttle,
             "steering_command": steering,
@@ -159,21 +165,25 @@ class OfficialRaceEnv(gym.Env):
             return 0
         return max(0, int(current_count) - int(baseline))
 
-    def _build_info(self, snap: TelemetrySnapshot, *, collision_event: bool) -> Dict[str, Any]:
+    def _build_info(
+        self,
+        snap: TelemetrySnapshot,
+        metrics: Any,
+        *,
+        collision_event: bool,
+    ) -> Dict[str, Any]:
         return {
-            "position": tuple(float(v) for v in snap.position),
-            "yaw": float(snap.heading_yaw),
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
             "throttle": float(snap.throttle),
             "steering": float(snap.steering),
-            "collision": bool(snap.collision),
+            "collision": False,
             "collision_event": bool(collision_event),
-            "collision_count": int(snap.collision_count),
-            "lap_count": int(snap.lap_count),
-            "lap_time_s": float(snap.lap_time),
-            "last_lap_time_s": float(snap.last_lap_time),
-            "best_lap_time_s": float(snap.best_lap_time),
+            "collision_count": int(metrics.collision_count),
+            "lap_count": int(metrics.lap_count),
+            "lap_time_s": float(metrics.lap_time),
+            "last_lap_time_s": float(metrics.last_lap_time),
+            "best_lap_time_s": float(metrics.best_lap_time),
             "lidar_range_min": float(snap.lidar_range_min),
             "lidar_range_max": float(snap.lidar_range_max),
             "lidar_beams": int(snap.lidar_ranges.size),

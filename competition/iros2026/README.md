@@ -3,16 +3,19 @@
 This is a competition-facing evaluation path built on the official IROS 2026
 simulator and Devkit images. The four-layer boundaries remain explicit:
 
-1. **Layer 1** (`src/layer1/ros2_racer.py`) subscribes to official ROS 2 data
-   and sends throttle, steering, and reset commands. It translates ROS message
-   fields back into Bridge V1 fields so the established `TelemetrySnapshot`
-   parser remains the single owner of telemetry transformations.
+1. **Layer 1** (`src/layer1/ros2_racer.py`) maps permitted LiDAR, IMU, wheel
+   encoder, and actuator-feedback topics into the established
+   `TelemetrySnapshot` parser and sends throttle/steering commands. It derives
+   forward speed from wheel-angle changes. Policy mode does not subscribe to
+   odometry, IPS, TF, reset, lap-count, or collision-count topics.
 2. **Layer 2** (`src/layer2/official_race_env.py`) builds policy observations
    from Layer 1 data and tracks the official race sequence. It does not use
    centerlines, map files, simulator ground truth, or non-ROS interfaces.
-3. **Layer 3** (`src/layer3/official_evaluate.py`) loads the policy, runs
-   deterministic attempts, and reports completion, lap times, collision
-   penalties, and adjusted race time.
+3. **Layer 3** (`src/layer3/official_policy.py`) runs the continuous
+   competition controller. The separate local evaluator
+   (`src/layer3/official_evaluate.py`) reads restricted lap/collision metrics
+   only to report a test result; those metrics never reach policy inputs or
+   choose actions.
 4. **Layer 4** remains the existing Train/Watch UI and training infrastructure;
    this work does not change its runtime or the simulator compose stack.
 
@@ -24,6 +27,9 @@ official simulator resets the car to its checkpoint. Their cumulative penalty
 is 10 seconds for the first collision, 20 for the second, 30 for the third,
 etc. A race with more than 10 counted collisions is marked disqualified. The
 cool-down lap is not required for completion.
+The competition policy never publishes `/autodrive/reset_command`. Restricted
+score topics are enabled only in the local test evaluator, separately from the
+continuous policy runner.
 
 ## Build and run
 
@@ -47,12 +53,13 @@ docker run --rm --name aicar-iros-policy `
   aicar-iros2026
 ```
 
-The runner starts the official Devkit launch unchanged, waits for sensor topics,
-then evaluates one complete race by default. Set `AICAR_EVALUATION_ATTEMPTS=3`
-for repeated local trials (the runner resets between attempts). The report is
-written to `/tmp/aicar-iros-evaluation.json` by default. `AICAR_RACE_WALL_TIMEOUT_S`
-and `AICAR_RACE_STEP_GUARD` are local safety guards, not simulated race-time
-limits and do not affect the measured score.
+The runner starts the official Devkit launch unchanged and runs the continuous
+policy by default. For a local diagnostic, set `AICAR_MODE=evaluate`; that mode
+observes restricted lap/collision topics but does not feed them to the policy.
+Each additional attempt requires a newly launched simulator process. The report
+is written to `/tmp/aicar-iros-evaluation.json` by default.
+`AICAR_RACE_WALL_TIMEOUT_S` and `AICAR_RACE_STEP_GUARD` are local safety guards,
+not simulated race-time limits and do not affect the measured score.
 
 The official simulator connection is opened from the simulator's Connection
 Button after both containers are running. Use Autonomous mode and the required

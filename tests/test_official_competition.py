@@ -6,6 +6,7 @@ import numpy as np
 
 from src.layer1.ros2_racer import (
     RacerRos2,
+    _encoder_forward_speed_mps,
     _next_scan_deadline,
     ros_messages_to_bridge_payload,
 )
@@ -18,19 +19,13 @@ def _vector(x=0.0, y=0.0, z=0.0):
     return SimpleNamespace(x=x, y=y, z=z)
 
 
-def _ros_messages(*, lap=0, lap_time=0.0, last_lap=0.0, collisions=0):
+def _ros_messages():
     return {
         "scan": SimpleNamespace(
             ranges=list(np.linspace(0.1, 9.0, 1080, dtype=np.float32)),
             scan_time=0.025,
             range_min=0.06,
             range_max=10.0,
-        ),
-        "odometry": SimpleNamespace(
-            pose=SimpleNamespace(pose=SimpleNamespace(position=_vector(1, 2, 3))),
-            twist=SimpleNamespace(twist=SimpleNamespace(
-                linear=_vector(4, 5, 6), angular=_vector(7, 8, 9)
-            )),
         ),
         "imu": SimpleNamespace(
             orientation=SimpleNamespace(x=0.1, y=0.2, z=0.3, w=0.9),
@@ -41,29 +36,24 @@ def _ros_messages(*, lap=0, lap_time=0.0, last_lap=0.0, collisions=0):
         "steering": SimpleNamespace(data=-0.2),
         "left_encoder": SimpleNamespace(position=[13.0]),
         "right_encoder": SimpleNamespace(position=[14.0]),
-        "lap_count": SimpleNamespace(data=lap),
-        "lap_time": SimpleNamespace(data=lap_time),
-        "last_lap_time": SimpleNamespace(data=last_lap),
-        "best_lap_time": SimpleNamespace(data=last_lap),
-        "collision_count": SimpleNamespace(data=collisions),
     }
 
 
 def test_ros2_adapter_preserves_official_signals_for_existing_bridge_parser():
     messages = _ros_messages()
-    payload = ros_messages_to_bridge_payload(**messages)
+    payload = ros_messages_to_bridge_payload(**messages, forward_speed_mps=3.5)
 
-    assert payload["V1 Position"] == "1.0 2.0 3.0"
-    assert payload["V1 Linear Velocity"] == "4.0 5.0 6.0"
+    assert payload["V1 Position"] == "0 0 0"
+    assert payload["V1 Linear Velocity"] == "3.5 0 0"
     assert payload["V1 Angular Velocity"] == "7.0 8.0 9.0"
     assert payload["V1 Linear Acceleration"] == "10.0 11.0 12.0"
     assert payload["V1 LIDAR Range Array"] == messages["scan"].ranges
     assert payload["V1 Encoder Angles"] == "13.0 14.0"
 
     snapshot = TelemetrySnapshot.from_raw_dict(payload)
-    assert snapshot.position == (-2.0, 3.0, 1.0)
-    assert snapshot.linear_velocity == (4.0, 5.0, 6.0)
-    assert snapshot.v_lat == -5.0
+    assert snapshot.position == (0.0, 0.0, 0.0)
+    assert snapshot.v_long == 3.5
+    assert snapshot.v_lat == 0.0
     assert snapshot.lidar_ranges.size == 1080
     assert snapshot.lidar_ranges[0] == messages["scan"].ranges[-1]
 
@@ -83,11 +73,17 @@ class FakeRacer:
         self.telemetry = snapshots[0]
         self.snapshots = list(snapshots[1:])
         self.last_step_duration_s = 0.025
-
-    def reset(self):
-        return self.telemetry
+        self.ready_calls = 0
 
     def wait_until_ready(self):
+        self.ready_calls += 1
+        return self.telemetry
+
+    def wait_for_race_metrics(self):
+        return self.telemetry
+
+    @property
+    def race_metrics(self):
         return self.telemetry
 
     def step(self, throttle, steering):
@@ -111,7 +107,7 @@ def test_race_env_ignores_warmup_collision_and_records_ten_race_laps():
     snapshots = [_snapshot(lap=1, last_lap=6.0, collisions=1)]
     snapshots.extend(_snapshot(lap=lap, last_lap=5.0, collisions=1) for lap in range(2, 12))
     racer = FakeRacer([_snapshot(lap=0, last_lap=0.0, collisions=0), *snapshots])
-    env = OfficialRaceEnv(racer=racer, reset_at_start=False)
+    env = OfficialRaceEnv(racer=racer)
     _, info = env.reset()
 
     _, _, terminated, _, info = env.step(np.asarray([0.5, 0.0], dtype=np.float32))
@@ -129,6 +125,13 @@ def test_race_env_ignores_warmup_collision_and_records_ten_race_laps():
     assert info["race_time_s"] == 50.0
 
 
+def test_official_env_starts_from_live_spawn_without_reset_command():
+    racer = FakeRacer([_snapshot(lap=0, last_lap=0.0, collisions=0)])
+    env = OfficialRaceEnv(racer=racer)
+    env.reset()
+    assert racer.ready_calls == 1
+
+
 def test_race_env_counts_only_collisions_after_warmup():
     racer = FakeRacer([
         _snapshot(lap=0, last_lap=0.0, collisions=0),
@@ -136,7 +139,7 @@ def test_race_env_counts_only_collisions_after_warmup():
         _snapshot(lap=1, last_lap=6.0, collisions=3),  # first race collision
         _snapshot(lap=2, last_lap=5.0, collisions=3),
     ])
-    env = OfficialRaceEnv(racer=racer, reset_at_start=False)
+    env = OfficialRaceEnv(racer=racer)
     env.reset()
     _, _, _, _, warmup = env.step(np.zeros(2, dtype=np.float32))
     assert warmup["race_collisions"] == 0
@@ -190,3 +193,13 @@ def test_ros_control_cadence_is_measured_between_delivered_scans():
     assert np.isclose(_next_scan_deadline(10.0, 9.99, 40.0), 10.015)
     assert np.isclose(_next_scan_deadline(10.03, 9.99, 40.0), 10.03)
     assert np.isclose(_next_scan_deadline(10.0, 0.0, 40.0), 10.0)
+
+
+def test_encoder_speed_uses_accumulated_wheel_angles_without_aliasing():
+    speed = _encoder_forward_speed_mps(
+        current=(4.2, 4.2),
+        previous=(0.0, 0.0),
+        elapsed_s=0.025,
+    )
+    expected = 4.2 * 0.059 / 0.025
+    assert np.isclose(speed, expected)
