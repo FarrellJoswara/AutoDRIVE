@@ -9,6 +9,7 @@ or action path. Collision handling is left to the simulator checkpoint reset.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
+from collections import deque
 
 import gymnasium as gym
 import numpy as np
@@ -25,6 +26,7 @@ from .spaces import (
     map_steering_action,
     snapshot_to_obs,
     transform_policy_action,
+    _normalize_lidar,
 )
 
 
@@ -47,6 +49,7 @@ class OfficialRaceEnv(gym.Env):
         negative_throttle_mode: NegativeThrottleMode = "allow",
         steering_mode: SteeringMode = "normal",
         vehicle_id: str = "roboracer_1",
+        observation_profile: str = "official_sensors",
     ) -> None:
         super().__init__()
         if warmup_laps < 0 or race_laps < 1:
@@ -64,6 +67,10 @@ class OfficialRaceEnv(gym.Env):
             include_race_metrics=True,
         )
         self._owns_racer = racer is None
+        if observation_profile not in ("official_sensors", "official_sensors_history"):
+            raise ValueError("unsupported official race observation profile")
+        self.observation_profile = observation_profile
+        self._lidar_history: deque[np.ndarray] = deque(maxlen=3)
         self.warmup_laps = int(warmup_laps)
         self.race_laps = int(race_laps)
         self.steering_action_scale = float(steering_action_scale)
@@ -77,7 +84,9 @@ class OfficialRaceEnv(gym.Env):
         map_steering_action(0.0, steering_mode)
         self.steering_mode = steering_mode
         self.action_space = make_action_space()
-        self.observation_space = make_observation_space()
+        self.observation_space = make_observation_space(
+            lidar_history_frames=4 if observation_profile == "official_sensors_history" else 1
+        )
         self._initial_lap_count = 0
         self._last_lap_count = 0
         self._last_collision_count = 0
@@ -112,7 +121,15 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s = []
         self._episode_steps = 0
         self._last_snap = snap
-        return snapshot_to_obs(snap, 0.0, 0.0), self._build_info(
+        initial_obs = snapshot_to_obs(snap, 0.0, 0.0)
+        if self.observation_profile == "official_sensors_history":
+            scan = _normalize_lidar(snap)
+            self._lidar_history.clear()
+            self._lidar_history.extend([scan.copy()] * 3)
+            initial_obs = snapshot_to_obs(
+                snap, 0.0, 0.0, lidar_history=list(self._lidar_history)
+            )
+        return initial_obs, self._build_info(
             snap, metrics, collision_event=False
         )
 
@@ -178,7 +195,13 @@ class OfficialRaceEnv(gym.Env):
                 getattr(self.racer, "last_control_interval_s", 0.0)
             ),
         })
-        observation = snapshot_to_obs(snap, throttle, steering)
+        if self.observation_profile == "official_sensors_history":
+            observation = snapshot_to_obs(
+                snap, throttle, steering, lidar_history=list(self._lidar_history)
+            )
+            self._lidar_history.append(_normalize_lidar(snap))
+        else:
+            observation = snapshot_to_obs(snap, throttle, steering)
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
         return observation, 0.0, terminated, False, info

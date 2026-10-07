@@ -145,9 +145,9 @@ export interface Settings {
   auto_launch: boolean;
   simulator_mode: "legacy" | "fixed_camera_on" | "fixed_camera_off";
   action_interval_s: number | null;
-  observation_profile: "simulator" | "official_sensors";
+  observation_profile: "simulator" | "official_sensors" | "official_sensors_history";
   throttle_mode: "bidirectional" | "forward_only";
-  policy_architecture: "lidar_cnn" | "lidar_cnn_pooled";
+  policy_architecture: "lidar_cnn" | "lidar_cnn_pooled" | "temporal_lidar_cnn";
   steering_action_scale: number;
   straight_throttle_gain: number;
   straight_throttle_steering_threshold: number;

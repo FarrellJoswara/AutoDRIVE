@@ -537,6 +537,12 @@ def train(
     from src.layer3.envs import make_vec_env
 
     env_kwargs = dict(env_kwargs or {})
+    uses_scan_history = env_kwargs.get("observation_profile") == "official_sensors_history"
+    if uses_scan_history != (policy_architecture == "temporal_lidar_cnn"):
+        raise ValueError(
+            "official_sensors_history requires temporal_lidar_cnn, and temporal_lidar_cnn "
+            "requires official_sensors_history"
+        )
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir = out_dir / "ckpt"
@@ -573,6 +579,7 @@ def train(
             checkpoint_architecture = {
                 "LidarStateExtractor": "lidar_cnn",
                 "PooledLidarStateExtractor": "lidar_cnn_pooled",
+                "TemporalLidarStateExtractor": "temporal_lidar_cnn",
             }.get(extractor_name)
             if checkpoint_architecture != policy_architecture:
                 raise ValueError(
@@ -770,7 +777,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--learning-rate", type=float, default=_PPO_LR)
     p.add_argument(
         "--policy-architecture",
-        choices=("lidar_cnn", "lidar_cnn_pooled"),
+        choices=("lidar_cnn", "lidar_cnn_pooled", "temporal_lidar_cnn"),
         default="lidar_cnn",
         help="Legacy flattened LiDAR CNN or sector-pooled LiDAR CNN",
     )
@@ -820,7 +827,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--observation-profile",
-        choices=("simulator", "official_sensors"),
+        choices=("simulator", "official_sensors", "official_sensors_history"),
         default="simulator",
         help="Use full simulator telemetry or match the official allowed sensor inputs",
     )

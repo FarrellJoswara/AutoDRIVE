@@ -104,11 +104,46 @@ class PooledLidarStateExtractor(BaseFeaturesExtractor):
         return self.merge(torch.cat([pooled, self.state_net(state)], dim=1))
 
 
+class TemporalLidarStateExtractor(BaseFeaturesExtractor):
+    """Encode four ordered official LiDAR frames plus the current sensor state."""
+
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 256):
+        super().__init__(observation_space, features_dim=features_dim)
+        lidar_shape = observation_space.spaces["lidar"].shape
+        if len(lidar_shape) != 2:
+            raise ValueError("temporal_lidar_cnn requires lidar shape (frames, beams)")
+        n_frames, n_beams = map(int, lidar_shape)
+        n_state = int(observation_space.spaces["state"].shape[0])
+        self.lidar_net = nn.Sequential(
+            nn.Conv1d(n_frames, 32, kernel_size=7, stride=2, padding=3),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),
+            nn.ReLU(),
+        )
+        self.lidar_average = nn.AdaptiveAvgPool1d(64)
+        self.lidar_nearest = nn.AdaptiveMaxPool1d(64)
+        self.state_net = nn.Sequential(
+            nn.Linear(n_state, 64), nn.ReLU(), nn.Linear(64, 64), nn.ReLU()
+        )
+        self.merge = nn.Sequential(nn.Linear(64 * 64 * 2 + 64, features_dim), nn.ReLU())
+
+    def forward(self, observations: dict) -> torch.Tensor:
+        lidar = observations["lidar"].float()
+        state = observations["state"].float()
+        features = self.lidar_net(lidar)
+        pooled = torch.cat(
+            [self.lidar_average(features).flatten(1), self.lidar_nearest(features).flatten(1)],
+            dim=1,
+        )
+        return self.merge(torch.cat([pooled, self.state_net(state)], dim=1))
+
+
 def policy_kwargs_for_architecture(architecture: str) -> dict:
     """Return SB3 policy kwargs for a named, checkpoint-compatible network."""
     extractors = {
         "lidar_cnn": LidarStateExtractor,
         "lidar_cnn_pooled": PooledLidarStateExtractor,
+        "temporal_lidar_cnn": TemporalLidarStateExtractor,
     }
     try:
         extractor = extractors[architecture]

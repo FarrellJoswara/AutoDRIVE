@@ -435,8 +435,9 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             >
               <option value="simulator">Full simulator telemetry</option>
               <option value="official_sensors">Official allowed sensors</option>
+              <option value="official_sensors_history">Official sensors + scan history</option>
             </select>
-            <small className="meta">Official mode uses LiDAR, encoder-derived forward speed, IMU, actuator feedback, and prior actions; it excludes simulator-only lateral speed and pose.</small>
+            <small className="meta">Official mode uses LiDAR, encoder-derived forward speed, IMU, actuator feedback, and prior actions; it excludes simulator-only lateral speed and pose. Scan history gives the policy the last four ordered scans for motion context.</small>
           </label>
           <label className="field">
             Throttle direction
@@ -457,7 +458,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           </label>
           <label className="field">
             Policy network
-            <RewardTip text="The legacy LiDAR CNN flattens its full scan feature map into a large dense layer. The pooled LiDAR CNN summarizes 64 ordered scan sectors with average and nearest-obstacle pooling, reducing the dense input while preserving left-to-right geometry. Changing architectures requires a fresh policy; checkpoints cannot be resumed across architectures." />
+            <RewardTip text="The legacy LiDAR CNN handles one scan. The pooled LiDAR CNN summarizes ordered scan sectors. Temporal LiDAR CNN handles four ordered scans and must be paired with Official sensors + scan history. Changing architectures requires a fresh policy; checkpoints cannot be resumed across architectures." />
             <select
               value={form.policy_architecture}
               onChange={(e) =>
@@ -469,8 +470,9 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             >
               <option value="lidar_cnn">Legacy LiDAR CNN</option>
               <option value="lidar_cnn_pooled">Pooled LiDAR CNN</option>
+              <option value="temporal_lidar_cnn">Temporal LiDAR CNN</option>
             </select>
-            <small className="meta">Pooled architecture requires a fresh run and preserves the legacy checkpoint format.</small>
+            <small className="meta">Changing architecture requires a fresh policy. Pair Temporal LiDAR CNN with Official sensors + scan history; other networks use one scan.</small>
           </label>
           <label className="field">
             Simulator mode

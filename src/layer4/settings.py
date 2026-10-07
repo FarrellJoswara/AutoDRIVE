@@ -50,9 +50,9 @@ class Settings(BaseModel):
     auto_launch: bool = True
     simulator_mode: Literal["legacy", "fixed_camera_on", "fixed_camera_off"] = "legacy"
     action_interval_s: Optional[float] = Field(default=None, gt=0)
-    observation_profile: Literal["simulator", "official_sensors"] = "simulator"
+    observation_profile: Literal["simulator", "official_sensors", "official_sensors_history"] = "simulator"
     throttle_mode: Literal["bidirectional", "forward_only"] = "bidirectional"
-    policy_architecture: Literal["lidar_cnn", "lidar_cnn_pooled"] = "lidar_cnn"
+    policy_architecture: Literal["lidar_cnn", "lidar_cnn_pooled", "temporal_lidar_cnn"] = "lidar_cnn"
     steering_action_scale: float = Field(default=1.0, ge=0, le=1)
     straight_throttle_gain: float = Field(default=1.0, ge=1.0, le=2.0)
     straight_throttle_steering_threshold: float = Field(default=0.15, ge=0.0, le=1.0)

@@ -56,6 +56,7 @@ from .spaces import (
     map_policy_throttle,
     snapshot_to_obs,
     transform_policy_action,
+    _normalize_lidar,
 )
 
 # Nominal control rate used to scale reward/route time by frame_skip. This is
@@ -186,15 +187,16 @@ class AutoDriveEnv(gym.Env):
                 f"Layer 2 v1 requires full {LIDAR_BEAMS}-beam LiDAR "
                 f"(no downsampling); got {lidar_beams}"
             )
-        if observation_profile not in ("simulator", "official_sensors"):
+        if observation_profile not in ("simulator", "official_sensors", "official_sensors_history"):
             raise ValueError(
-                "observation_profile must be 'simulator' or 'official_sensors'"
+                "observation_profile must be 'simulator', 'official_sensors', or 'official_sensors_history'"
             )
         map_policy_throttle(0.0, throttle_mode)
 
         # Store knobs as instance attributes (used every step).
         self.frame_skip = int(frame_skip)
         self.observation_profile = observation_profile
+        self._lidar_history: list[np.ndarray] = []
         self.throttle_mode = throttle_mode
         self._observation_encoder_positions: Optional[Tuple[float, float]] = None
         injected_interval = getattr(racer, "action_interval_s", None)
@@ -287,7 +289,10 @@ class AutoDriveEnv(gym.Env):
 
         # Declare Gym spaces (SB3 reads these to build networks).
         self.action_space: spaces.Space = make_action_space()
-        self.observation_space: spaces.Space = make_observation_space(self.lidar_beams)
+        self.observation_space: spaces.Space = make_observation_space(
+            self.lidar_beams,
+            lidar_history_frames=4 if observation_profile == "official_sensors_history" else 1,
+        )
 
         # Own the Racer unless the caller passed one in (then we don't kill it).
         self._owns_racer = racer is None
@@ -412,6 +417,11 @@ class AutoDriveEnv(gym.Env):
         self._pending_collision_event = reset_collision_pending
         self._last_snap = snap
         self._observation_encoder_positions = (snap.encoder_left, snap.encoder_right)
+        if self.observation_profile == "official_sensors_history":
+            initial_scan = _normalize_lidar(snap, lidar_beams=self.lidar_beams)
+            self._lidar_history = [initial_scan.copy() for _ in range(3)]
+        else:
+            self._lidar_history = []
         progress_state = None
         progress_now = self._progress_time(snap)
         if self.route_progress is not None:
@@ -674,6 +684,11 @@ class AutoDriveEnv(gym.Env):
             )
         )
         self._observation_encoder_positions = positions
+        history = None
+        if self.observation_profile == "official_sensors_history":
+            history = self._lidar_history
+            current = _normalize_lidar(snap, lidar_beams=lidar_beams)
+            self._lidar_history = [*self._lidar_history[1:], current]
         return snapshot_to_obs(
             snap,
             prev_throttle,
@@ -681,6 +696,7 @@ class AutoDriveEnv(gym.Env):
             lidar_beams=lidar_beams,
             forward_speed_mps=speed,
             lateral_speed_mps=0.0,
+            lidar_history=history,
         )
 
     def _progress_time(self, snap: TelemetrySnapshot) -> float:

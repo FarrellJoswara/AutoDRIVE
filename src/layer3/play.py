@@ -251,7 +251,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
     p.add_argument(
         "--observation-profile",
-        choices=("simulator", "official_sensors"),
+        choices=("simulator", "official_sensors", "official_sensors_history"),
         default="simulator",
     )
     p.add_argument("--forward-scale", type=float, default=1.0)

@@ -100,13 +100,21 @@ def transform_policy_action(
     return float(throttle), steering
 
 
-def make_observation_space(lidar_beams: int = LIDAR_BEAMS) -> spaces.Dict:
+def make_observation_space(
+    lidar_beams: int = LIDAR_BEAMS, *, lidar_history_frames: int = 1
+) -> spaces.Dict:
     """Declare canonical range readings and nine individually scaled state values."""
     if lidar_beams != LIDAR_BEAMS:
         raise ValueError(f"Canonical observation requires {LIDAR_BEAMS} LiDAR beams, got {lidar_beams}")
+    if lidar_history_frames < 1:
+        raise ValueError("lidar_history_frames must be >= 1")
+    lidar_shape = (
+        (lidar_beams,) if lidar_history_frames == 1
+        else (lidar_history_frames, lidar_beams)
+    )
     return spaces.Dict(
         {
-            "lidar": spaces.Box(low=0.0, high=1.0, shape=(lidar_beams,), dtype=np.float32),
+            "lidar": spaces.Box(low=0.0, high=1.0, shape=lidar_shape, dtype=np.float32),
             "state": spaces.Box(
                 low=-_STATE_CLIP,
                 high=_STATE_CLIP,
@@ -176,6 +184,7 @@ def snapshot_to_obs(
     *,
     forward_speed_mps: float | None = None,
     lateral_speed_mps: float | None = None,
+    lidar_history: list[np.ndarray] | None = None,
 ) -> Dict[str, np.ndarray]:
     """Build the normalized policy observation from one Bridge snapshot.
 
@@ -213,7 +222,20 @@ def snapshot_to_obs(
     if not np.isfinite(state_raw).all():
         raise ValueError("AutoDRIVE state telemetry contains NaN or infinite values")
 
+    current_lidar = _normalize_lidar(snap, lidar_beams=lidar_beams)
+    if lidar_history is None:
+        lidar_observation = current_lidar
+    else:
+        history = [np.asarray(frame, dtype=np.float32).reshape(-1) for frame in lidar_history]
+        if not history or any(frame.shape != current_lidar.shape for frame in history):
+            raise ValueError("LiDAR history must contain canonical normalized scans")
+        if any(not np.isfinite(frame).all() or np.any((frame < 0) | (frame > 1)) for frame in history):
+            raise ValueError("LiDAR history frames must be finite normalized ranges in [0, 1]")
+        # The final channel is always the current scan; earlier channels are
+        # ordered oldest→newest so temporal convolutions have a stable meaning.
+        lidar_observation = np.stack([*history, current_lidar], axis=0).astype(np.float32)
+
     return {
-        "lidar": _normalize_lidar(snap, lidar_beams=lidar_beams),
+        "lidar": lidar_observation,
         "state": np.clip(state_raw, -_STATE_CLIP, _STATE_CLIP).astype(np.float32),
     }

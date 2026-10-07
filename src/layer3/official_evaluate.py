@@ -311,6 +311,7 @@ def evaluate(
     output_path: Optional[Path] = None,
     controller: str = "ppo",
     trace_steps: int = 0,
+    observation_profile: str = "official_sensors",
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
@@ -328,7 +329,10 @@ def evaluate(
             "restricted reset command is not used by the scored path"
         )
 
-    model = load_policy(checkpoint, device=device, controller=controller)
+    model = load_policy(
+        checkpoint, device=device, controller=controller,
+        observation_profile=observation_profile,
+    )
     env = OfficialRaceEnv(
         timeout_s=timeout_s,
         warmup_laps=1,
@@ -339,6 +343,7 @@ def evaluate(
         throttle_mode=throttle_mode,
         negative_throttle_mode=negative_throttle_mode,
         steering_mode=steering_mode,
+        observation_profile=observation_profile,
     )
     runs: List[Dict[str, Any]] = []
     try:
@@ -365,6 +370,7 @@ def evaluate(
             "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
             "deterministic": True,
             "controller": controller,
+            "observation_profile": observation_profile,
             "throttle_mode": throttle_mode,
             "steering_mode": steering_mode,
             "warmup_laps_ignored": 1,
@@ -392,6 +398,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--controller", choices=("ppo", "lidar_gap"), default="ppo")
+    parser.add_argument(
+        "--observation-profile",
+        choices=("official_sensors", "official_sensors_history"),
+        default="official_sensors",
+    )
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--wall-timeout-s", type=float, default=300.0)
@@ -437,6 +448,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_path=args.out,
         controller=args.controller,
         trace_steps=args.trace_steps,
+        observation_profile=args.observation_profile,
     )
     return 0
 
