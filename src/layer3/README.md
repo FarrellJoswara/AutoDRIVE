@@ -106,6 +106,21 @@ Implemented in `envs.py` / `train.py`. Full detail: [`LAYER3.md` §5](../../LAYE
 
 Playback skips 3–4: load zip → only look → act (single car).
 
+### Privileged PPO to sensor-only transfer experiment
+
+`python scripts/distill_policy.py --teacher <simulator-profile-checkpoint.zip>
+--out logs/rl/<new-trial>` collects the current official-sensor observation
+alongside deterministic actions from a simulator-profile PPO teacher, then
+behavior-clones a fresh actor. Layer 2 exposes the teacher observation only to
+this explicit Layer 3 collector. The compressed dataset contains only LiDAR,
+the official sensor state vector, and action labels. It contains no map pose,
+route progress, collision count, or teacher observation. The resulting
+`sensor_student.zip` can be resumed with ordinary PPO using
+`--observation-profile official_sensors`; distillation itself does not change
+the default training flow or competition inference path. This is a transfer
+hypothesis, not a competition result, and it requires a successful like-for-like
+evaluation before promotion.
+
 ---
 
 ## Layer 3 files

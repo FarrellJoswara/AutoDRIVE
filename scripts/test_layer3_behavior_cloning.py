@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from src.layer3.behavior_cloning import behavior_clone_actor
+from src.layer3.behavior_cloning import (
+    behavior_clone_actor,
+    collect_policy_demonstrations,
+)
 from src.layer3.train import make_model
 from src.layer2.spaces import LIDAR_BEAMS, STATE_DIM
 
@@ -54,6 +59,47 @@ class BehaviorCloningTests(unittest.TestCase):
             self.assertLess(summary["final_validation_loss"], summary["initial_validation_loss"])
         finally:
             env.close()
+
+    def test_policy_collection_persists_only_student_inputs_and_teacher_actions(self) -> None:
+        class FakeVecEnv:
+            num_envs = 2
+
+            def reset(self):
+                return {
+                    "lidar": np.full((2, LIDAR_BEAMS), 0.25, np.float32),
+                    "state": np.full((2, STATE_DIM), 0.5, np.float32),
+                }
+
+            def env_method(self, method):
+                self.method = method
+                return [
+                    {"lidar": np.full(LIDAR_BEAMS, 0.9, np.float32),
+                     "state": np.full(STATE_DIM, 0.9, np.float32)}
+                    for _ in range(2)
+                ]
+
+            def step(self, actions):
+                self.actions = actions
+                return self.reset(), np.zeros(2), np.zeros(2, dtype=bool), [{}, {}]
+
+        class FakeTeacher:
+            def predict(self, observations, deterministic):
+                assert deterministic
+                assert np.all(observations["state"] == 0.9)
+                return np.tile(np.asarray([0.1, -0.2], np.float32), (2, 1)), None
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "demonstrations.npz"
+            dataset, summary = collect_policy_demonstrations(
+                FakeVecEnv(), FakeTeacher(), steps=3, output_path=path
+            )
+            self.assertEqual(summary, {"transitions": 6, "environments": 2})
+            self.assertEqual(set(dataset), {"lidar", "state", "actions"})
+            self.assertTrue(np.all(dataset["lidar"] == 0.25))
+            self.assertTrue(np.all(dataset["state"] == 0.5))
+            self.assertTrue(np.allclose(dataset["actions"], [0.1, -0.2]))
+            with np.load(path) as saved:
+                self.assertEqual(set(saved.files), {"lidar", "state", "actions"})
 
 
 if __name__ == "__main__":

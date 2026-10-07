@@ -94,6 +94,64 @@ def collect_centerline_demonstrations(
     }
 
 
+def collect_policy_demonstrations(
+    vec_env: Any,
+    teacher: Any,
+    *,
+    steps: int,
+    output_path: Path,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, int]]:
+    """Record sensor observations paired with a privileged PPO teacher's actions.
+
+    The running environments return the student observations. A separate
+    Layer 2 diagnostic method supplies the teacher's simulator-profile input;
+    only the student observations and normalized action labels are persisted.
+    """
+    observations = vec_env.reset()
+    lidar_rows = []
+    state_rows = []
+    action_rows = []
+    total_steps = max(0, int(steps))
+    report_every = max(1, total_steps // 10)
+    n_envs = int(vec_env.num_envs)
+
+    for step_index in range(total_steps):
+        teacher_observations = vec_env.env_method(
+            "get_privileged_teacher_observation"
+        )
+        teacher_batch = {
+            key: np.stack([row[key] for row in teacher_observations]).astype(
+                np.float32, copy=False
+            )
+            for key in ("lidar", "state")
+        }
+        actions, _ = teacher.predict(teacher_batch, deterministic=True)
+        actions = np.asarray(actions, dtype=np.float32).reshape(n_envs, 2)
+        lidar_rows.extend(
+            np.asarray(observations["lidar"], dtype=np.float32).copy()
+        )
+        state_rows.extend(
+            np.asarray(observations["state"], dtype=np.float32).copy()
+        )
+        action_rows.extend(actions.copy())
+        observations, _, _, _ = vec_env.step(actions)
+        if (step_index + 1) % report_every == 0 or step_index + 1 == total_steps:
+            print(
+                f"policy distillation collection: {step_index + 1}/{total_steps} "
+                f"steps per env; {len(action_rows)} sensor/action pairs",
+                flush=True,
+            )
+
+    dataset = {
+        "lidar": np.asarray(lidar_rows, dtype=np.float32),
+        "state": np.asarray(state_rows, dtype=np.float32),
+        "actions": np.asarray(action_rows, dtype=np.float32),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **dataset)
+    return dataset, {"transitions": int(len(action_rows)), "environments": n_envs}
+
+
 def behavior_clone_actor(
     model: Any,
     dataset: Dict[str, np.ndarray],

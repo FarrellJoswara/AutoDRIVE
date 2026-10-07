@@ -778,3 +778,19 @@ class AutoDriveEnv(gym.Env):
                 "frontier_progress_m": progress["progress_m"],
             })
         return info
+
+    def get_privileged_teacher_observation(self) -> ObsType:
+        """Build the simulator-profile observation for offline teacher labels.
+
+        This is only for an explicitly invoked Layer 3 distillation collector.
+        The environment's returned observation remains the configured policy
+        observation (for example ``official_sensors``); this method is never
+        used by ``step`` or the competition policy runner.
+        """
+        if self._last_snap is None:
+            raise RuntimeError("environment must be reset before reading teacher inputs")
+        return snapshot_to_obs(
+            self._last_snap,
+            self._prev_throttle,
+            self._prev_steering,
+        )
