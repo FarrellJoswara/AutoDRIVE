@@ -29,11 +29,16 @@ function trainingNotice(status: ReturnType<typeof useHubStore>["status"]) {
   let title = "Training stopped";
   let detail = "The run has ended.";
   let level: "info" | "success" | "error" = "info";
-  if (status.state === "error" || (status.exit_code != null && status.exit_code !== 0)) {
+  const terminatedBySignal = status.exit_code === -15;
+  if (status.state === "error" || (status.exit_code != null && status.exit_code !== 0 && !terminatedBySignal)) {
     title = "Training failed";
     detail = status.error || `Train exited with code ${status.exit_code}.`;
     if (status.log_path) detail += ` Log: ${status.log_path}`;
     level = "error";
+  } else if (terminatedBySignal) {
+    title = "Training interrupted";
+    detail = "The training process received SIGTERM (exit -15) and shut down. This is a termination signal, not a Python exception; the notice alone cannot identify what sent it.";
+    if (status.log_path) detail += ` Log: ${status.log_path}`;
   } else if (status.stop_reason) {
     title = "Training finished";
     detail = status.stop_reason === "lap_target"
