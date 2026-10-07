@@ -279,3 +279,16 @@ lap and neither is a score comparison.
   observation path and then passes the official-image evaluation without
   disqualification. The legacy checkpoint's pre-audit laps are excluded from
   this criterion because that path used restricted inputs/reset.
+- Outcome: the fresh full-resolution run reached its 20,480-step deterministic
+  snapshot with 0/3 completed laps. All attempts collided at about 1.0 simulated
+  second and roughly 1.89 m of frontier distance. The 30k checkpoint was then
+  tested in the unmodified official simulator and Devkit images for 30 seconds:
+  it completed 0 laps and recorded 44 raw collisions across 587 actions. The
+  measured control cadence was 19.54 Hz (median 51.28 ms); its policy outputs
+  were effectively constant (throttle std 2.9e-6, steering std 3.2e-6).
+- The full-resolution model reached slightly farther in the local snapshot than
+  the pooled model's 1.59 m, but neither produced a lap-capable policy; its
+  official diagnostic also showed no useful steering adaptation. Do not promote
+  this architecture or infer a race-time improvement. Preserve the checkpoints
+  as training diagnostics. Raw report:
+  `results/fullres_50ms_30k_checkpoint_diag_30s_20261007.json`.
