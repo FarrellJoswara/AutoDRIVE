@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-07",
+  "run": "logs/rl/iros_official_forwardonly_50ms_resume_20261007",
+  "classification": "local development simulator only; not an official race result",
+  "simulator_image": "aicar-sim:latest",
+  "starting_checkpoint": "logs/rl/optimization_control0946_gain1025_lr2e6_20261007_20261007_063151/best_evaluated_model.zip",
+  "training_settings": {
+    "n_envs": 4,
+    "action_interval_s": 0.05,
+    "observation_profile": "official_sensors",
+    "throttle_mode": "forward_only",
+    "steering_action_scale": 0.946,
+    "straight_throttle_gain": 1.025,
+    "learning_rate": 0.0001,
+    "n_steps": 1024,
+    "n_epochs": 4,
+    "evaluation_runs_per_snapshot": 3,
+    "evaluation_metric": "ten_lap_time"
+  },
+  "snapshots": [
+    {
+      "steps": 20480,
+      "attempts": 3,
+      "frontier_distance_mean_m": 1.64703,
+      "frontier_pace_mean_mps": 0.082319,
+      "mean_simulated_seconds": 20.0167,
+      "laps_mean": 0,
+      "collisions": 3,
+      "termination_reasons": {"collision": 3}
+    },
+    {
+      "steps": 40960,
+      "attempts": 3,
+      "frontier_distance_mean_m": 2.958526,
+      "frontier_pace_mean_mps": 0.081929,
+      "mean_simulated_seconds": 36.1,
+      "laps_mean": 0,
+      "collisions": 3,
+      "termination_reasons": {"collision": 3}
+    },
+    {
+      "steps": 61440,
+      "attempts": 3,
+      "frontier_distance_mean_m": 18.017714,
+      "frontier_pace_mean_mps": 0.098257,
+      "mean_simulated_seconds": 183.4,
+      "laps_mean": 0,
+      "collisions": 3,
+      "termination_reasons": {"collision": 3}
+    }
+  ],
+  "partial_snapshot": {
+    "steps": 98304,
+    "attempt_index": 1,
+    "simulated_seconds": 393.95,
+    "frontier_distance_m": 44.911,
+    "frontier_pace_mps": 0.114002,
+    "laps": 1,
+    "lap_time_s": 270.3445,
+    "lap_mean_speed_mps": 0.13337,
+    "lap_mean_throttle": 0.41635,
+    "lap_full_throttle_fraction": 0,
+    "collisions": 0,
+    "note": "Evaluation batch was stopped before its three attempts completed; this is a partial local diagnostic, not a comparable 10-lap result."
+  },
+  "stop": {
+    "training_steps": 122400,
+    "reason": "noncompetitive lap pace; preserve the run artifacts and validate only in the official runtime"
+  },
+  "promotion": false
+}

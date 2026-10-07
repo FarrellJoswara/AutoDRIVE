@@ -31,6 +31,48 @@ reset command, a fresh simulator process, and a complete race.
 - Next experiments should target the official runtime and allowed sensor path;
   keep local multi-environment training results labeled as development-only.
 
+### Forward-only fine-tune on the local development simulator — not promoted
+
+- Date: 2026-10-07; run:
+  `logs/rl/iros_official_forwardonly_50ms_resume_20261007`.
+- Resumed the preserved `optimization_control0946_gain1025_lr2e6_20261007_20261007_063151/best_evaluated_model.zip`
+  checkpoint with four local environments, official-sensor-shaped observations,
+  forward-only throttle mapping, 50 ms actions, and the existing reward config.
+- Deterministic local snapshots at 20,480, 40,960, and 61,440 steps all had
+  zero completed laps and three collisions per three attempts. Frontier pace
+  improved from about 0.082 to 0.098 m/s by 61,440, but remained noncompetitive.
+- The 98,304-step snapshot's first attempt eventually completed one local lap
+  in 270.34 s with no collision. Mean throttle was 0.416 and it spent no time
+  at full throttle. The full three-attempt snapshot was not completed; the
+  training job was stopped at 122,400 steps and all checkpoints were retained.
+- This run used the custom `aicar-sim` image and Layer 2 internal route rewards.
+  Its lap is development-only and cannot be compared to official IROS time.
+  No checkpoint was promoted. Full metrics are in
+  `results/local_forwardonly_training_20261007.json`.
+- Next, evaluate the saved checkpoint through the official simulator/Devkit
+  images before changing the official controller. Any training reward or
+  action-transfer experiment must retain the same four-layer boundaries and
+  be compared on that official permitted-sensor path.
+
+### Official transfer check: local forward-only PPO checkpoint at 120,000 steps
+
+- Date: 2026-10-07; checkpoint:
+  `logs/rl/iros_official_forwardonly_50ms_resume_20261007/ckpt/ppo_120000_steps.zip`.
+- Evaluated with the exact official IROS 2026 simulator and Devkit image tags,
+  normal steering, forward-only throttle, and the allowed LiDAR/IMU/encoder/
+  actuator observation path. No restricted telemetry was fed to the policy.
+- The 300-second diagnostic guard ended the incomplete attempt after one race
+  lap at 121.977 s. It recorded 5 warm-up collisions and 6 race collisions
+  (210 s official penalty); the attempt was neither complete nor disqualified.
+  This is not a valid 10-lap time and the checkpoint was not promoted.
+- Raw result:
+  `results/forwardonly_ppo120k_official_300s_20261007.json`.
+- The local training snapshot's 270.34 s lap is not comparable: the official
+  simulator completed one lap in 121.98 s under the same policy checkpoint.
+  Both results remain far from the 71.82 s 10-lap benchmark, and the collision
+  rate makes this transfer unsuitable. Next work should address control/action
+  transfer inside the existing four layers and screen on the official runtime.
+
 ## Transfer baseline: callback-rate control
 
 - Date: 2026-10-07
