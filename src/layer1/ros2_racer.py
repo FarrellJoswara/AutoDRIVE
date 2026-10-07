@@ -123,11 +123,13 @@ class RacerRos2:
         timeout_s: float = 5.0,
         node: Optional[Any] = None,
         include_race_metrics: bool = False,
+        allow_training_reset: bool = False,
     ) -> None:
         self.port = 0  # compatibility with Layer 2 diagnostics; ROS uses topics
         self.action_interval_s = None
         self.timeout_s = float(timeout_s)
         self.include_race_metrics = bool(include_race_metrics)
+        self.allow_training_reset = bool(allow_training_reset)
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         self._owned_node = node is None
@@ -136,7 +138,7 @@ class RacerRos2:
             import rclpy
             from geometry_msgs.msg import Point
             from sensor_msgs.msg import Imu, JointState, LaserScan
-            from std_msgs.msg import Float32, Int32
+            from std_msgs.msg import Bool, Float32, Int32
 
             self._rclpy = rclpy
             if not rclpy.ok():
@@ -149,6 +151,7 @@ class RacerRos2:
                 "Imu": Imu,
                 "JointState": JointState,
                 "LaserScan": LaserScan,
+                "Bool": Bool,
             }
         else:
             self._msg_types = None
@@ -185,6 +188,10 @@ class RacerRos2:
             "throttle": self.node.create_publisher(types["Float32"], f"{prefix}/throttle_command", 10),
             "steering": self.node.create_publisher(types["Float32"], f"{prefix}/steering_command", 10),
         }
+        if self.allow_training_reset:
+            self._publishers["training_reset"] = self.node.create_publisher(
+                types["Bool"], "/autodrive/reset_command", 10
+            )
         callbacks = (
             (f"{prefix}/imu", types["Imu"], "imu"),
             (f"{prefix}/throttle", types["Float32"], "throttle"),
@@ -346,6 +353,52 @@ class RacerRos2:
                     )
                 self._condition.wait(remaining)
             return self._race_metrics
+
+    def reset_simulation_for_training(self) -> TelemetrySnapshot:
+        """Reset the official simulator through its documented training API.
+
+        This is intentionally unavailable to the deployed policy transport.
+        The competition guide permits the restricted reset topic for training;
+        policy mode never creates its publisher.
+        """
+        if not self.allow_training_reset:
+            raise PermissionError("official simulator reset is training-only")
+        publisher = self._publishers.get("training_reset")
+        if publisher is None or self._msg_types is None:
+            raise RuntimeError("training reset publisher is unavailable")
+
+        with self._condition:
+            previous_step = self._step_counter
+        reset_msg = self._msg_types["Bool"]()
+        reset_msg.data = True
+        publisher.publish(reset_msg)
+        # The official simulator samples this command during its update loop.
+        # Hold it across several 40 Hz ticks, then deassert as required by the
+        # Devkit documentation to prevent repeated resets.
+        time.sleep(0.1)
+        reset_msg.data = False
+        publisher.publish(reset_msg)
+        snap = self._wait_for_scan_after(previous_step)
+
+        if self.include_race_metrics:
+            deadline = time.monotonic() + self.timeout_s
+            with self._condition:
+                while (
+                    self._race_metrics.lap_count != 0
+                    or self._race_metrics.collision_count != 0
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "Official reset returned sensors but race counters did not reset"
+                        )
+                    self._condition.wait(remaining)
+        with self._condition:
+            self._last_action_time = 0.0
+            self._last_control_scan_receipt = 0.0
+            self._last_control_interval_s = 0.0
+            self._last_step_duration_s = 0.0
+        return snap
 
     @property
     def race_metrics(self) -> RaceMetrics:

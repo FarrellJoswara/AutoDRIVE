@@ -103,11 +103,14 @@ def run_policy(
                 straight_throttle_steering_threshold=straight_throttle_steering_threshold,
             )
             snap = racer.step(previous_throttle, previous_steering)
+            elapsed_s = float(racer.last_control_interval_s)
+            if elapsed_s <= 0.0:
+                elapsed_s = float(racer.last_step_duration_s)
             observation = observation_builder.observe(
                 snap,
                 previous_throttle,
                 previous_steering,
-                elapsed_s=float(racer.last_step_duration_s),
+                elapsed_s=elapsed_s,
             )
     except KeyboardInterrupt:
         pass

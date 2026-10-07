@@ -438,6 +438,83 @@ def test_official_policy_and_race_env_share_identical_observation_transform():
                 np.testing.assert_array_equal(training_obs[key], deployment_obs[key])
 
 
+def test_official_training_reward_matches_race_time_collision_and_dq_rules():
+    class TrainingRacer(FakeRacer):
+        def __init__(self):
+            initial = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            events = [
+                _snapshot(lap=1, last_lap=7.0, collisions=2),
+                _snapshot(lap=2, last_lap=6.0, collisions=2),
+                _snapshot(lap=2, last_lap=6.0, collisions=3),
+                _snapshot(lap=2, last_lap=6.0, collisions=13),
+            ]
+            super().__init__([initial, *events])
+            self.last_step_duration_s = 1.0
+
+        def reset_simulation_for_training(self):
+            self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            return self.telemetry
+
+    racer = TrainingRacer()
+    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=0.0)
+    env.reset()
+
+    _, warmup_reward, terminated, truncated, _ = env.step(np.zeros(2, dtype=np.float32))
+    assert warmup_reward == 0.0
+    assert not terminated and not truncated
+
+    _, lap_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+    assert lap_reward == 99.0
+    assert not terminated and not truncated
+    assert info["race_laps_completed"] == 1
+
+    _, collision_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+    assert collision_reward == -11.0
+    assert info["race_collisions"] == 1
+    assert not terminated and not truncated
+
+    _, dq_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+    assert dq_reward == -1651.0
+    assert terminated and not truncated
+    assert info["race_disqualified"] is True
+    assert info["race_complete"] is False
+    assert info["termination_reason"] == "disqualified"
+
+
+def test_official_training_cost_uses_time_between_actions_not_only_last_scan():
+    class DelayedTrainingRacer(FakeRacer):
+        last_control_interval_s = 3.0
+
+        def __init__(self):
+            super().__init__([
+                _snapshot(lap=0, last_lap=0.0, collisions=0),
+                _snapshot(lap=1, last_lap=6.0, collisions=0),
+                _snapshot(lap=2, last_lap=5.0, collisions=0),
+            ])
+            self.last_step_duration_s = 0.05
+
+        def reset_simulation_for_training(self):
+            self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            return self.telemetry
+
+    env = OfficialRaceEnv(
+        racer=DelayedTrainingRacer(), training_mode=True, training_timeout_s=0.0
+    )
+    env.reset()
+    env.step(np.zeros(2, dtype=np.float32))  # warm-up lap
+    _, reward, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+
+    assert reward == 97.0  # +100 lap bonus, -3 full seconds between actions
+    assert info["training_reward_components"]["race_time_cost"] == -3.0
+
+
+def test_official_policy_transport_cannot_reset_the_simulator():
+    racer = object.__new__(RacerRos2)
+    racer.allow_training_reset = False
+    with np.testing.assert_raises(PermissionError):
+        racer.reset_simulation_for_training()
+
+
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():
     complete_packet = {key: "value" for key in DEVKIT_REQUIRED_FIELDS}
     startup_packet = dict(complete_packet)

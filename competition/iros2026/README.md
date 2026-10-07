@@ -83,6 +83,53 @@ is written to `/tmp/aicar-iros-evaluation.json` by default.
 `AICAR_RACE_WALL_TIMEOUT_S` and `AICAR_RACE_STEP_GUARD` are local safety guards,
 not simulated race-time limits and do not affect the measured score.
 
+## Train against the official simulator
+
+Use the same `2026-iros-compete` simulator and Devkit images for PPO training
+when producing a policy intended for this race. The custom Layer 2 Unity fleet
+remains useful for development, but its physics and episode behavior are not a
+substitute for official-image training. The official trainer uses one official
+simulator instance, the same scan-paced ROS 2 action path and the shared
+`OfficialObservationBuilder` used by deployed policies. It runs one complete
+warm-up plus 10-lap race per episode; collisions reset to official checkpoints
+and only disqualification ends an episode early. Training may use the guide's
+restricted lap/collision/reset streams for reward and episode control, but those
+streams are excluded from the policy observation and policy-mode ROS node.
+
+Build the team Devkit image, start its trainer, then start the official
+simulator on the same Docker network. The mounted run directory keeps PPO
+checkpoints and TensorBoard data on the host:
+
+```powershell
+docker network create aicar-official-train
+docker build -f competition/iros2026/Dockerfile -t aicar-iros2026 .
+docker run --rm --name aicar-official-train-api `
+  --network aicar-official-train --network-alias api `
+  -e AICAR_MODE=train -e AICAR_TRAIN_TIMESTEPS=1000000 `
+  -e AICAR_TRAIN_OUT=/runs/official `
+  -v "${PWD}/logs/rl/official_training:/runs/official" `
+  aicar-iros2026
+```
+
+In a second terminal, start the official simulator and point its Devkit
+connection at the trainer container's relay:
+
+```powershell
+docker run --rm --name aicar-official-train-sim `
+  --network aicar-official-train `
+  --entrypoint /bin/bash autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete `
+  -lc './AutoDRIVE\ Simulator.x86_64 -batchmode -nographics -ip api -port 4568'
+```
+
+`AICAR_MODE=train` is a development/training mode, not a submission mode. It
+enables restricted reward/reset handling only inside the trainer. `AICAR_MODE=policy`
+remains the race path and cannot publish reset or subscribe to restricted
+metrics. The initial training reward adds per-lap completion shaping to exact
+simulated-time cost and official escalating collision penalties; disqualification
+receives a large failure cost. Those shaping weights are recorded in each run's
+`config.json` and must be evaluated by completed official races, not rollout
+reward alone.
+
 For GUI operation, configure the simulator's Connection target as the relay
 host on port 4568, press Connection, then switch to Autonomous mode and the
 required Ultra graphics setting. For headless operation, use the official

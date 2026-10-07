@@ -5,7 +5,8 @@ source /opt/ros/humble/setup.bash
 source /home/autodrive_devkit/install/setup.bash
 
 controller="${AICAR_CONTROLLER:-ppo}"
-if [[ "$controller" == "ppo" && ! -f "${AICAR_MODEL_PATH:-/models/policy.zip}" ]]; then
+mode="${AICAR_MODE:-policy}"
+if [[ "$mode" != "train" && "$controller" == "ppo" && ! -f "${AICAR_MODEL_PATH:-/models/policy.zip}" ]]; then
   echo "ERROR: set AICAR_MODEL_PATH to a readable PPO checkpoint" >&2
   exit 2
 fi
@@ -28,7 +29,33 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [[ "${AICAR_MODE:-policy}" == "evaluate" ]]; then
+if [[ "$mode" == "train" ]]; then
+  echo "Training PPO against the official simulator; restricted metrics/reset are training-only."
+  train_args=(
+    --out "${AICAR_TRAIN_OUT:-/runs/official}"
+    --total-timesteps "${AICAR_TRAIN_TIMESTEPS:-1000000}"
+    --seed "${AICAR_TRAIN_SEED:-0}"
+    --checkpoint-every "${AICAR_TRAIN_CHECKPOINT_EVERY:-10000}"
+    --n-steps "${AICAR_PPO_N_STEPS:-2048}"
+    --learning-rate "${AICAR_PPO_LEARNING_RATE:-0.0001}"
+    --n-epochs "${AICAR_PPO_N_EPOCHS:-4}"
+    --gamma "${AICAR_PPO_GAMMA:-0.9995}"
+    --gae-lambda "${AICAR_PPO_GAE_LAMBDA:-0.95}"
+    --timeout-s "${AICAR_SENSOR_TIMEOUT_S:-180}"
+    --training-timeout-s "${AICAR_TRAIN_WATCHDOG_S:-600}"
+    --observation-profile "${AICAR_OBSERVATION_PROFILE:-official_sensors}"
+    --steering-action-scale "${AICAR_STEERING_ACTION_SCALE:-1.0}"
+    --straight-throttle-gain "${AICAR_STRAIGHT_THROTTLE_GAIN:-1.0}"
+    --straight-throttle-steering-threshold "${AICAR_STRAIGHT_THROTTLE_STEERING_THRESHOLD:-0.15}"
+    --negative-throttle-mode "${AICAR_NEGATIVE_THROTTLE_MODE:-allow}"
+    --steering-mode "${AICAR_STEERING_MODE:-normal}"
+    --throttle-mode "${AICAR_THROTTLE_MODE:-bidirectional}"
+  )
+  if [[ -n "${AICAR_TRAIN_RESUME:-}" ]]; then
+    train_args+=(--resume "$AICAR_TRAIN_RESUME")
+  fi
+  python3 -u -m src.layer3.official_train "${train_args[@]}"
+elif [[ "$mode" == "evaluate" ]]; then
   echo "Running local evaluation monitor; restricted score topics are read for measurement only."
   python3 -m src.layer3.official_evaluate \
     --model "${AICAR_MODEL_PATH:-/models/policy.zip}" \

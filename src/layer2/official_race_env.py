@@ -1,9 +1,8 @@
-"""Layer 2 Gymnasium adapter for the official RoboRacer ROS 2 race.
+"""Layer 2 Gym adapter for official-race evaluation and training.
 
-This local evaluator builds observations only from permitted sensor topics.
-Restricted lap/collision counters are read by Layer 1's evaluation-only
-monitor and affect reporting/termination only; they never enter the observation
-or action path. Collision handling is left to the simulator checkpoint reset.
+Policy observations/actions use the same sensor-only transform in both modes.
+Training mode may use restricted race counters for reward/episode control and
+the documented reset topic; neither capability is enabled for policy runtime.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from .lidar_odometry import LidarOdometry, acceleration_consistent_lidar_speed
 
 
 class OfficialRaceEnv(gym.Env):
-    """Official race flow: warm-up lap, then N timed laps, including collisions."""
+    """Official race flow with optional training-only reset and score reward."""
 
     metadata = {"render_modes": []}
 
@@ -50,6 +49,10 @@ class OfficialRaceEnv(gym.Env):
         steering_mode: SteeringMode = "normal",
         vehicle_id: str = "roboracer_1",
         observation_profile: str = "official_sensors",
+        training_mode: bool = False,
+        training_timeout_s: float = 600.0,
+        training_lap_reward: float = 100.0,
+        training_failure_penalty: float = 1000.0,
     ) -> None:
         super().__init__()
         if warmup_laps < 0 or race_laps < 1:
@@ -61,10 +64,15 @@ class OfficialRaceEnv(gym.Env):
         if not 0.0 <= straight_throttle_steering_threshold <= 1.0:
             raise ValueError("straight_throttle_steering_threshold must be in [0, 1]")
 
+        self.training_mode = bool(training_mode)
+        self.training_timeout_s = max(0.0, float(training_timeout_s))
+        self.training_lap_reward = max(0.0, float(training_lap_reward))
+        self.training_failure_penalty = max(0.0, float(training_failure_penalty))
         self.racer = racer or RacerRos2(
             vehicle_id=vehicle_id,
             timeout_s=timeout_s,
             include_race_metrics=True,
+            allow_training_reset=self.training_mode,
         )
         self._owns_racer = racer is None
         if observation_profile not in ("official_sensors", "official_sensors_history"):
@@ -99,6 +107,7 @@ class OfficialRaceEnv(gym.Env):
         self._race_laps_count = 0
         self._warmup_lap_times_s: list[float] = []
         self._episode_steps = 0
+        self._training_elapsed_s = 0.0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
 
     def reset(
@@ -108,7 +117,13 @@ class OfficialRaceEnv(gym.Env):
         options: Optional[dict] = None,
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         super().reset(seed=seed)
-        snap = self.racer.wait_until_ready()
+        if self.training_mode:
+            reset_for_training = getattr(self.racer, "reset_simulation_for_training", None)
+            if not callable(reset_for_training):
+                raise RuntimeError("training mode requires a training-reset-capable official racer")
+            snap = reset_for_training()
+        else:
+            snap = self.racer.wait_until_ready()
         metrics = self.racer.wait_for_race_metrics()
         self._initial_lap_count = int(metrics.lap_count)
         self._last_lap_count = self._initial_lap_count
@@ -122,6 +137,7 @@ class OfficialRaceEnv(gym.Env):
         self._race_laps_count = 0
         self._warmup_lap_times_s = []
         self._episode_steps = 0
+        self._training_elapsed_s = 0.0
         self._last_snap = snap
         initial_obs = self._observation_builder.reset(snap)
         return initial_obs, self._build_info(
@@ -139,8 +155,20 @@ class OfficialRaceEnv(gym.Env):
             straight_throttle_steering_threshold=self.straight_throttle_steering_threshold,
         )
 
+        race_was_active = self._race_collision_baseline is not None
+        previous_race_laps = self._race_laps_count
+        previous_race_collisions = self._race_collisions(self._last_collision_count)
         snap = self.racer.step(throttle, steering)
         self._episode_steps += 1
+        scan_interval_s = max(0.0, float(self.racer.last_step_duration_s))
+        action_interval_s = max(
+            0.0, float(getattr(self.racer, "last_control_interval_s", 0.0))
+        )
+        # Use elapsed time between policy actions. During PPO optimization the
+        # official simulator continues to hold the previous actuator command;
+        # counting only the final scan interval would undercharge race time and
+        # distort the speed estimate at the next decision.
+        step_duration_s = action_interval_s if action_interval_s > 0 else scan_interval_s
         metrics = self.racer.race_metrics
         collision_count = int(metrics.collision_count)
         collision_event = collision_count > self._last_collision_count
@@ -165,26 +193,29 @@ class OfficialRaceEnv(gym.Env):
                         self._race_lap_times_s.append(lap_time)
             self._last_lap_count = current_lap_count
 
-        terminated = self._race_laps_count >= self.race_laps
+        race_collisions = self._race_collisions(collision_count)
+        race_disqualified = race_collisions > 10
+        terminated = self._race_laps_count >= self.race_laps or race_disqualified
         self._last_collision_count = collision_count
         self._last_snap = snap
         info = self._build_info(snap, metrics, collision_event=collision_event)
         info.update({
             "throttle_command": throttle,
             "steering_command": steering,
-            "step_duration_s": float(self.racer.last_step_duration_s),
+            "step_duration_s": step_duration_s,
             "official_lap_count": current_lap_count,
             "laps_since_start": max(0, current_lap_count - self._initial_lap_count),
             "warmup_lap_times_s": list(self._warmup_lap_times_s),
             "race_lap_times_s": list(self._race_lap_times_s),
             "lap_times_s": list(self._race_lap_times_s),
             "race_laps_completed": self._race_laps_count,
-            "race_collisions": self._race_collisions(collision_count),
+            "race_collisions": race_collisions,
             "race_collision_baseline": self._race_collision_baseline,
             "warmup_collisions": self._warmup_collision_count,
             "raw_collision_count": collision_count,
             "race_time_s": sum(self._race_lap_times_s),
-            "race_complete": terminated,
+            "race_complete": self._race_laps_count >= self.race_laps,
+            "race_disqualified": race_disqualified,
             "lidar_scan_rate_hz": float(snap.lidar_scan_rate),
             "control_interval_s": float(
                 getattr(self.racer, "last_control_interval_s", 0.0)
@@ -194,11 +225,52 @@ class OfficialRaceEnv(gym.Env):
             snap,
             throttle,
             steering,
-            elapsed_s=float(self.racer.last_step_duration_s),
+            elapsed_s=step_duration_s,
         )
+        reward = 0.0
+        truncated = False
+        if self.training_mode:
+            reward_components = {
+                "race_time_cost": 0.0,
+                "lap_completion": 0.0,
+                "collision_penalty": 0.0,
+                "failure_penalty": 0.0,
+            }
+            if race_was_active:
+                self._training_elapsed_s += step_duration_s
+                reward_components["race_time_cost"] = -step_duration_s
+                new_collisions = max(0, race_collisions - previous_race_collisions)
+                reward_components["collision_penalty"] = -sum(
+                    10.0 * collision_index
+                    for collision_index in range(
+                        previous_race_collisions + 1,
+                        previous_race_collisions + new_collisions + 1,
+                    )
+                )
+                new_laps = max(0, self._race_laps_count - previous_race_laps)
+                reward_components["lap_completion"] = self.training_lap_reward * new_laps
+                if race_disqualified:
+                    reward_components["failure_penalty"] = -self.training_failure_penalty
+            if (
+                race_was_active
+                and not terminated
+                and self.training_timeout_s > 0
+                and self._training_elapsed_s >= self.training_timeout_s
+            ):
+                truncated = True
+                reward_components["failure_penalty"] = -self.training_failure_penalty
+            reward = float(sum(reward_components.values()))
+            info["training_reward_components"] = reward_components
+            info["training_elapsed_s"] = self._training_elapsed_s
+            if truncated:
+                info["termination_reason"] = "training_watchdog_timeout"
+            elif self._race_laps_count >= self.race_laps:
+                info["termination_reason"] = "race_complete"
+            elif race_disqualified:
+                info["termination_reason"] = "disqualified"
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
-        return observation, 0.0, terminated, False, info
+        return observation, reward, terminated, truncated, info
 
     def _race_collisions(self, current_count: int) -> int:
         baseline = self._race_collision_baseline
@@ -214,9 +286,8 @@ class OfficialRaceEnv(gym.Env):
         collision_event: bool,
     ) -> Dict[str, Any]:
         return {
-            # Evaluation-only restricted pose used to validate that the
-            # simulator body moves. This is intentionally excluded from the
-            # observation returned to the policy.
+            # Restricted state is monitoring-only: it can support training
+            # reward/evaluation but is intentionally excluded from observation.
             "race_position": metrics.position,
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
