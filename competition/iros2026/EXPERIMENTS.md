@@ -585,3 +585,21 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   lap confirms a substantial simulator/observation/control transfer gap.
   Keep it as a training source, but do not call it an official champion or
   promote its local time as an IROS result.
+
+### Official-runtime screen of the best 50 ms local checkpoint
+
+- Date: 2026-10-07. Tested the preserved best checkpoint from
+  `optimization_action50ms_lr3e6_20261007_20261007_015433` under the official
+  Docker/API and Windows simulator, using its trained bidirectional throttle
+  semantics and the official sensor profile.
+- At the 300 s wall guard it had completed zero warm-up or race laps, recorded
+  two raw collisions, and moved at most 8.78 m from the initial pose. Its mean
+  official forward-speed observation was -0.014 m/s and its policy emitted
+  negative throttle on 49.97% of actions. The attempt is incomplete, with no
+  comparison score. Report:
+  `results/action50_lr3e6_official_300s_20261007.json`.
+- Despite a 65.84 s local 10-lap evaluation and a 50 ms training interval,
+  this checkpoint also fails to transfer to the official runtime. Its outputs
+  remain essentially a 50/50 forward/reverse policy. Next, test forward-only
+  actuator mapping on this exact checkpoint as a one-factor official-runtime
+  screen before spending more training compute.
