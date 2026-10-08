@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-08",
+  "check": "Layer 2 training-mode frontier smoke test; no PPO update",
+  "official_api_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice",
+  "simulator_image_digest": "sha256:b4bbda41fdb1da7a2eadba4350ed3a0cb5020e7eb783454e78399ef5852dbd76",
+  "reset_ips_xyz_m": [0.8005, 3.1583, 0.0592],
+  "first_step_frontier_progress_m": 15.307945415168561,
+  "action_steps": 20,
+  "action": {
+    "normalized_throttle": 0.25,
+    "steering": 0.0
+  },
+  "last_ips_xyz_m": [0.8, 1.086, 0.0552],
+  "last_step_frontier_progress_m": 17.390894025703737,
+  "frontier_advanced_total_m": 2.082948610535176,
+  "collisions": 0,
+  "last_step_reward": 2.4598216326298905,
+  "terminated": false,
+  "truncated": false
+}

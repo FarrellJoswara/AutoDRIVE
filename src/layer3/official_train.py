@@ -350,9 +350,9 @@ def train_official(
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "runtime": "official IROS 2026 API and simulator images",
             "official_api_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
-            "official_simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+            "official_simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice",
             "episode": {
-                "frontier_source": "restricted official IPS position; demonstrated route CSV",
+                "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,
                 "collision_behavior": "end this car life on each new collision",
                 "training_watchdog_s": training_timeout_s,

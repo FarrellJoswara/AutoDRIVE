@@ -16,9 +16,16 @@ from src.layer4.official_settings import OfficialTrainSettings
 
 
 API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_IMAGE", "aicar-iros2026")
-SIM_IMAGE = os.environ.get(
-    "AICAR_OFFICIAL_SIM_IMAGE",
-    "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+LEGACY_SIM_IMAGE_OVERRIDE = os.environ.get("AICAR_OFFICIAL_SIM_IMAGE")
+TRAIN_SIM_IMAGE = os.environ.get(
+    "AICAR_OFFICIAL_TRAIN_SIM_IMAGE",
+    LEGACY_SIM_IMAGE_OVERRIDE
+    or "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice",
+)
+EVALUATION_SIM_IMAGE = os.environ.get(
+    "AICAR_OFFICIAL_EVALUATION_SIM_IMAGE",
+    LEGACY_SIM_IMAGE_OVERRIDE
+    or "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
 )
 GPU_API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_GPU_IMAGE", "aicar-iros2026:cuda")
 RUNS_ROOT = ROOT / "logs" / "rl"
@@ -180,7 +187,7 @@ class OfficialRunManager:
             except (KeyError, OSError, ValueError, TypeError):
                 pass
         keys = (
-            "run_id", "display_name", "kind", "state", "created_at", "started_at",
+            "run_id", "display_name", "kind", "simulator_image", "state", "created_at", "started_at",
             "finished_at", "config", "output_dir", "log_path", "error",
             "exit_code", "stop_reason", "cleanup_error", "network_name",
             "api_container_name", "sim_container_name", "latest_fleet",
@@ -235,6 +242,7 @@ class OfficialRunManager:
                 "run_id": run_id,
                 "display_name": display,
                 "kind": kind,
+                "simulator_image": EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE,
                 "evaluation_trace_steps": evaluation_trace_steps,
                 "state": "starting",
                 "created_at": created,
@@ -263,7 +271,7 @@ class OfficialRunManager:
             (run_dir / "hub_train.log").touch()
             (run_dir / "manager_config.json").write_text(json.dumps({
                 "run_id": run_id, "display_name": display, "runtime": "official",
-                "config": config, "created_at": created,
+                "config": config, "simulator_image": row["simulator_image"], "created_at": created,
             }, indent=2), encoding="utf-8")
             host_logs = self.backend.find_host_path_for_container_path(ROOT / "logs")
             network_id = self.backend.create_official_run_network(run_id)
@@ -298,7 +306,7 @@ class OfficialRunManager:
                 row["started_at"] = _utc_now()
                 self._persist()
             for index in range(1, config["n_envs"]):
-                for role, image in ((f"api-{index}", API_IMAGE), (f"sim-{index}", SIM_IMAGE)):
+                for role, image in ((f"api-{index}", API_IMAGE), (f"sim-{index}", row["simulator_image"])):
                     with self._lock:
                         if row.get("state") != "starting":
                             raise RuntimeError("run was stopped while workers were starting")
@@ -316,7 +324,7 @@ class OfficialRunManager:
                         row.setdefault("worker_container_ids", {})[role] = worker_id
                         self._persist()
             sim_id = self.backend.create_official_run_container(
-                run_id=run_id, role="sim", image=SIM_IMAGE,
+                run_id=run_id, role="sim", image=row["simulator_image"],
                 network_name=row["network_name"],
                 entrypoint=["/bin/bash", "-lc"],
                 command=['"./AutoDRIVE Simulator.x86_64" -batchmode -nographics -ip api -port 4568'],
@@ -356,6 +364,7 @@ class OfficialRunManager:
         return {
             "aicar.display_name": row["display_name"],
             "aicar.kind": row.get("kind", "training"),
+            "aicar.simulator_image": row["simulator_image"],
             "aicar.output_dir": row["output_dir"],
             "aicar.config": json.dumps(row["config"], separators=(",", ":")),
             "aicar.created_at": row["created_at"],

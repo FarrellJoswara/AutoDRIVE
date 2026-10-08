@@ -105,11 +105,13 @@ not simulated race-time limits and do not affect the measured score.
 
 ## Train against the official simulator
 
-Use the same `2026-iros-compete` simulator and Devkit images for PPO training
-when producing a policy intended for this race. The custom Layer 2 Unity fleet
-remains useful for development, but its physics and episode behavior are not a
-substitute for official-image training. The official trainer uses one official
-simulator instance, the same scan-paced ROS 2 action path and the shared
+Use the official `2026-iros-practice` simulator image for PPO training: the
+competition identifies Porto as the qualification practice track. Mission
+Control selects this image for training and uses `2026-iros-compete` for fresh
+Replay evaluations. The official API/Devkit image remains `2026-iros-compete`.
+The custom Layer 2 Unity fleet remains useful for development, but its physics
+and episode behavior are not a substitute for official-image training. The
+official trainer uses one official simulator instance, the same scan-paced ROS 2 action path and the shared
 `OfficialObservationBuilder` used by deployed policies. It runs one complete
 warm-up plus 10-lap race per episode; collisions reset to official checkpoints
 and only disqualification ends an episode early. Training may use the guide's
@@ -138,7 +140,7 @@ connection at the trainer container's relay:
 ```powershell
 docker run --rm --name aicar-official-train-sim `
   --network aicar-official-train `
-  --entrypoint /bin/bash autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete `
+  --entrypoint /bin/bash autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice `
   -lc './AutoDRIVE\ Simulator.x86_64 -batchmode -nographics -ip api -port 4568'
 ```
 
@@ -149,7 +151,7 @@ metrics. Official training publishes the simulator car, normalized LiDAR
 display, lap/collision counters, PPO metrics, and rollout progress to the Watch
 page. The launcher defaults `HUB_URL` to `http://host.docker.internal:8090`;
 set `AICAR_HUB_URL` or `HUB_URL` for another hub address. Official PPO training
-uses the demonstrated-route frontier for progress, charges simulated time, and
+uses the Porto mesh-aligned frontier for progress, charges simulated time, and
 ends a car life on collision. A collision subtracts the fixed collision cost
 plus 100% of that life’s positive frontier return; route progress is not
 awarded again after reset. Lap crossings are diagnostics only and do not award

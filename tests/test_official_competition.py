@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 import threading
 import time
@@ -268,18 +269,30 @@ def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
 
 def test_official_training_frontier_route_is_closed_and_spawn_aligned():
     route_path = Path(__file__).resolve().parents[1] / "competition" / "iros2026" / "official_centerline.csv"
+    metadata = json.loads(route_path.with_name("official_frontier.json").read_text(encoding="utf-8"))
+    assert metadata["simulator_image"].endswith(":2026-iros-practice")
+    assert metadata["spawn_xy"] == [0.8, 3.1583]
     tracker = RouteProgressTracker.from_csv(route_path)
     assert tracker.closed
-    assert 50.0 <= tracker.length_m <= 70.0
-    state = tracker.reset(0.8, 3.1583, now=0.0)
+    assert 30.0 <= tracker.length_m <= 32.0
+    spawn = tracker._project(0.801, 3.1583, None)
+    assert spawn is not None
+    assert spawn[1] < 0.1
+    state = tracker.reset(0.801, 3.1583, now=0.0)
     assert state["current_projection_valid"]
-    assert state["progress_m"] < 0.1
+    assert state["advanced_m"] == 0.0
+
+    # Walk a full synthetic lap separately from the real spawn anchor. This
+    # verifies route ordering and monotonic high-water progress, not simulator
+    # motion or competition performance.
+    motion = RouteProgressTracker.from_csv(route_path)
+    state = motion.reset(float(motion.points[0, 0]), float(motion.points[0, 1]), now=0.0)
     previous = state["progress_m"]
-    for index, point in enumerate(tracker.points[1:-1], start=1):
-        state = tracker.update(float(point[0]), float(point[1]), now=index * 0.05)
+    for index, point in enumerate(motion.points[1:-1], start=1):
+        state = motion.update(float(point[0]), float(point[1]), now=index * 0.05)
         assert state["progress_m"] >= previous
         previous = state["progress_m"]
-    assert previous > tracker.length_m * 0.9
+    assert previous > motion.length_m * 0.9
 
 
 class FakeRacer:

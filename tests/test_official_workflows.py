@@ -21,6 +21,7 @@ def manager(tmp_path):
 
 def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
     run = manager.create_run({"n_envs": 3})
+    assert run["simulator_image"].endswith(":2026-iros-practice")
     containers = list(manager.backend.containers.values())
     assert len(containers) == 6
     apis = {item["Labels"]["aicar.role"]: dict(value.split("=", 1) for value in item["kwargs"].get("env", []))
@@ -30,6 +31,11 @@ def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
     assert apis["api-1"]["ROS_DOMAIN_ID"] == "1"
     assert apis["api-2"]["ROS_DOMAIN_ID"] == "2"
     assert all(apis[role]["AICAR_MODE"] == "bridge" for role in ("api-1", "api-2"))
+    simulator_images = {
+        item["kwargs"]["image"] for item in containers
+        if item["Labels"]["aicar.role"].startswith("sim")
+    }
+    assert simulator_images == {"autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"}
     manager.stop_run(run["run_id"])
     assert not manager.backend.containers
     assert not manager.backend.networks
@@ -112,12 +118,16 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
         status = replay.start(model_path=path, trace_steps=500)
     run = manager.get_run(status["run_id"])
     assert run["kind"] == "evaluation"
+    assert run["simulator_image"].endswith(":2026-iros-compete")
     api = next(item for item in manager.backend.containers.values() if item["Labels"]["aicar.role"] == "api")
     env = dict(value.split("=", 1) for value in api["kwargs"]["env"])
     assert env["AICAR_MODE"] == "evaluate"
     assert env["AICAR_OBSERVATION_PROFILE"] == "official_sensors_history"
     assert env["AICAR_THROTTLE_MODE"] == "forward_only"
     assert env["AICAR_EVALUATION_TRACE_STEPS"] == "500"
+    sim = next(item for item in manager.backend.containers.values()
+               if item["Labels"]["aicar.role"] == "sim")
+    assert sim["kwargs"]["image"] == "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete"
     Path(run["output_dir"], "evaluation.json").write_text(json.dumps({"completed_attempts": 0, "runs": []}))
     manager.reconcile()
     assert replay.status()["evaluation"]["completed_attempts"] == 0

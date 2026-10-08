@@ -1,6 +1,33 @@
 {
-  "source": "restricted official AutoDRIVE IPS trace",
-  "recorded_spawn_xy": [0.8, 3.1583],
-  "spawn_xy": [0.8, 3.1583],
-  "frontier_corridor_half_width_m": 2.0
+  "source": "official IROS 2026 practice Porto Track mesh aligned to the repository Porto map centerline",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice",
+  "simulator_image_digest": "sha256:b4bbda41fdb1da7a2eadba4350ed3a0cb5020e7eb783454e78399ef5852dbd76",
+  "active_gameobject": "Porto Track",
+  "source_centerline": "simulator/maps/porto/occupancy/centerline.csv",
+  "alignment": {
+    "method": "2D rigid alignment of the repository Porto track mesh to the official practice image Porto mesh",
+    "map_to_unity_xz_rotation_rad": 0.010325000753480274,
+    "map_to_unity_xz_translation_m": [
+      2.90619278,
+      -1.25150765
+    ],
+    "official_mesh_to_unity_xz": "UnityPy OBJ export reverses X; restore X sign, then apply the Infrastructure transform [-10, -14] in X/Z",
+    "unity_to_ros_xy": "ros_x = unity_z; ros_y = -unity_x + 0.1583",
+    "mesh_registration_median_error_m": 0.0906932063,
+    "mesh_registration_p90_error_m": 0.2463451526,
+  "route_to_spawn_error_m": 0.0884,
+  "spawn_tangent_error_deg": 0.5916
+  },
+  "spawn_source": "official practice simulator live /autodrive/roboracer_1/ips at initial reset; nominal transform checked against the scene Roboracer spawn",
+  "spawn_xy": [
+    0.8,
+    3.1583
+  ],
+  "observed_live_spawn_xy": [
+    0.801,
+    3.1583
+  ],
+  "route_length_m": 31.11688512497532,
+  "route_points": 136,
+  "corridor_widths": "per-point left/right half-widths inherited from the Porto map centerline"
 }
