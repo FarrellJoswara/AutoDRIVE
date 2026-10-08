@@ -57,6 +57,17 @@ class LidarGapPolicy:
         index = int(np.argmax(lengths))
         return int(starts[index]), int(ends[index])
 
+    @classmethod
+    def _widest_gap_center_index(
+        cls, ranges: np.ndarray, minimum_gap_m: float
+    ) -> int | None:
+        """Return the center ray of the widest safe contiguous opening."""
+        gap = cls._longest_true_run(np.asarray(ranges) >= float(minimum_gap_m))
+        if gap is None:
+            return None
+        start, end = gap
+        return (start + end - 1) // 2
+
     def action(self, observation: dict[str, np.ndarray]) -> np.ndarray:
         ranges = np.asarray(observation["lidar"], dtype=np.float32).reshape(-1)
         if ranges.size != 1081 or not np.isfinite(ranges).all():
@@ -80,18 +91,10 @@ class LidarGapPolicy:
         )
         smooth[np.abs(sector_angles - sector_angles[nearest]) <= bubble_half_angle] = 0.0
 
-        gap = self._longest_true_run(smooth >= self.minimum_gap_m)
-        if gap is None:
+        target_idx = self._widest_gap_center_index(smooth, self.minimum_gap_m)
+        if target_idx is None:
             scores = smooth - 0.5 * np.abs(sector_angles)
             target_idx = int(np.argmax(scores))
-        else:
-            start, end = gap
-            # In the widest safe interval, aim toward its farthest ray. This
-            # leaves steering to actual free space rather than a fixed target.
-            # A small center preference breaks equal-range ties away from the
-            # scan's extreme rays, which otherwise causes a hard edge turn.
-            scores = smooth[start:end] - 0.5 * np.abs(sector_angles[start:end])
-            target_idx = start + int(np.argmax(scores))
 
         target_angle = float(sector_angles[target_idx])
         # Positive LiDAR angle points left; the official actuator's positive
