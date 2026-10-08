@@ -902,3 +902,12 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   traces and predate the exact 80k checkpoint used by the four-epoch official
   continuation. They are withdrawn as its baseline; do not use those laps to
   claim improvement.
+
+- **2026-10-07 — learning-rate snapshot evaluation:** the preserved 92,288-step
+  candidate reached warm-up in 171.77 s (284 warm-up collisions) but was
+  disqualified at 11 scored collisions before its first race lap. The exact
+  80k source's one attempt had 194.55 s warm-up and 374 warm-up collisions,
+  also followed by disqualification before a scored lap. This is a weak
+  warm-up-only signal, not a valid time or promotion; a short continuation is
+  being considered against the same official setup. See
+  `results/official_learning_rate_1e4_experiment_20261007.md`.

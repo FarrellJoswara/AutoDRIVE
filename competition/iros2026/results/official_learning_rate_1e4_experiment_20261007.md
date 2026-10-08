@@ -31,3 +31,10 @@ The prior four-epoch update used learning rate `1e-5`; at its latest rollout the
 - Four PPO updates after the resume. Approximate KL values observed: 0.0360, 0.0150, 0.0328; clip fractions: 0.214, 0.074, 0.190; explained variance: -0.020, 0.051, 0.185. Updates are now materially larger than the `1e-5` trial; no divergence/error has appeared.
 - At 84,800 global steps the run remained active, had seven episodes and no completed lap yet. The live car had zero current-episode collisions and positive body-forward speed at the last frame; this is only a snapshot, not a performance result.
 - Continue to the bounded run end while monitoring stability. Evaluate only saved official-policy checkpoints in fresh official simulator processes. No promotion decision yet.
+
+### 92,288-step checkpoint evaluation and continuation decision
+
+- The learning-rate run was stopped cleanly after 12 PPO updates at its preserved 92,288-step checkpoint (SHA-256 `D0C3DE7CA6458C5314059B0503EE37DC623EE985E03E3A54F486A8BD371F5796`); the source checkpoint remains untouched and all run checkpoints are retained.
+- PPO stayed numerically stable. Later updates had approximate KL around 0.0106–0.0196, clip fraction 0.105–0.142, and explained variance from 0.04 to 0.24. The logged episode mean return stayed near -1.61e3 and 18 episodes had produced zero completed laps at the checkpoint.
+- One fresh official evaluation of the 92,288-step checkpoint completed warm-up in 171.77 s with 284 warm-up collisions, then reached 11 scored collisions before completing any scored lap (race disqualification at 178.89 s). Raw report: `official_lr1e4_92288_allow_attempt1_20261007.json`.
+- Compared with the exact 80k source's one `allow` attempt (194.55 s warm-up, 374 warm-up collisions, then 11 scored collisions before a race lap), this is a modest warm-up-only improvement but still no race lap and no valid score. One trial each is not enough to claim a performance gain. Continue only a short same-settings extension to check whether the improvement grows; do not promote this policy.
