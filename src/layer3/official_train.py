@@ -358,7 +358,7 @@ def train_official(
             "episode": {
                 "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,
-                "collision_behavior": "end this car life on each new collision",
+                "collision_behavior": "apply collision penalty; continue the training life through official last-checkpoint recovery",
                 "training_watchdog_s": training_timeout_s,
                 "laps": "diagnostics only; do not terminate or reward lap crossings",
             },
