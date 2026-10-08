@@ -24,7 +24,7 @@ class StraightLineDiagnostic:
 
 def load_policy(
     model_path: Path, *, device: str = "cpu", controller: str = "ppo",
-    observation_profile: str = "official_sensors",
+    observation_profile: str = "official_sensors_camera",
 ) -> Any:
     if controller == "lidar_gap":
         from src.layer3.lidar_gap_policy import load_gap_policy
@@ -45,7 +45,7 @@ def load_ppo_checkpoint(
     model_path: Path,
     *,
     device: str = "cpu",
-    observation_profile: str = "official_sensors",
+    observation_profile: str = "official_sensors_camera",
     env: Any = None,
     learning_rate: float = 1e-5,
     clip_range: float = 0.2,
@@ -189,7 +189,7 @@ def run_policy(
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
     controller: str = "ppo",
-    observation_profile: str = "official_sensors",
+    observation_profile: str = "official_sensors_camera",
 ) -> None:
     """Drive continuously; no reset, odometry, race counters, or map data."""
     from src.layer1.ros2_racer import RacerRos2
@@ -254,7 +254,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
-        default="official_sensors",
+        default="official_sensors_camera",
     )
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--timeout-s", type=float, default=5.0)

@@ -31,6 +31,12 @@
     "tz": 0.0,
     "source": "ros_identity"
   },
+  "official_world_alignment": {
+    "rotation_rad": -1.5604713210928578,
+    "translation_x_m": -1.2515076566720338,
+    "translation_z_m": -2.7478927941899736,
+    "source": "Rigid fit from Porto occupancy centerline to IROS 2026 official practice centerline; RMS 0.0000004 m"
+  },
   "spawn": {
     "x": 4.175001,
     "y": 0.05,

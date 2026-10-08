@@ -25,7 +25,7 @@ def build_env(
     throttle_mode: str = "bidirectional",
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
-    observation_profile: str = "simulator",
+    observation_profile: str = "simulator_camera",
     max_episode_steps: int = 0,
     stagnation_speed_threshold: float = 0.15,
     stagnation_steps: int = 50,

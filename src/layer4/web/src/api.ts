@@ -151,9 +151,9 @@ export interface Settings {
   auto_launch: boolean;
   simulator_mode: "legacy" | "fixed_camera_on" | "fixed_camera_off";
   action_interval_s: number | null;
-  observation_profile: "simulator" | "official_sensors" | "official_sensors_history";
+  observation_profile: "simulator" | "simulator_camera" | "official_sensors" | "official_sensors_history" | "official_sensors_camera";
   throttle_mode: "bidirectional" | "forward_only";
-  policy_architecture: "lidar_cnn" | "lidar_cnn_pooled" | "temporal_lidar_cnn";
+  policy_architecture: "lidar_cnn" | "lidar_cnn_pooled" | "temporal_lidar_cnn" | "lidar_camera_cnn";
   steering_action_scale: number;
   straight_throttle_gain: number;
   straight_throttle_steering_threshold: number;
@@ -259,6 +259,8 @@ export interface OfficialTrainSettings {
   collision_penalty_magnitude: number;
   collision_reward_percent: number;
   failed_episode_penalty: number;
+  backward_speed_penalty_scale: number;
+  episode_failure_reward_percent: number;
   observation_profile: "official_sensors" | "official_sensors_history" | "official_sensors_camera";
   steering_action_scale: number;
   straight_throttle_gain: number;
@@ -581,6 +583,17 @@ export interface MapCatalogEntry {
   centerline_url?: string | null;
   centerline_status?: string;
   mesh_preview_url?: string | null;
+  /** Display-only map → official simulator world alignment; physics stays unchanged. */
+  official_world_alignment?: {
+    rotation_rad: number;
+    translation_x_m: number;
+    translation_z_m: number;
+    source?: string;
+  } | null;
+}
+
+export function getOfficialRunCameraUrl(runId: string, envId: number, refresh: number): string {
+  return `/train/runs/${encodeURIComponent(runId)}/camera/${envId}?v=${refresh}`;
 }
 
 export function getReplayStatus(): Promise<ReplayStatus> {

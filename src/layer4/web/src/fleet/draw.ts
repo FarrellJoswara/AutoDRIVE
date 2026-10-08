@@ -98,12 +98,29 @@ export function drawStaticMap(
     // and was shifting the underlay off the fleet glyphs.
     const res = map.yaml.resolution;
     const [oxW, ozW] = map.yaml.origin;
-    const worldW = map.width * res;
-    const worldH = map.height * res;
-    const x0 = ox + oxW * scale;
-    const y0 = oy - (ozW + worldH) * scale;
+    const crop = map.contentBounds ?? {
+      minX: 0,
+      maxX: map.width,
+      minY: 0,
+      maxY: map.height,
+    };
+    const sourceW = Math.max(1, crop.maxX - crop.minX);
+    const sourceH = Math.max(1, crop.maxY - crop.minY);
+    const x0 = ox + (oxW + crop.minX * res) * scale;
+    const zTop = ozW + (map.height - crop.minY) * res;
+    const y0 = oy - zTop * scale;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.drawImage(map.image, x0, y0, worldW * scale, worldH * scale);
+    ctx.drawImage(
+      map.image,
+      crop.minX,
+      crop.minY,
+      sourceW,
+      sourceH,
+      x0,
+      y0,
+      sourceW * res * scale,
+      sourceH * res * scale
+    );
   } else {
     // Grid fallback
     ctx.save();

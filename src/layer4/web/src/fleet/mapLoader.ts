@@ -20,6 +20,12 @@ export interface LoadedMap {
   contentBounds: { minX: number; maxX: number; minY: number; maxY: number } | null;
 }
 
+export interface MapWorldAlignment {
+  rotation_rad: number;
+  translation_x_m: number;
+  translation_z_m: number;
+}
+
 /** Catalog id from hub (`none` = grid only). */
 export type MapId = string;
 
@@ -193,6 +199,22 @@ export async function loadMap(id: string, yamlUrl: string): Promise<LoadedMap> {
 }
 
 /** Bounds of map in world metres (x,z). Fleet poses are already map metres. */
+/** Convert an official simulator point into this map asset's display frame. */
+export function transformWorldPointToMap(
+  point: [number, number],
+  alignment?: MapWorldAlignment | null
+): [number, number] {
+  if (!alignment) return point;
+  const c = Math.cos(alignment.rotation_rad);
+  const s = Math.sin(alignment.rotation_rad);
+  const x = point[0] - alignment.translation_x_m;
+  const z = point[1] - alignment.translation_z_m;
+  return [
+    c * x + s * z,
+    -s * x + c * z,
+  ];
+}
+
 export function mapWorldBounds(map: LoadedMap): {
   minX: number;
   maxX: number;
@@ -202,18 +224,13 @@ export function mapWorldBounds(map: LoadedMap): {
   const res = map.yaml.resolution;
   const [ox, oz] = map.yaml.origin;
   const content = map.contentBounds;
-  if (content) {
-    return {
-      minX: ox + content.minX * res,
-      maxX: ox + content.maxX * res,
-      minZ: oz + (map.height - content.maxY) * res,
-      maxZ: oz + (map.height - content.minY) * res,
-    };
-  }
-  return {
-    minX: ox,
-    maxX: ox + map.width * res,
-    minZ: oz,
-    maxZ: oz + map.height * res,
-  };
+  const minMapX = content ? ox + content.minX * res : ox;
+  const maxMapX = content ? ox + content.maxX * res : ox + map.width * res;
+  const minMapZ = content
+    ? oz + (map.height - content.maxY) * res
+    : oz;
+  const maxMapZ = content
+    ? oz + (map.height - content.minY) * res
+    : oz + map.height * res;
+  return { minX: minMapX, maxX: maxMapX, minZ: minMapZ, maxZ: maxMapZ };
 }

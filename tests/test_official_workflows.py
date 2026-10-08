@@ -158,11 +158,42 @@ def test_official_settings_bound_worker_count():
     settings = OfficialTrainSettings(n_envs=2)
     environment = settings.to_container_env(hub_url="http://hub", run_id="r")
     assert environment["AICAR_TRAIN_N_ENVS"] == "2"
-    assert settings.collision_reward_percent == 100.0
-    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "100.0"
+    assert settings.collision_reward_percent == 50.0
+    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "50.0"
+    assert settings.backward_speed_penalty_scale == 10.0
+    assert environment["AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE"] == "10.0"
+    assert environment["AICAR_TRAIN_FAILURE_REWARD_PERCENT"] == "50.0"
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"
+
+
+def test_camera_endpoint_only_serves_camera_runs(tmp_path, monkeypatch):
+    from src.layer4.hub import app as hub_app
+
+    output = tmp_path / "logs" / "rl" / "official_run_cam"
+    camera_dir = output / "camera"
+    camera_dir.mkdir(parents=True)
+    image_path = camera_dir / "env-0.jpg"
+    image_path.write_bytes(b"jpeg fixture")
+
+    class Runs:
+        profile = "official_sensors_camera"
+
+        def get_run(self, run_id):
+            return {"run_id": run_id, "config": {"observation_profile": self.profile}, "output_dir": str(output)}
+
+    monkeypatch.setattr(hub_app, "official_runs", Runs())
+    monkeypatch.setattr(hub_app, "ROOT", tmp_path)
+    response = __import__("asyncio").run(hub_app.get_official_run_camera("cam", 0))
+    assert Path(response.path) == image_path
+    assert response.media_type == "image/jpeg"
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+
+    hub_app.official_runs.profile = "official_sensors"
+    with pytest.raises(hub_app.HTTPException) as error:
+        __import__("asyncio").run(hub_app.get_official_run_camera("cam", 1))
+    assert error.value.status_code == 404
 
 
 def test_completed_progress_uses_saved_count_not_sampled_telemetry(manager):

@@ -58,8 +58,10 @@ class OfficialRaceEnv(gym.Env):
         training_timeout_s: float = 600.0,
         training_time_cost_per_simulated_second: float = 5.0,
         training_collision_penalty_magnitude: float = 100.0,
-        training_collision_reward_percent: float = 100.0,
+        training_collision_reward_percent: float = 50.0,
         training_failure_penalty: float = 100.0,
+        training_backward_speed_penalty_scale: float = 10.0,
+        training_failure_reward_percent: float = 50.0,
         training_frontier_stagnation_s: float = 10.0,
         frontier_path: Optional[Path] = None,
     ) -> None:
@@ -88,6 +90,8 @@ class OfficialRaceEnv(gym.Env):
         self.frame_timeout_s = min(float(frame_timeout_s), float(timeout_s))
         self.training_timeout_s = max(0.0, float(training_timeout_s))
         self.training_failure_penalty = max(0.0, float(training_failure_penalty))
+        self.training_backward_speed_penalty_scale = max(0.0, float(training_backward_speed_penalty_scale))
+        self.training_failure_reward_percent = max(0.0, float(training_failure_reward_percent))
         self.training_time_cost_per_simulated_second = max(
             0.0, float(training_time_cost_per_simulated_second)
         )
@@ -356,7 +360,10 @@ class OfficialRaceEnv(gym.Env):
                 and self._training_elapsed_s >= self.training_timeout_s
             )
             reason = "collision" if collision_termination else "frontier_stagnation" if frontier_stalled else None
-            episode_failure = bool(truncated)
+            # A frontier stall is a terminal training failure just like the
+            # watchdog timeout. Keep it out of the collision branch, which has
+            # its own configured penalty and positive-return clawback.
+            episode_failure = bool(frontier_stalled or truncated)
             components = compute_reward_components(
                 v_long=float(snap.v_long),
                 step_duration_s=step_duration_s,
@@ -370,11 +377,19 @@ class OfficialRaceEnv(gym.Env):
                 prev_steering=self._last_training_steering,
                 steering=float(steering),
                 cfg=RewardConfig(
+                    route_progress_scale=10.0,
+                    frontier_pace_target_mps=6.0,
+                    frontier_pace_bonus_strength=1.0,
+                    frontier_pace_source="episode_average",
                     time_penalty_per_second=self.training_time_cost_per_simulated_second,
+                    backward_speed_penalty_scale=self.training_backward_speed_penalty_scale,
+                    backward_speed_deadband_mps=0.1,
                     collision_penalty_magnitude=self.training_collision_penalty_magnitude,
                     collision_reward_percent=self.training_collision_reward_percent,
                     episode_failure_penalty_magnitude=self.training_failure_penalty,
-                    episode_failure_reward_percent=100.0,
+                    episode_failure_reward_percent=self.training_failure_reward_percent,
+                    slip_penalty=0.0,
+                    steer_jerk_penalty=0.0,
                 ),
             )
             reward = float(components["total"])

@@ -11,8 +11,8 @@ import {
   resolveBounds,
   worldToScreenTransform,
 } from "./draw";
-import type { LoadedMap, MapId } from "./mapLoader";
-import { loadMap } from "./mapLoader";
+import type { LoadedMap, MapId, MapWorldAlignment } from "./mapLoader";
+import { loadMap, transformWorldPointToMap } from "./mapLoader";
 import {
   getFleetHot,
   getFleetHotAgeMs,
@@ -35,6 +35,8 @@ export interface FleetCanvasProps {
   mapId: MapId;
   /** Hub catalog yaml URL; null when mapId is none or unknown. */
   mapYamlUrl: string | null;
+  /** Display-only transform used when official simulator coordinates differ from map coordinates. */
+  officialWorldAlignment?: MapWorldAlignment | null;
   /** Side-panel sync — last React-visible fleet (throttled) */
   fleetPanel: FleetTelemetry | null;
   evaluatorCar?: EvaluatorCarTelemetry | null;
@@ -47,6 +49,35 @@ export interface FleetCanvasProps {
   telemetryAgeMs?: number;
   runState?: string;
   phaseOverride?: TrainingPhaseTelemetry | null;
+}
+
+type MapLine = [[number, number], [number, number]] | null | undefined;
+
+function transformLineToMap(line: MapLine, alignment: MapWorldAlignment): MapLine {
+  return line
+    ? [
+        transformWorldPointToMap(line[0], alignment),
+        transformWorldPointToMap(line[1], alignment),
+      ]
+    : line;
+}
+
+function transformFleetToMapFrame(
+  fleet: FleetTelemetry,
+  alignment: MapWorldAlignment
+): FleetTelemetry {
+  return {
+    ...fleet,
+    lap_gate: transformLineToMap(fleet.lap_gate, alignment),
+    cars: fleet.cars.map((car) => ({
+      ...car,
+      // Official practice positions and route bars use simulator-world axes.
+      pose: car.pose ? transformWorldPointToMap(car.pose, alignment) : null,
+      frontier_line: transformLineToMap(car.frontier_line, alignment),
+      current_progress_line: transformLineToMap(car.current_progress_line, alignment),
+      // Bridge yaw is already in the Porto map frame; keep its measured heading.
+    })),
+  };
 }
 
 /**
@@ -234,6 +265,13 @@ export function FleetCanvas(props: FleetCanvasProps) {
       view.selectedEnvId = p.selectedEnvId;
 
       const map = mapRef.current;
+      const alignment = fleet?.runtime === "official" ? p.officialWorldAlignment ?? null : null;
+      // Keep the occupancy image in its native, wide orientation. Official
+      // practice positions and route bars are inverse-transformed into that
+      // frame; Bridge yaw is already expressed in the map frame.
+      const displayFleet = fleet && alignment
+        ? transformFleetToMapFrame(fleet, alignment)
+        : fleet;
       let evaluatorCar: EvaluatorCarTelemetry | null = null;
       if (p.fleetSource !== "replay" && p.evaluatorActive) {
         const live = getEvaluatorLiveHot();
@@ -241,7 +279,13 @@ export function FleetCanvas(props: FleetCanvasProps) {
           live && live.snapshot_timesteps === p.evaluatorSnapshotTimesteps ? live : null;
         evaluatorCar = matchingLive ?? p.evaluatorCar ?? null;
       }
-      const bounds = resolveBounds(map, view, fleet, evaluatorCar?.pose);
+      if (evaluatorCar && alignment) {
+        evaluatorCar = {
+          ...evaluatorCar,
+          pose: transformWorldPointToMap(evaluatorCar.pose, alignment),
+        };
+      }
+      const bounds = resolveBounds(map, view, displayFleet, evaluatorCar?.pose);
       const boundsKey =
         bounds.minX.toFixed(2) +
         ":" +
@@ -252,7 +296,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
         bounds.maxZ.toFixed(2);
 
       const currentFleetCars = view.showFleet
-        ? fleet?.cars ?? []
+        ? displayFleet?.cars ?? []
         : [];
 
       const overlayKey =
@@ -287,7 +331,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
 
       const opts: DrawFrameOpts = {
         map,
-        fleet,
+        fleet: displayFleet,
         evaluatorCar,
         staleLabel,
         ppoProgress,
@@ -302,7 +346,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
         if (octx) drawTelemetryOverlay(octx, opts, bounds);
       }
 
-      const fleetCarsKey = `${fleet?.ts ?? ""}:${fleet?.step ?? ""}:${view.showFleet}:${view.selectedEnvId}:${boundsKey}`;
+      const fleetCarsKey = `${displayFleet?.ts ?? ""}:${displayFleet?.step ?? ""}:${view.showFleet}:${view.selectedEnvId}:${boundsKey}`;
       const fleetPoseKey = `${view.showFleet}:${view.selectedEnvId}:${boundsKey}:${fleetCarsKey}`;
       const fleetBoundsChanged = boundsKey !== lastFleetBoundsKey;
       if (fleetPoseKey !== lastFleetCarsKey || fleetBoundsChanged) {

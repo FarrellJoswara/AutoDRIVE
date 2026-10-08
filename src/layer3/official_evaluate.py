@@ -456,7 +456,7 @@ def evaluate(
     output_path: Optional[Path] = None,
     controller: str = "ppo",
     trace_steps: int = 0,
-    observation_profile: str = "official_sensors",
+    observation_profile: str = "official_sensors_camera",
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
@@ -582,7 +582,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
-        default="official_sensors",
+        default="official_sensors_camera",
     )
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")

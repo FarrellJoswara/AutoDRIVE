@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchMaps,
   getOfficialRunLiveTelemetry,
+  getOfficialRunCameraUrl,
   getOfficialRunTelemetry,
   getOfficialRuns,
   type EvaluationResult,
@@ -158,6 +159,7 @@ function OverviewTile({
           selectedEnvId={-1}
           mapId={mapId}
           mapYamlUrl={mapId === "none" ? null : map?.yaml_url ?? null}
+          officialWorldAlignment={map?.official_world_alignment ?? null}
           fleetPanel={fleet}
           telemetryOverride={fleet}
           telemetryAgeMs={canvasAge}
@@ -200,6 +202,8 @@ export function WatchPage() {
   const [showProgress, setShowProgress] = useState(true);
   const [showLidar, setShowLidar] = useState(true);
   const [selectedEnvId, setSelectedEnvId] = useState<number | null>(null);
+  const [cameraRefresh, setCameraRefresh] = useState(() => Date.now());
+  const [cameraReady, setCameraReady] = useState(false);
   const selectedRunRef = useRef<string | null>(null);
 
   const selectedRun = runList.runs.find((run) => run.run_id === selectedRunId) ?? null;
@@ -226,6 +230,17 @@ export function WatchPage() {
     return [...ids];
   }, [runList.runs, selectedRunId]);
   const runIdsKey = runIdsToPoll.join("|");
+  const cameraEnvId = selectedEnvId != null && selectedEnvId >= 0
+    ? selectedEnvId
+    : cars[0]?.env_id ?? 0;
+  const hasCamera = selectedRun?.config?.observation_profile === "official_sensors_camera";
+
+  useEffect(() => {
+    setCameraReady(false);
+    if (viewMode !== "focus" || !selectedRun || !hasCamera || !ACTIVE.has(selectedRun.state)) return;
+    const timer = window.setInterval(() => setCameraRefresh(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [viewMode, selectedRun?.run_id, selectedRun?.state, hasCamera]);
 
   useEffect(() => {
     let cancelled = false;
@@ -364,9 +379,25 @@ export function WatchPage() {
         </div>
         <div className="fleet-layout">
           <div className="fleet-canvas-stack">
-            <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} fleetPanel={fleet} trainingStep={currentStep} rolloutSize={rolloutSize} />
+            <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} officialWorldAlignment={selectedMap?.official_world_alignment ?? null} fleetPanel={fleet} runState={selectedRun.state} phaseOverride={phase} trainingStep={currentStep} rolloutSize={rolloutSize} />
           </div>
           <aside className="fleet-side">
+            <section aria-label="Front camera" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Front camera · Env {cameraEnvId}</h3>
+              {hasCamera ? <>
+                <div style={{ width: "100%", aspectRatio: "16 / 9", background: "#080d0b", border: "1px solid var(--line, #263b34)", borderRadius: 6, overflow: "hidden", display: "grid", placeItems: "center" }}>
+                  <img
+                    src={getOfficialRunCameraUrl(selectedRun.run_id, cameraEnvId, cameraRefresh)}
+                    alt={`Official simulator front camera, environment ${cameraEnvId}`}
+                    onLoad={() => setCameraReady(true)}
+                    onError={() => setCameraReady(false)}
+                    style={{ width: "100%", height: "100%", objectFit: "contain", display: cameraReady ? "block" : "none" }}
+                  />
+                  {!cameraReady && <span className="meta">{active ? "Waiting for camera frame…" : "No saved camera frame for this environment."}</span>}
+                </div>
+                <small className="meta">{active ? "Live frame · refreshes every second" : "Last saved frame"}</small>
+              </> : <p className="meta">This run was created without camera observations.</p>}
+            </section>
             <h3>Run telemetry</h3>
             {!fleet ? <p className="meta">No car frame has arrived for this run yet. The run may still be starting.</p> : <>
               <dl className="fleet-stats">
@@ -385,9 +416,9 @@ export function WatchPage() {
         <section className="official-watch-data">
           <article className="training-progress-panel"><h3>Training metrics</h3>
             {metrics ? <div className="official-metric-grid">
-              <div><span>Step</span><strong>{metrics.step.toLocaleString()}</strong></div>
+              <div><span>Step</span><strong>{metrics.step?.toLocaleString?.() ?? "—"}</strong></div>
               <div><span>Rollout reward</span><strong>{formatNumber(metrics.reward, 3)}</strong></div>
-              <div><span>Episode</span><strong>{metrics.episode.toLocaleString()}</strong></div>
+              <div><span>Episode</span><strong>{metrics.episode?.toLocaleString?.() ?? "—"}</strong></div>
               <div><span>Loss</span><strong>{formatNumber(metrics.loss, 5)}</strong></div>
               <div><span>PPO phase</span><strong>{phase?.phase ?? "—"}</strong></div>
               <div><span>Next update</span><strong>{active ? nextUpdate.toLocaleString() : "—"}</strong></div>

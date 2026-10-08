@@ -40,3 +40,20 @@ def test_custom_watch_keeps_unity_xz_ground_plane():
     )
 
     assert sample["cars"][0]["pose"] == [1.25, -2.5]
+
+
+def test_official_camera_frame_is_saved_as_bounded_latest_jpeg(tmp_path):
+    from PIL import Image
+
+    callback = HubTelemetryCallback(
+        hub_url="http://localhost", run_id="test", runtime="official", run_dir=tmp_path
+    )
+    callback.locals = {"new_obs": {"camera": np.full((2, 3, 90, 160), 127, dtype=np.uint8)}}
+    callback._persist_camera_frames()
+
+    paths = sorted((tmp_path / "camera").glob("*.jpg"))
+    assert [path.name for path in paths] == ["env-0.jpg", "env-1.jpg"]
+    with Image.open(paths[0]) as image:
+        assert image.size == (160, 90)
+        assert image.mode == "RGB"
+    assert not list((tmp_path / "camera").glob("*.tmp"))

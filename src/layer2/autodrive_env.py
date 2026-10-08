@@ -168,7 +168,7 @@ class AutoDriveEnv(gym.Env):
         # Optional throttle gain when the executed steering command is small.
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
-        observation_profile: str = "simulator",
+        observation_profile: str = "simulator_camera",
     ) -> None:
         # Required Gymnasium base init (seeding hooks, etc.).
         super().__init__()
@@ -187,9 +187,12 @@ class AutoDriveEnv(gym.Env):
                 f"Layer 2 v1 requires full {LIDAR_BEAMS}-beam LiDAR "
                 f"(no downsampling); got {lidar_beams}"
             )
-        if observation_profile not in ("simulator", "official_sensors", "official_sensors_history"):
+        if observation_profile not in (
+            "simulator", "simulator_camera", "official_sensors",
+            "official_sensors_history", "official_sensors_camera",
+        ):
             raise ValueError(
-                "observation_profile must be 'simulator', 'official_sensors', or 'official_sensors_history'"
+                "unsupported observation_profile; expected simulator[_camera] or official_sensors[_history|_camera]"
             )
         map_policy_throttle(0.0, throttle_mode)
 
@@ -294,6 +297,7 @@ class AutoDriveEnv(gym.Env):
         self.observation_space: spaces.Space = make_observation_space(
             self.lidar_beams,
             lidar_history_frames=4 if observation_profile == "official_sensors_history" else 1,
+            include_camera=observation_profile in ("simulator_camera", "official_sensors_camera"),
         )
 
         # Own the Racer unless the caller passed one in (then we don't kill it).
@@ -676,9 +680,10 @@ class AutoDriveEnv(gym.Env):
         lidar_beams: int,
         elapsed_s: float,
     ) -> ObsType:
-        if self.observation_profile == "simulator":
+        if self.observation_profile in ("simulator", "simulator_camera"):
             return snapshot_to_obs(
-                snap, prev_throttle, prev_steering, lidar_beams=lidar_beams
+                snap, prev_throttle, prev_steering, lidar_beams=lidar_beams,
+                include_camera=self.observation_profile == "simulator_camera",
             )
 
         estimator = getattr(self, "_lidar_speed_estimator", None)
@@ -724,6 +729,7 @@ class AutoDriveEnv(gym.Env):
             forward_speed_mps=speed,
             lateral_speed_mps=0.0,
             lidar_history=history,
+            include_camera=self.observation_profile == "official_sensors_camera",
         )
 
     def _progress_time(self, snap: TelemetrySnapshot) -> float:

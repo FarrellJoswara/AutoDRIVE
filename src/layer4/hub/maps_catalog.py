@@ -26,6 +26,7 @@ class MapInfo:
     centerline_url: Optional[str] = None
     centerline_status: str = "none"
     mesh_preview_url: Optional[str] = None
+    official_world_alignment: Optional[Dict[str, Any]] = None
 
     def to_api(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -323,6 +324,9 @@ def scan_maps(maps_root: Path) -> List[MapInfo]:
         thumb = _find_thumbnail(occ, image_path, maps_root, map_id)
         cl_url, cl_status = _find_centerline_url(occ, maps_root, meta)
         mesh_prev = _find_mesh_preview_url(child, maps_root)
+        alignment = meta.get("official_world_alignment")
+        if not isinstance(alignment, dict):
+            alignment = None
 
         found.append(
             MapInfo(
@@ -338,6 +342,7 @@ def scan_maps(maps_root: Path) -> List[MapInfo]:
                 centerline_url=cl_url,
                 centerline_status=cl_status,
                 mesh_preview_url=mesh_prev,
+                official_world_alignment=alignment,
             )
         )
     return found

@@ -91,6 +91,8 @@ elif [[ "$mode" == "train" ]]; then
     --collision-penalty-magnitude "${AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE:-100}"
     --collision-reward-percent "${AICAR_TRAIN_COLLISION_REWARD_PERCENT:-100}"
     --failed-episode-penalty "${AICAR_TRAIN_FAILURE_PENALTY:-100}"
+    --backward-speed-penalty-scale "${AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE:-10}"
+    --episode-failure-reward-percent "${AICAR_TRAIN_FAILURE_REWARD_PERCENT:-50}"
     --observation-profile "${AICAR_OBSERVATION_PROFILE:-official_sensors}"
     --steering-action-scale "${AICAR_STEERING_ACTION_SCALE:-1.0}"
     --straight-throttle-gain "${AICAR_STRAIGHT_THROTTLE_GAIN:-1.0}"

@@ -180,7 +180,7 @@ def make_model(
     n_steps: int = _PPO_N_STEPS,
     gamma: float = _PPO_GAMMA,
     gae_lambda: float = _PPO_GAE_LAMBDA,
-    policy_architecture: str = "lidar_cnn",
+    policy_architecture: str = "lidar_camera_cnn",
 ):
     from stable_baselines3 import PPO
 
@@ -619,6 +619,7 @@ def train(
     expected_architecture = {
         "official_sensors_history": "temporal_lidar_cnn",
         "official_sensors_camera": "lidar_camera_cnn",
+        "simulator_camera": "lidar_camera_cnn",
     }.get(observation_profile, "lidar_cnn")
     if expected_architecture != policy_architecture:
         raise ValueError(
@@ -884,7 +885,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--policy-architecture",
         choices=("lidar_cnn", "lidar_cnn_pooled", "temporal_lidar_cnn", "lidar_camera_cnn"),
-        default="lidar_cnn",
+        default="lidar_camera_cnn",
         help="Legacy flattened LiDAR CNN or sector-pooled LiDAR CNN",
     )
     p.add_argument("--n-steps", type=int, default=_PPO_N_STEPS)
@@ -933,8 +934,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--observation-profile",
-        choices=("simulator", "official_sensors", "official_sensors_history", "official_sensors_camera"),
-        default="simulator",
+        choices=("simulator", "simulator_camera", "official_sensors", "official_sensors_history", "official_sensors_camera"),
+        default="simulator_camera",
         help="Use full simulator telemetry or match the official allowed sensor inputs",
     )
     p.add_argument(

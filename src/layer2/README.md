@@ -233,3 +233,9 @@ frame is unavailable. Layer 3 uses the `lidar_camera_cnn` extractor. This input
 shape is intentionally a separate profile: existing LiDAR-only checkpoints
 remain compatible with their original profiles and require a fresh model to
 learn from camera images.
+
+Local simulator training, evaluation, and playback use `simulator_camera` by
+default. This keeps the local simulator's telemetry state while adding the
+same RGB camera input. The older `simulator` and `official_sensors` profiles
+remain available for existing checkpoints; keep a checkpoint's profile the
+same across training, evaluation, and replay.

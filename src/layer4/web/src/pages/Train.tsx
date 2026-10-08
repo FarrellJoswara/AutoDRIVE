@@ -305,7 +305,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second, including while moving. Frontier progress is the only positive driving reward.">
                 <input type="number" min={0} step="any" value={form.time_cost_per_simulated_second} onChange={(event) => setNumber("time_cost_per_simulated_second", event.target.value)} />
               </Field>
-              <Field label="End a stalled life after (simulated seconds)" help="When the car stops advancing its high-water route frontier for this long, its simulator resets. The stall receives time cost without an extra failure deduction.">
+              <Field label="End a stalled life after (simulated seconds)" help="When the car stops advancing its high-water route frontier for this long, its simulator resets and receives the non-collision failure cost and clawback.">
                 <input type="number" min={0} step="any" value={form.frontier_stagnation_s} onChange={(event) => setNumber("frontier_stagnation_s", event.target.value)} />
               </Field>
               <Field label="Fixed cost per collision" help="A collision ends the current car life and applies this fixed cost plus the configured share of frontier reward earned during that life.">
@@ -314,8 +314,14 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Collision cost as share of earned frontier reward (%)" help="Claws back this percentage of the positive frontier reward earned in the current life when it collides.">
                 <input type="number" min={0} max={1000} step="any" value={form.collision_reward_percent} onChange={(event) => setNumber("collision_reward_percent", event.target.value)} />
               </Field>
-              <Field label="Non-collision failure cost" help="Penalty charged once when the simulator-clock watchdog ends a life. Frontier stalls only pay the per-second time cost.">
+              <Field label="Reverse-motion cost per metre" help="Penalizes distance traveled backward relative to the car body. Reverse throttle used to brake while still moving forward is not penalized.">
+                <input type="number" min={0} step="any" value={form.backward_speed_penalty_scale} onChange={(event) => setNumber("backward_speed_penalty_scale", event.target.value)} />
+              </Field>
+              <Field label="Non-collision failure cost" help="Applied once when the watchdog or frontier-stall limit ends a life, plus the configured share of positive frontier reward earned in that life.">
                 <input type="number" min={0} step="any" value={form.failed_episode_penalty} onChange={(event) => setNumber("failed_episode_penalty", event.target.value)} />
+              </Field>
+              <Field label="Failure cost as share of earned frontier reward (%)" help="Claws back this percentage of the positive frontier reward earned in the current life when a non-collision failure ends it.">
+                <input type="number" min={0} max={1000} step="any" value={form.episode_failure_reward_percent} onChange={(event) => setNumber("episode_failure_reward_percent", event.target.value)} />
               </Field>
             </div>
             <p className="meta">{form.total_timesteps === 0 ? (form.stop_on_plateau || form.max_duration_hours > 0 ? "No timestep limit; plateau and/or wall-clock rules end the run." : "No automatic end configured; stop the run manually.") : `Hard cap: ${formatCount(form.total_timesteps)} steps${form.stop_on_plateau ? " or earlier if the plateau rule triggers" : ""}.`}</p>

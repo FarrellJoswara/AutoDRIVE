@@ -182,10 +182,12 @@ def train_official(
     warmup_laps: int = 0,
     time_cost_per_simulated_second: float = 5.0,
     collision_penalty_magnitude: float = 100.0,
-    collision_reward_percent: float = 100.0,
+    collision_reward_percent: float = 50.0,
     failed_episode_penalty: float = 100.0,
+    backward_speed_penalty_scale: float = 10.0,
+    episode_failure_reward_percent: float = 50.0,
     frontier_stagnation_s: float = 10.0,
-    observation_profile: str = "official_sensors",
+    observation_profile: str = "official_sensors_camera",
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
@@ -282,6 +284,8 @@ def train_official(
             training_mode=True,
             training_timeout_s=training_timeout_s,
             training_failure_penalty=failed_episode_penalty,
+            training_backward_speed_penalty_scale=backward_speed_penalty_scale,
+            training_failure_reward_percent=episode_failure_reward_percent,
             training_time_cost_per_simulated_second=time_cost_per_simulated_second,
             training_collision_penalty_magnitude=collision_penalty_magnitude,
             training_collision_reward_percent=collision_reward_percent,
@@ -371,9 +375,17 @@ def train_official(
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
                 "positive_reward": "new high-water route frontier distance only",
+                "frontier_progress_per_m": 10.0,
+                "pace_target_mps": 6.0,
+                "pace_bonus_strength": 1.0,
+                "pace_source": "episode_average; quadratic multiplier capped at 2x",
+                "backward_speed_penalty_per_m": backward_speed_penalty_scale,
+                "backward_speed_deadband_mps": 0.1,
                 "collision_cost": f"{collision_penalty_magnitude:g} + {collision_reward_percent:g}% of positive frontier return",
-                "non_collision_failure_cost": failed_episode_penalty,
-                "frontier_stall": "end and reset life; time cost only",
+                "non_collision_failure_cost": f"{failed_episode_penalty:g} + {episode_failure_reward_percent:g}% of positive frontier return",
+                "frontier_stall": "end and reset life; charged as a non-collision failure",
+                "slip_penalty": 0.0,
+                "steering_change_penalty": 0.0,
                 "lap_completion_bonus": 0,
                 "restricted_topics_used_only_for_reward_and_episode_control": True,
                 "restricted_topics_in_policy_observation": False,
@@ -476,13 +488,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--warmup-laps", type=int, default=0)
     parser.add_argument("--time-cost-per-simulated-second", type=float, default=5.0)
     parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
-    parser.add_argument("--collision-reward-percent", type=float, default=20.0)
+    parser.add_argument("--collision-reward-percent", type=float, default=50.0)
     parser.add_argument("--failed-episode-penalty", type=float, default=100.0)
+    parser.add_argument("--backward-speed-penalty-scale", type=float, default=10.0)
+    parser.add_argument("--episode-failure-reward-percent", type=float, default=50.0)
     parser.add_argument("--frontier-stagnation-s", type=float, default=10.0)
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
-        default="official_sensors",
+        default="official_sensors_camera",
     )
     parser.add_argument("--steering-action-scale", type=float, default=1.0)
     parser.add_argument("--straight-throttle-gain", type=float, default=1.0)
@@ -518,6 +532,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         collision_penalty_magnitude=args.collision_penalty_magnitude,
         collision_reward_percent=args.collision_reward_percent,
         failed_episode_penalty=args.failed_episode_penalty,
+        backward_speed_penalty_scale=args.backward_speed_penalty_scale,
+        episode_failure_reward_percent=args.episode_failure_reward_percent,
         frontier_stagnation_s=args.frontier_stagnation_s,
         observation_profile=args.observation_profile,
         steering_action_scale=args.steering_action_scale,

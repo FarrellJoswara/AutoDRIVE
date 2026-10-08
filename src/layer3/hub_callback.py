@@ -228,6 +228,8 @@ class HubTelemetryCallback(BaseCallback):
         self._wall_total_elapsed_by_env: Dict[int, float] = {}
         self._clock_lap_count_by_env: Dict[int, int] = {}
         self._clock_lap_comparisons: List[Dict[str, float]] = []
+        self._last_camera_frame_t = 0.0
+        self._camera_interval_s = 1.0
 
     def _on_training_start(self) -> None:
         snapshot_path = self.run_dir / "watch_latest.json" if self.run_dir else None
@@ -319,6 +321,8 @@ class HubTelemetryCallback(BaseCallback):
     def _on_step(self) -> bool:
         if self._pub is None:
             return True
+
+        self._persist_camera_frames()
 
         infos = self.locals.get("infos")
         dones = self.locals.get("dones")
@@ -468,6 +472,42 @@ class HubTelemetryCallback(BaseCallback):
                 self._pub.enqueue(fleet)
 
         return True
+
+    def _persist_camera_frames(self) -> None:
+        """Keep one small latest camera frame per official environment for Watch."""
+        if self.runtime != "official" or self.run_dir is None:
+            return
+        now = time.monotonic()
+        if now - self._last_camera_frame_t < self._camera_interval_s:
+            return
+        self._last_camera_frame_t = now
+        observations = self.locals.get("new_obs")
+        cameras = observations.get("camera") if isinstance(observations, dict) else None
+        if cameras is None:
+            return
+        try:
+            from PIL import Image
+
+            frames = np.asarray(cameras)
+            if frames.ndim != 4:
+                return
+            camera_dir = self.run_dir / "camera"
+            camera_dir.mkdir(parents=True, exist_ok=True)
+            for env_id, frame in enumerate(frames):
+                if frame.shape[0] == 3:
+                    frame = np.moveaxis(frame, 0, -1)
+                if frame.ndim != 3 or frame.shape[-1] != 3:
+                    continue
+                if frame.dtype != np.uint8:
+                    frame = np.clip(frame, 0, 255).astype(np.uint8)
+                image = Image.fromarray(np.ascontiguousarray(frame), mode="RGB")
+                image.thumbnail((320, 180))
+                target = camera_dir / f"env-{env_id}.jpg"
+                temporary = target.with_suffix(".jpg.tmp")
+                image.save(temporary, format="JPEG", quality=58, optimize=False)
+                temporary.replace(target)
+        except Exception:
+            logger.debug("Could not persist latest camera frames for Watch", exc_info=True)
 
     def _refresh_heading_cache(self, infos: Any, dones: Any) -> None:
         """Update pose/yaw every env step so fleet samples get real headings."""

@@ -224,7 +224,7 @@ def evaluate_policy(
     throttle_mode: str = "bidirectional",
     straight_throttle_gain: float = 1.0,
     straight_throttle_steering_threshold: float = 0.15,
-    observation_profile: str = "simulator",
+    observation_profile: str = "simulator_camera",
 ) -> Dict[str, Any]:
     """Run a deterministic policy until failure or ten laps, then save metrics."""
     from stable_baselines3 import PPO
@@ -304,8 +304,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--straight-throttle-steering-threshold", type=float, default=0.15)
     parser.add_argument(
         "--observation-profile",
-        choices=("simulator", "official_sensors", "official_sensors_history"),
-        default="simulator",
+        choices=("simulator", "simulator_camera", "official_sensors", "official_sensors_history", "official_sensors_camera"),
+        default="simulator_camera",
     )
     parser.add_argument("--port-start", type=int, default=4567)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")

@@ -576,6 +576,26 @@ def _run_output_dir(run_id: str) -> Path:
     return path
 
 
+@app.get("/train/runs/{run_id}/camera/{env_id}")
+async def get_official_run_camera(run_id: str, env_id: int) -> FileResponse:
+    """Serve the latest bounded JPEG written by the official training callback."""
+    if not 0 <= env_id < 8:
+        raise HTTPException(status_code=404, detail="camera frame not found")
+    try:
+        run = official_runs.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    if (run.get("config") or {}).get("observation_profile") != "official_sensors_camera":
+        raise HTTPException(status_code=404, detail="run has no camera observation")
+    frame = _run_output_dir(run_id) / "camera" / f"env-{env_id}.jpg"
+    if not frame.is_file():
+        raise HTTPException(status_code=404, detail="camera frame is not ready")
+    return FileResponse(
+        frame, media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/train/runs")
 async def list_official_runs() -> Dict[str, Any]:
     return official_runs.list_runs()
