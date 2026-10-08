@@ -353,13 +353,15 @@ class OfficialRaceEnv(gym.Env):
                 self.training_frontier_stagnation_s > 0
                 and self._training_elapsed_s - self._frontier_last_push_s >= self.training_frontier_stagnation_s
             )
-            collision_termination = bool(collision_event)
-            terminated = collision_termination or frontier_stalled
+            # The official simulator recovers a collision to its last
+            # checkpoint. Keep the episode alive so PPO observes that recovery
+            # and learns to continue; collision remains penalized below.
+            terminated = bool(frontier_stalled)
             truncated = bool(
                 not terminated and self.training_timeout_s > 0
                 and self._training_elapsed_s >= self.training_timeout_s
             )
-            reason = "collision" if collision_termination else "frontier_stagnation" if frontier_stalled else None
+            reason = "frontier_stagnation" if frontier_stalled else None
             # A frontier stall is a terminal training failure just like the
             # watchdog timeout. Keep it out of the collision branch, which has
             # its own configured penalty and positive-return clawback.
@@ -371,7 +373,7 @@ class OfficialRaceEnv(gym.Env):
                 frontier_average_speed_mps=average_frontier_speed,
                 frontier_current_speed_mps=(frontier_advanced / step_duration_s if step_duration_s > 0 else 0.0),
                 positive_episode_return=self._positive_episode_return,
-                collision_event=collision_termination,
+                collision_event=collision_event,
                 episode_failure=episode_failure,
                 slip_angle=float(snap.slip_angle),
                 prev_steering=self._last_training_steering,

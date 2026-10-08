@@ -109,10 +109,12 @@ simulated second also favors faster progress and makes stalling accumulate cost.
 Backward body-frame motion is penalized, and a frontier push is withheld if the
 car is moving backward relative to its body beyond the reverse deadband. A
 collision receives the fixed collision cost plus a percentage of positive
-frontier reward accumulated during that car's life. A frontier stall ends and
-resets the episode after its configured no-progress interval, but adds no
-separate terminal deduction: time cost continues to accrue while progress is
-stalled. Other non-collision failed endings retain the configurable
+frontier reward accumulated during that car's life. It does not end a training
+episode: the official simulator recovers the vehicle to its last checkpoint,
+so training continues through that recovery as it does during an official race.
+A frontier stall ends and resets the episode after its configured no-progress
+interval, but adds no separate terminal deduction: time cost continues to
+accrue while progress is stalled. Other non-collision failed endings retain the configurable
 episode-failure cost. Lap completions never change reward or end an episode. No
 reward depends on distance from
 the centerline. The frontier remains the monotonic progress marker for lap

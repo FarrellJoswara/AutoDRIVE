@@ -603,8 +603,8 @@ def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
     assert info["training_reward_components"]["collision"] < -100.0
     assert collision_reward == info["training_reward_components"]["total"]
     assert info["race_collisions"] == 1
-    assert terminated and not truncated
-    assert info["termination_reason"] == "collision"
+    assert not terminated and not truncated
+    assert info["termination_reason"] is None
 
 
 def test_official_training_watchdog_charges_failure_penalty(tmp_path):
