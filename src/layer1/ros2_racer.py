@@ -237,6 +237,7 @@ class RacerRos2:
         self._telemetry = TelemetrySnapshot(lidar_valid=False)
         self._race_metrics = RaceMetrics()
         self._race_metrics_received: set[str] = set()
+        self._position_update_count = 0
         self._last_scan_receipt = 0.0
         self._last_scan_source_time: Optional[float] = None
         self._last_control_source_time: Optional[float] = None
@@ -408,6 +409,7 @@ class RacerRos2:
                     position=(float(message.x), float(message.y), float(message.z)),
                 )
                 self._race_metrics_received.add(field)
+                self._position_update_count += 1
                 self._condition.notify_all()
                 return
             if field in {
@@ -580,7 +582,13 @@ class RacerRos2:
             self._check_wait_state()
             return self._race_metrics
 
-    def reset_simulation_for_training(self) -> TelemetrySnapshot:
+    def reset_simulation_for_training(
+        self,
+        *,
+        expected_position: Optional[tuple[float, float]] = None,
+        position_tolerance_m: float = 0.75,
+        reset_attempts: int = 3,
+    ) -> TelemetrySnapshot:
         """Reset the official simulator through its documented training API.
 
         This is intentionally unavailable to the deployed policy transport.
@@ -595,39 +603,58 @@ class RacerRos2:
 
         # Initial startup has its own budget; do not use the short frame
         # timeout while Unity and the Devkit are still connecting.
-        self.wait_until_ready()
-        with self._condition:
-            previous_step = self._step_counter
-        reset_msg = self._msg_types["Bool"]()
-        reset_msg.data = True
-        publisher.publish(reset_msg)
-        # The official simulator samples this command during its update loop.
-        # Hold it across several 40 Hz ticks, then deassert as required by the
-        # Devkit documentation to prevent repeated resets.
-        deadline = time.monotonic() + 0.1
-        while time.monotonic() < deadline:
+        if reset_attempts < 1:
+            raise ValueError("reset_attempts must be positive")
+        if position_tolerance_m <= 0:
+            raise ValueError("position_tolerance_m must be positive")
+        snap = self.wait_until_ready()
+        for attempt in range(reset_attempts):
             with self._condition:
-                self._check_wait_state()
-                self._condition.wait(min(0.02, deadline - time.monotonic()))
-        reset_msg.data = False
-        publisher.publish(reset_msg)
-        snap = self._wait_for_scan_after(previous_step)
-
-        if self.include_race_metrics:
-            deadline = time.monotonic() + self.frame_timeout_s
-            with self._condition:
-                while (
-                    self._race_metrics.lap_count != 0
-                    or self._race_metrics.collision_count != 0
-                ):
+                previous_step = self._step_counter
+                previous_position_update = self._position_update_count
+            reset_msg = self._msg_types["Bool"]()
+            reset_msg.data = True
+            publisher.publish(reset_msg)
+            # The official simulator samples this command during its update
+            # loop. Hold it across several 40 Hz ticks, then deassert it.
+            deadline = time.monotonic() + 0.1
+            while time.monotonic() < deadline:
+                with self._condition:
                     self._check_wait_state()
-                    remaining = deadline - time.monotonic()
+                    self._condition.wait(min(0.02, deadline - time.monotonic()))
+            reset_msg.data = False
+            publisher.publish(reset_msg)
+            snap = self._wait_for_scan_after(previous_step)
+
+            if expected_position is None or not self.include_race_metrics:
+                break
+            target = (float(expected_position[0]), float(expected_position[1]))
+            position_deadline = time.monotonic() + self.frame_timeout_s
+            reached_spawn = False
+            with self._condition:
+                while True:
+                    self._check_wait_state()
+                    position = self._race_metrics.position
+                    is_fresh = self._position_update_count > previous_position_update
+                    if is_fresh and position is not None:
+                        distance = math.dist(position[:2], target)
+                        if distance <= position_tolerance_m:
+                            reached_spawn = True
+                            break
+                    remaining = position_deadline - time.monotonic()
                     if remaining <= 0:
-                        raise OfficialRosTransportError(
-                            "Official reset returned a sensor frame but race counters did not reset; "
-                            + self._transport_diagnostic()
-                        )
+                        if attempt + 1 >= reset_attempts:
+                            actual = self._race_metrics.position
+                            raise OfficialRosTransportError(
+                                "Official training reset did not reach the configured IPS spawn "
+                                f"after {reset_attempts} attempts; expected={target}, "
+                                f"actual={actual}, fresh_position={is_fresh}; "
+                                + self._transport_diagnostic()
+                            )
+                        break
                     self._condition.wait(min(remaining, 0.1))
+            if reached_spawn:
+                break
         with self._condition:
             self._last_action_time = 0.0
             self._last_control_scan_receipt = 0.0

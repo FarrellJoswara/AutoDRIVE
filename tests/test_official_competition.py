@@ -186,6 +186,7 @@ def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
     racer._condition = threading.Condition()
     racer._race_metrics = RaceMetrics()
     racer._race_metrics_received = set()
+    racer._position_update_count = 0
     racer._raw = {}
     racer._raw_receipts = {}
     racer._on_message("position", _vector(1.0, 2.0, 3.0))
@@ -486,7 +487,7 @@ def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
             super().__init__([initial, *events])
             self.last_step_duration_s = 1.0
 
-        def reset_simulation_for_training(self):
+        def reset_simulation_for_training(self, **kwargs):
             self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
             return self.telemetry
 
@@ -523,7 +524,7 @@ def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
 
 def test_official_training_watchdog_charges_failure_penalty(tmp_path):
     class TrainingRacer(FakeRacer):
-        def reset_simulation_for_training(self):
+        def reset_simulation_for_training(self, **kwargs):
             self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
             return self.telemetry
 
@@ -558,7 +559,7 @@ def test_official_training_time_cost_uses_elapsed_action_interval(tmp_path):
             ])
             self.last_step_duration_s = 0.05
 
-        def reset_simulation_for_training(self):
+        def reset_simulation_for_training(self, **kwargs):
             self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
             return self.telemetry
 
@@ -581,6 +582,51 @@ def test_official_policy_transport_cannot_reset_the_simulator():
     racer.allow_training_reset = False
     with np.testing.assert_raises(PermissionError):
         racer.reset_simulation_for_training()
+
+
+def test_training_reset_accepts_persistent_official_race_counters():
+    class BoolMessage:
+        data = False
+
+    class Publisher:
+        owner = None
+        positions = [(5.0, 8.0, 0.0), (0.8, 3.1583, 0.0)]
+
+        def __init__(self):
+            self.values = []
+
+        def publish(self, message):
+            self.values.append(message.data)
+            if message.data:
+                self.owner._position_update_count += 1
+                self.owner._race_metrics = RaceMetrics(
+                    lap_count=2,
+                    collision_count=3,
+                    position=self.positions.pop(0),
+                )
+
+    racer = object.__new__(RacerRos2)
+    racer.allow_training_reset = True
+    racer.include_race_metrics = True
+    racer._publishers = {"training_reset": Publisher()}
+    racer._publishers["training_reset"].owner = racer
+    racer._msg_types = {"Bool": BoolMessage}
+    racer._condition = threading.Condition()
+    racer._step_counter = 1
+    racer._race_metrics = RaceMetrics(lap_count=2, collision_count=3)
+    racer._position_update_count = 0
+    racer._closed = False
+    racer.frame_timeout_s = 0.5
+    racer._last_scan_source_time = None
+    racer._check_wait_state = lambda: None
+    snap = _snapshot(lap=2, last_lap=0.0, collisions=3)
+    racer.wait_until_ready = lambda: snap
+    racer._wait_for_scan_after = lambda previous_step: snap
+
+    assert racer.reset_simulation_for_training(
+        expected_position=(0.8, 3.1583), position_tolerance_m=0.75
+    ) is snap
+    assert racer._publishers["training_reset"].values == [True, False, True, False]
 
 
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():

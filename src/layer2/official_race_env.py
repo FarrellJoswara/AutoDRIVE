@@ -175,7 +175,11 @@ class OfficialRaceEnv(gym.Env):
             reset_for_training = getattr(self.racer, "reset_simulation_for_training", None)
             if not callable(reset_for_training):
                 raise RuntimeError("training mode requires a training-reset-capable official racer")
-            snap = reset_for_training()
+            snap = reset_for_training(
+                expected_position=self._frontier_spawn_xy,
+                position_tolerance_m=0.75,
+                reset_attempts=3,
+            )
         else:
             snap = self.racer.wait_until_ready()
         metrics = self.racer.wait_for_race_metrics()
