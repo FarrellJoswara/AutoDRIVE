@@ -882,3 +882,11 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   was disqualified before a scored lap. No valid 10-lap time was produced; no
   model was promoted. Checkpoints and paired raw reports are preserved in the
   run folder and `results/official_ppo80k_epochs4_*_attempt1_20261007.json`.
+- **2026-10-07 — preserved 80k policy, negative throttle zeroed:** using the
+  exact official API and simulator image pair, the policy completed its warmup
+  in 66.05 s but accumulated 114 warmup collisions and was disqualified after
+  11 scored collisions before any scored lap. This did not produce a race time
+  or a valid comparison. Do not conclude that zeroing reverse improves the
+  policy from this single attempt; compare repeated fresh-process runs before
+  changing the competition action mapping. Raw report:
+  `results/official_ppo80k_source_zero_attempt1_20261007.json`.
