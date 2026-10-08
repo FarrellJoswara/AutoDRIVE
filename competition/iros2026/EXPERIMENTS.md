@@ -916,3 +916,22 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   policy for 8,192 more steps with the same `1e-4` LR, PPO, rewards and official
   inputs; managed run `8e83a8cd22b2`. New optimizer state is initialized by the
   deterministic resume path. Effective values are verified before rollout.
+
+- **2026-10-07 — bounded LR continuation comparison (rejected):** the 100,480
+  checkpoint trained 8,192 steps beyond 92,288 with all settings fixed. It had
+  zero training laps across 11 episodes. Three fresh official races per model
+  produced zero scored laps and DQ at 11 scored collisions. The baseline
+  92,288 checkpoint's median warm-up was 34.267 s / 44 contacts; the 100,480
+  checkpoint's was 79.283 s / 103 contacts. Reject the continuation; preserve
+  both checkpoints. Detailed report and all six raw evaluations:
+  `results/official_learning_rate_1e4_experiment_20261007.md` and
+  `results/official_lr1e4_{92288,100480}_allow_attempt{1,2,3}_20261007.json`.
+- **2026-10-07 — intermediate checkpoint screen (rejected early):** checkpoint
+  96,384 steps (SHA-256
+  `61B817D3E7D975B35C3292030EF9C93BA1F892BB9EE53275991AF469D87F2E82`) was
+  evaluated in two fresh official processes with unchanged settings. Both runs
+  were DQ with no scored laps; warm-up medians were 156.121 s and 304 contacts,
+  clearly worse than the 92,288-step baseline's three-run medians (34.267 s,
+  44 contacts). The screen was stopped after two trials. Raw reports:
+  `results/official_lr1e4_96384_allow_attempt1_20261007.json` and
+  `results/official_lr1e4_96384_allow_attempt2_20261007.json`.
