@@ -873,3 +873,12 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
 - Controlled continuation `logs/rl/official_seed_finetune_4096_numpycompat_20261007` used the exact official IROS API/simulator images, resumed the preserved seed for 4,096 additional steps (four updates), and kept `n_steps=1024`, `n_epochs=1`, `gamma=0.99`, `gae_lambda=0.95`, `learning_rate=1e-5`, bidirectional throttle, and default steering scale fixed. PPO remained low-update (latest approx KL 0.00085, clip fraction 0.0078, action std 0.20); rollout mean return was about -1,540, mean episode length 724 steps, and the official Watch frame recorded no completed lap. All checkpoints remain in the run directory.
 - Matched one-attempt official-image screen of the source seed at default controls: one scored lap in 16.0368 s, then 11 scored collisions and disqualification; 10 warm-up collisions. It is not a valid 10-lap result. The fine-tuned candidate produced 17.7609 s and 17.7399 s first scored laps on two fresh processes, followed by 11 scored collisions and disqualification on both. It completed no 10-lap attempts and regressed first-lap pace versus the matched seed by about 1.70 s while adding 1–3 warm-up collisions. Do not promote this checkpoint.
 - Full reports: `results/official_seed_53248_default_controls_eval_20261007.json`, `results/official_seed_finetune_4096_numpycompat_eval_20261007.json`, and `results/official_seed_finetune_4096_numpycompat_trace_20261007.json`. The older 66.9818 s time remains a custom local-simulator result, not an official race time.
+
+- **2026-10-07 — PPO four-epoch continuation:** trained from the preserved
+  80k checkpoint with `n_epochs=4` as the sole PPO change; exact requested and
+  effective settings were verified before rollout. Stopped at 88,400 after a
+  single matched official `allow` evaluation showed the 88,192-step candidate
+  failed warm-up in the 300 s failsafe, while the source completed warm-up but
+  was disqualified before a scored lap. No valid 10-lap time was produced; no
+  model was promoted. Checkpoints and paired raw reports are preserved in the
+  run folder and `results/official_ppo80k_epochs4_*_attempt1_20261007.json`.

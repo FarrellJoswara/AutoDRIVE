@@ -85,3 +85,26 @@ reward, determines whether this helps.
 - Any candidate promotion requires repeated complete official 10-lap
   evaluations and a better median adjusted time without reduced completion
   consistency.
+
+## Official evaluation after the continuation
+
+- The continuation was stopped at 88,400 steps after the 88,192-step saved
+  candidate showed no evidence of improvement. The managed run is stopped;
+  source and continuation checkpoints remain preserved. Training reward is not
+  used as performance evidence.
+- Fresh-process source-checkpoint comparison, `negative_throttle_mode=allow`:
+  completed one warm-up lap in 194.547 s, then was disqualified at 11 scored
+  collisions before completing a scored lap. Report:
+  `results/official_ppo80k_epochs4_source_allow_attempt1_20261007.json`.
+- Fresh-process 88,192-step candidate, same official image pair and evaluation
+  settings: failed to complete its warm-up lap within the 300 s failsafe, with
+  no collision events and no scored lap. Report:
+  `results/official_ppo80k_epochs4_candidate88192_allow_attempt1_20261007.json`.
+- The candidate's action distribution changed (reverse-action fraction about
+  0.46% vs. 3.80% for the source; throttle mean 0.520 vs. 0.478), but its route
+  completion was worse in this one-attempt screen. Because neither produced a
+  scored lap and the sample is one attempt per policy, this rejects the
+  candidate for promotion but does not establish a stable time comparison.
+- No 10-lap attempt completed. This experiment is stopped; retain the original
+  80k checkpoint as the only usable starting point. Do not continue increasing
+  PPO epochs on this evidence.
