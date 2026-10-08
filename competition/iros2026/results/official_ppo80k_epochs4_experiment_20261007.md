@@ -70,6 +70,18 @@ reward, determines whether this helps.
   official rollout at 80,000 steps. PPO diagnostics and race evaluation results
   will be added after they are available. The run has its own output directory
   and checkpoints and does not replace the starting checkpoint.
+- Progress snapshot: at 84,600 total steps the managed run was still `running`,
+  with no errors and Watch telemetry current. Four PPO updates completed;
+  `explained_variance` progressed from -0.289 at update 1 to 0.088 at update 4,
+  while the fourth update's approximate KL was 0.00150 and clip fraction
+  0.00317. The trainer reported six episodes, two completed laps, no 10-lap
+  attempt, and a best lap of 16.5725 s. This is training telemetry, not an
+  official evaluation result, and does not establish improvement.
+- First run checkpoint:
+  `logs/rl/official_run_9dec8907c63c/checkpoints/official_ppo_84096_steps.zip`,
+  54,919,358 bytes, SHA-256
+  `B3726EC29AC36DA64F1C8B6044091BD90DF3155C2CA3B8767DF94438416F17FF`.
+  It is preserved in the run directory and has not been promoted.
 - Any candidate promotion requires repeated complete official 10-lap
   evaluations and a better median adjusted time without reduced completion
   consistency.

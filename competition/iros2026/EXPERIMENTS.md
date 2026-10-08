@@ -6,6 +6,7 @@
 - Planned controlled change: increase PPO `n_epochs` from 1 to 4 while resuming this checkpoint in the official simulator. Keep `n_steps=1024`, learning rate `1e-5`, reward, observations, controls, episode flow, and all other PPO values fixed. Bounded run: 20,480 additional steps with 4,096-step checkpoints.
 - Exact settings, image digests, baseline limitations and results will be maintained in `results/official_ppo80k_epochs4_experiment_20261007.md`.
 - Run `9dec8907c63c` started successfully. Before rollout, effective PPO settings were verified against the request (`n_epochs=4`, `n_steps=1024`, LR `1e-5`, `gamma=0.99`, `gae_lambda=0.95`, batch 64, clip 0.2, entropy 0.01); the official run-specific Watch telemetry connected at the 80,000-step resume point. Race evaluation is pending.
+- At 84,600 total steps the run was healthy, with four updates completed; explained variance rose from -0.289 to 0.088, but only two laps were observed across six episodes and no 10-lap attempt was recorded. The checkpoint at 84,096 is preserved (SHA-256 `B3726EC29AC36DA64F1C8B6044091BD90DF3155C2CA3B8767DF94438416F17FF`); these are training diagnostics, not a performance result.
 
 ### LiDAR gap-center target — compared with a matched farthest-ray control
 
