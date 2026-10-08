@@ -282,7 +282,7 @@ class OfficialRunManagerTests(unittest.TestCase):
     def test_config_normalization_includes_official_defaults(self) -> None:
         config = normalize_official_config({"total_timesteps": 5000})
         self.assertEqual(config["total_timesteps"], 5000)
-        self.assertEqual(config["observation_profile"], "official_sensors")
+        self.assertEqual(config["observation_profile"], "official_sensors_camera")
         self.assertEqual(config["throttle_mode"], "bidirectional")
 
     def test_resume_checkpoint_is_mapped_to_persistent_container_mount(self) -> None:
