@@ -479,10 +479,17 @@ class HubTelemetryCallback(BaseCallback):
                 self._last_yaw.pop(i, None)
                 continue
             info = raw if isinstance(raw, dict) else {}
-            pos = info.get("position")
-            if pos is None or len(pos) < 3:
+            # AutoDRIVE IPS uses [x, y] as the ground plane; the custom Unity
+            # runtime uses [x, y, z] and renders x/z on its occupancy map.
+            pos = info.get("race_position") if self.runtime == "official" else info.get("position")
+            min_dimensions = 2 if self.runtime == "official" else 3
+            if pos is None or len(pos) < min_dimensions:
                 continue
-            pose = (float(pos[0]), float(pos[2]))
+            pose = (
+                (float(pos[0]), float(pos[1]))
+                if self.runtime == "official"
+                else (float(pos[0]), float(pos[2]))
+            )
             yaw = float(info["yaw"]) if "yaw" in info else None
             speed = (
                 float(info["watch_speed_mps"])
@@ -585,11 +592,14 @@ class HubTelemetryCallback(BaseCallback):
                     }
                 )
                 continue
-            pos = info.get("position")
+            pos = info.get("race_position") if self.runtime == "official" else info.get("position")
             pose = None
-            if pos is not None and len(pos) >= 3:
-                # info["position"] is Unity (x, y, z). Fleet/occupancy use [x, z].
-                pose = [float(pos[0]), float(pos[2])]
+            if pos is not None and len(pos) >= (2 if self.runtime == "official" else 3):
+                pose = (
+                    [float(pos[0]), float(pos[1])]
+                    if self.runtime == "official"
+                    else [float(pos[0]), float(pos[2])]
+                )
 
             yaw = float(info["yaw"]) if "yaw" in info else None
             speed = (

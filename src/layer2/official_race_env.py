@@ -380,6 +380,20 @@ class OfficialRaceEnv(gym.Env):
             info["frontier_progress_m"] = (progress or {}).get("progress_m")
             info["frontier_advanced_m"] = frontier_advanced
             info["frontier_speed_mps"] = average_frontier_speed
+            # Keep the names consumed by Layer 4's Watch payload in sync with
+            # the official training diagnostics. These are monitoring-only;
+            # policy observations remain sensor-only.
+            info["frontier_line"] = (progress or {}).get("line")
+            info["current_progress_line"] = (progress or {}).get("current_line")
+            info["current_progress_m"] = (progress or {}).get("current_progress_m")
+            info["signed_route_delta_m"] = (progress or {}).get("current_delta_m")
+            info["current_route_speed_mps"] = (
+                frontier_advanced / step_duration_s if step_duration_s > 0 else 0.0
+            )
+            info["route_projection_valid"] = bool(
+                progress.get("current_projection_valid") if progress is not None else False
+            )
+            info["reward_components"] = components
             info["time_since_frontier_push_s"] = (
                 max(0.0, self._training_elapsed_s - self._frontier_last_push_s)
                 if progress is not None else None

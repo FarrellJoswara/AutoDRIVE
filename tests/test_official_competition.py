@@ -499,6 +499,10 @@ def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
 
     _, progress_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
     assert info["frontier_advanced_m"] == 1.0
+    assert info["frontier_line"] is not None
+    assert info["current_progress_line"] is not None
+    assert info["route_projection_valid"] is True
+    assert info["reward_components"] == info["training_reward_components"]
     assert info["training_reward_components"]["route_progress"] > 10.0
     assert progress_reward == info["training_reward_components"]["total"]
     assert not terminated and not truncated
