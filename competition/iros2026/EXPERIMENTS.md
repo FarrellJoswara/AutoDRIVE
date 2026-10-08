@@ -1,5 +1,27 @@
 # Official IROS 2026 experiments
 
+### LiDAR gap-center target — compared with a matched farthest-ray control
+
+- Date: 2026-10-07. Changed only the safe-gap target ray: candidate aims at the
+  center of the widest safe opening; baseline aims at the farthest ray in that
+  opening. Both used the same official simulator image, official Devkit base,
+  Porto route, bidirectional throttle, normal steering, default gap-controller
+  gains, one-attempt evaluator, and 300 s wall guard.
+- Candidate completed one warm-up lap in 51.56 s with 24 warm-up collisions,
+  then reached 11 scored collisions after zero race laps and was disqualified
+  at 1,341 steps / 67.78 s. Baseline completed zero warm-up laps in 300.04 s,
+  with 319 raw simulator collisions and no scored race result. The candidate
+  appears better at completing the route than this weak fixed-controller
+  baseline, but one run per condition is insufficient and the candidate is
+  still far from a valid race.
+- Neither result is leaderboard evidence, a candidate promotion, or evidence
+  about PPO rewards. No checkpoint changed. Tests passed for the one-factor
+  controller change. The isolated Docker resources were removed after the
+  runs.
+- Full setup, image digests, exact controls, metrics, limitations and raw
+  report links:
+  `results/goal_experiment_20261007_gap_center_control.md`.
+
 Each result below uses the same preserved PPO checkpoint and the official
 competition image tags. Only the final policy path is intended for competition
 use. A valid score comparison also requires allowed sensor inputs, no restricted
@@ -836,3 +858,10 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   s laps from the 40,960-step snapshot are not official lap-time evidence.
 - Report: `results/ppo60000_guard_current_official_20261007.json`. Preserve the
   checkpoint and training run; do not promote this transfer result.
+
+### Official-runtime resume compatibility and short continuation — not promoted
+
+- The preserved local seed (`optimization_minimal_updates_20261005/best_evaluated_model.zip`) could not initially resume in the pinned official API image: its NumPy 2.x/SB3 schedule and cached rollout serialization was incompatible with the image's NumPy 1.22.2/SB3 2.3.2. The failed startup did not change the source checkpoint and performed zero PPO steps. `load_ppo_checkpoint` now binds the current Layer 2 spaces, discards serialized rollout caches, and supplies current constant LR/clip schedules; the untouched checkpoint loads and completes a PPO update in the official image.
+- Controlled continuation `logs/rl/official_seed_finetune_4096_numpycompat_20261007` used the exact official IROS API/simulator images, resumed the preserved seed for 4,096 additional steps (four updates), and kept `n_steps=1024`, `n_epochs=1`, `gamma=0.99`, `gae_lambda=0.95`, `learning_rate=1e-5`, bidirectional throttle, and default steering scale fixed. PPO remained low-update (latest approx KL 0.00085, clip fraction 0.0078, action std 0.20); rollout mean return was about -1,540, mean episode length 724 steps, and the official Watch frame recorded no completed lap. All checkpoints remain in the run directory.
+- Matched one-attempt official-image screen of the source seed at default controls: one scored lap in 16.0368 s, then 11 scored collisions and disqualification; 10 warm-up collisions. It is not a valid 10-lap result. The fine-tuned candidate produced 17.7609 s and 17.7399 s first scored laps on two fresh processes, followed by 11 scored collisions and disqualification on both. It completed no 10-lap attempts and regressed first-lap pace versus the matched seed by about 1.70 s while adding 1–3 warm-up collisions. Do not promote this checkpoint.
+- Full reports: `results/official_seed_53248_default_controls_eval_20261007.json`, `results/official_seed_finetune_4096_numpycompat_eval_20261007.json`, and `results/official_seed_finetune_4096_numpycompat_trace_20261007.json`. The older 66.9818 s time remains a custom local-simulator result, not an official race time.
