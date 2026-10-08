@@ -53,8 +53,23 @@ reward, determines whether this helps.
 
 ## Run and result
 
-Run ID, effective PPO verification, diagnostics and official evaluation results
-will be appended after the managed run completes. The run must not replace the
-starting checkpoint. Any candidate promotion requires repeated complete
-official 10-lap evaluations and a better median adjusted time without reduced
-completion consistency.
+- Managed run ID: `9dec8907c63c`, display name
+  `official-ppo80k-epochs4-20261007`; status was `running` at start.
+- Before collecting the first rollout, the run printed and verified effective
+  PPO values: `n_steps=1024`, rollout buffer 1024, `n_epochs=4`, learning rate
+  and optimizer LR `1e-5`, `gamma=0.99`, `gae_lambda=0.95`, batch size 64,
+  clip 0.2, entropy coefficient 0.01, value coefficient 0.5, and grad norm
+  0.5. The checkpoint policy architecture loaded as `lidar_cnn` with
+  `LidarStateExtractor`.
+- Exact runtime image IDs observed on the created containers: API/evaluator
+  `aicar-iros2026` (`sha256:0a24abcba892faf8b51b3ebc680b26f2f80fb121719f3325992dae348da598a8`)
+  and official simulator
+  `autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete`
+  (`sha256:749fbef07942109d18497cbcf6ffe9452e06ae487f2bfc915e92440bc4b4663d`).
+- Watch telemetry connected to the selected run and reported the initial
+  official rollout at 80,000 steps. PPO diagnostics and race evaluation results
+  will be added after they are available. The run has its own output directory
+  and checkpoints and does not replace the starting checkpoint.
+- Any candidate promotion requires repeated complete official 10-lap
+  evaluations and a better median adjusted time without reduced completion
+  consistency.

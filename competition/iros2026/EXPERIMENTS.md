@@ -5,6 +5,7 @@
 - Starting checkpoint: `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_80000_steps.zip` (SHA-256 `33C37807A951990597C7247F8650178D791DD47AECD082969473707F55BE6FFC`). Two existing official-image attempts recorded first scored laps of 13.926 s and 14.576 s but were disqualified at 11 collisions; neither is a race result.
 - Planned controlled change: increase PPO `n_epochs` from 1 to 4 while resuming this checkpoint in the official simulator. Keep `n_steps=1024`, learning rate `1e-5`, reward, observations, controls, episode flow, and all other PPO values fixed. Bounded run: 20,480 additional steps with 4,096-step checkpoints.
 - Exact settings, image digests, baseline limitations and results will be maintained in `results/official_ppo80k_epochs4_experiment_20261007.md`.
+- Run `9dec8907c63c` started successfully. Before rollout, effective PPO settings were verified against the request (`n_epochs=4`, `n_steps=1024`, LR `1e-5`, `gamma=0.99`, `gae_lambda=0.95`, batch 64, clip 0.2, entropy 0.01); the official run-specific Watch telemetry connected at the 80,000-step resume point. Race evaluation is pending.
 
 ### LiDAR gap-center target — compared with a matched farthest-ray control
 
