@@ -24,3 +24,10 @@ The prior four-epoch update used learning rate `1e-5`; at its latest rollout the
 - Runtime images: API/evaluator `aicar-iros2026:latest` digest `sha256:0a24abcba892faf8b51b3ebc680b26f2f80fb121719f3325992dae348da598a8`; official simulator digest `sha256:749fbef07942109d18497cbcf6ffe9452e06ae487f2bfc915e92440bc4b4663d`.
 - Before the first rollout, the official trainer verified requested/effective learning rate `0.0001`, optimizer LR `0.0001`, four epochs, 1,024-step buffer, and the remaining PPO values. Watch telemetry connected to run `e3370f5ed16c`.
 - Run is active. Record checkpoint hashes, update diagnostics, official evaluation outcome, and stop/promotion decision here as the trial progresses. No checkpoint has been promoted.
+
+### Progress checkpoint — 84,096 total steps
+
+- Saved checkpoint: `logs/rl/official_run_e3370f5ed16c/checkpoints/official_ppo_84096_steps.zip`, SHA-256 `E1AADF494C56BEA2D4A9720A39F4D71FA236B92679CDFF46417AEF6157DE1AFF`.
+- Four PPO updates after the resume. Approximate KL values observed: 0.0360, 0.0150, 0.0328; clip fractions: 0.214, 0.074, 0.190; explained variance: -0.020, 0.051, 0.185. Updates are now materially larger than the `1e-5` trial; no divergence/error has appeared.
+- At 84,800 global steps the run remained active, had seven episodes and no completed lap yet. The live car had zero current-episode collisions and positive body-forward speed at the last frame; this is only a snapshot, not a performance result.
+- Continue to the bounded run end while monitoring stability. Evaluate only saved official-policy checkpoints in fresh official simulator processes. No promotion decision yet.
