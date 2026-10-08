@@ -38,3 +38,10 @@ The prior four-epoch update used learning rate `1e-5`; at its latest rollout the
 - PPO stayed numerically stable. Later updates had approximate KL around 0.0106–0.0196, clip fraction 0.105–0.142, and explained variance from 0.04 to 0.24. The logged episode mean return stayed near -1.61e3 and 18 episodes had produced zero completed laps at the checkpoint.
 - One fresh official evaluation of the 92,288-step checkpoint completed warm-up in 171.77 s with 284 warm-up collisions, then reached 11 scored collisions before completing any scored lap (race disqualification at 178.89 s). Raw report: `official_lr1e4_92288_allow_attempt1_20261007.json`.
 - Compared with the exact 80k source's one `allow` attempt (194.55 s warm-up, 374 warm-up collisions, then 11 scored collisions before a race lap), this is a modest warm-up-only improvement but still no race lap and no valid score. One trial each is not enough to claim a performance gain. Continue only a short same-settings extension to check whether the improvement grows; do not promote this policy.
+
+### Bounded extension run from 92,288
+
+- Managed official run: `8e83a8cd22b2`, display name `official-lr1e4-extension-from92288-20261007`.
+- Starting checkpoint: `logs/rl/official_run_e3370f5ed16c/checkpoints/official_ppo_92288_steps.zip`, SHA-256 `D0C3DE7CA6458C5314059B0503EE37DC623EE985E03E3A54F486A8BD371F5796`.
+- Additional budget: 8,192 official steps, checkpoint every 4,096; same PPO/reward/action settings as the prior `1e-4` run, with a fresh optimizer on resume as specified by the official resume path.
+- Effective values will be verified by the new run log before rollout. This is a bounded continuation to establish whether the modest warm-up-only signal persists; it is not a promotion run.

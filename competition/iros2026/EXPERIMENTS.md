@@ -911,3 +911,8 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   warm-up-only signal, not a valid time or promotion; a short continuation is
   being considered against the same official setup. See
   `results/official_learning_rate_1e4_experiment_20261007.md`.
+
+- **2026-10-07 — bounded LR continuation:** continuing the saved 92,288-step
+  policy for 8,192 more steps with the same `1e-4` LR, PPO, rewards and official
+  inputs; managed run `8e83a8cd22b2`. New optimizer state is initialized by the
+  deterministic resume path. Effective values are verified before rollout.
