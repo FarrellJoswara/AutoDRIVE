@@ -1,5 +1,11 @@
 # Official IROS 2026 experiments
 
+### Official PPO continuation from the best transfer seed — four epochs
+
+- Starting checkpoint: `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_80000_steps.zip` (SHA-256 `33C37807A951990597C7247F8650178D791DD47AECD082969473707F55BE6FFC`). Two existing official-image attempts recorded first scored laps of 13.926 s and 14.576 s but were disqualified at 11 collisions; neither is a race result.
+- Planned controlled change: increase PPO `n_epochs` from 1 to 4 while resuming this checkpoint in the official simulator. Keep `n_steps=1024`, learning rate `1e-5`, reward, observations, controls, episode flow, and all other PPO values fixed. Bounded run: 20,480 additional steps with 4,096-step checkpoints.
+- Exact settings, image digests, baseline limitations and results will be maintained in `results/official_ppo80k_epochs4_experiment_20261007.md`.
+
 ### LiDAR gap-center target — compared with a matched farthest-ray control
 
 - Date: 2026-10-07. Changed only the safe-gap target ray: candidate aims at the
