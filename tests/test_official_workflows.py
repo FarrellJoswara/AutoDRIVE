@@ -109,7 +109,7 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
     path = official_checkpoint(tmp_path)
     replay = OfficialReplayJob(manager)
     with patch("src.layer4.hub.official_run_manager.ROOT", tmp_path):
-        status = replay.start(model_path=path)
+        status = replay.start(model_path=path, trace_steps=500)
     run = manager.get_run(status["run_id"])
     assert run["kind"] == "evaluation"
     api = next(item for item in manager.backend.containers.values() if item["Labels"]["aicar.role"] == "api")
@@ -117,6 +117,7 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
     assert env["AICAR_MODE"] == "evaluate"
     assert env["AICAR_OBSERVATION_PROFILE"] == "official_sensors_history"
     assert env["AICAR_THROTTLE_MODE"] == "forward_only"
+    assert env["AICAR_EVALUATION_TRACE_STEPS"] == "500"
     Path(run["output_dir"], "evaluation.json").write_text(json.dumps({"completed_attempts": 0, "runs": []}))
     manager.reconcile()
     assert replay.status()["evaluation"]["completed_attempts"] == 0
@@ -127,6 +128,13 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
         restarted = recovered.reset()
     assert restarted["run_id"] != status["run_id"]
     recovered.stop()
+
+
+def test_replay_trace_steps_are_bounded(manager, tmp_path):
+    path = official_checkpoint(tmp_path)
+    with pytest.raises(ValueError, match="between 0 and 500"):
+        OfficialReplayJob(manager).start(model_path=path, trace_steps=501)
+    assert not manager.backend.containers
 
 
 def test_replay_rejects_checkpoint_without_provenance(manager, tmp_path):

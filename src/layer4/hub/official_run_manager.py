@@ -203,9 +203,22 @@ class OfficialRunManager:
                 "max_concurrent_runs": self.max_concurrent_runs,
             }
 
-    def create_run(self, official_config: Dict[str, Any], display_name: Optional[str] = None, *, kind: str = "training") -> Dict[str, Any]:
+    def create_run(
+        self,
+        official_config: Dict[str, Any],
+        display_name: Optional[str] = None,
+        *,
+        kind: str = "training",
+        evaluation_trace_steps: int = 0,
+    ) -> Dict[str, Any]:
         if kind not in {"training", "evaluation"}:
             raise ValueError("unsupported official run kind")
+        if isinstance(evaluation_trace_steps, bool) or not isinstance(evaluation_trace_steps, int):
+            raise ValueError("evaluation_trace_steps must be an integer")
+        if not 0 <= evaluation_trace_steps <= 500:
+            raise ValueError("evaluation_trace_steps must be between 0 and 500")
+        if kind != "evaluation" and evaluation_trace_steps:
+            raise ValueError("evaluation traces are only supported for evaluation runs")
         config = normalize_official_config(official_config)
         if kind == "evaluation" and (not config.get("resume") or config["n_envs"] != 1):
             raise ValueError("evaluation requires a checkpoint and exactly one fresh simulator")
@@ -222,6 +235,7 @@ class OfficialRunManager:
                 "run_id": run_id,
                 "display_name": display,
                 "kind": kind,
+                "evaluation_trace_steps": evaluation_trace_steps,
                 "state": "starting",
                 "created_at": created,
                 "started_at": None,
@@ -266,6 +280,8 @@ class OfficialRunManager:
                     f"AICAR_MODEL_PATH={config['resume']}",
                     f"AICAR_EVALUATION_OUTPUT=/runs/rl/official_run_{run_id}/evaluation.json",
                 ])
+                if evaluation_trace_steps:
+                    env.append(f"AICAR_EVALUATION_TRACE_STEPS={evaluation_trace_steps}")
             api_id = self.backend.create_official_run_container(
                 run_id=run_id, role="api",
                 image=GPU_API_IMAGE if config["device"] == "cuda" else API_IMAGE,

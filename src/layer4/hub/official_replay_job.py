@@ -38,16 +38,23 @@ class OfficialReplayJob:
             "last_fleet": self.manager.telemetry(self.run_id).get("fleet") if self.run_id else None,
         }
 
-    def start(self, *, model_path, **_ignored):
+    def start(self, *, model_path, trace_steps=0, **_ignored):
+        if isinstance(trace_steps, bool) or not isinstance(trace_steps, int) or not 0 <= trace_steps <= 500:
+            raise ValueError("trace_steps must be an integer between 0 and 500")
         with self._lock:
             if self.status()["state"] in {"starting", "running", "stopping"}:
                 raise RuntimeError("An official replay is already active")
             config = {**checkpoint_settings(Path(model_path)), "resume": str(model_path), "n_envs": 1}
             self._starting = True
         try:
-            row = self.manager.create_run(config, f"Evaluation: {Path(model_path).name}", kind="evaluation")
+            row = self.manager.create_run(
+                config,
+                f"Evaluation: {Path(model_path).name}",
+                kind="evaluation",
+                evaluation_trace_steps=trace_steps,
+            )
             self.run_id = row["run_id"]
-            self._last_config = {"model_path": model_path}
+            self._last_config = {"model_path": model_path, "trace_steps": trace_steps}
         finally:
             self._starting = False
         result = self.status()

@@ -866,10 +866,13 @@ async def replay_start(request: Request) -> Dict[str, Any]:
         map_id = str(body.get("map_id", "none")).strip() or "none"
         seed = int(body.get("seed", 0))
         device = str(body.get("device", "auto"))
+        trace_steps = int(body.get("trace_steps", 0))
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid replay settings") from exc
     if device not in {"auto", "cpu", "cuda"}:
         raise HTTPException(status_code=400, detail="device must be auto, cpu, or cuda")
+    if not 0 <= trace_steps <= 500:
+        raise HTTPException(status_code=400, detail="trace_steps must be between 0 and 500")
     models_root = (ROOT / "logs" / "rl").resolve()
     model_path = (models_root / model_id).resolve()
     try:
@@ -881,7 +884,9 @@ async def replay_start(request: Request) -> Dict[str, Any]:
     if map_id != "none" or device not in {"auto", "cpu"}:
         raise HTTPException(status_code=400, detail="Official replay uses its image track and CPU policy runtime")
     try:
-        return await asyncio.to_thread(replay_job.start, model_path=model_path)
+        return await asyncio.to_thread(
+            replay_job.start, model_path=model_path, trace_steps=trace_steps
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
