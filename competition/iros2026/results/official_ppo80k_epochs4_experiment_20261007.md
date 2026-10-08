@@ -14,11 +14,13 @@ reward, determines whether this helps.
   `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_80000_steps.zip`
 - SHA-256:
   `33C37807A951990597C7247F8650178D791DD47AECD082969473707F55BE6FFC`
-- This preserved checkpoint was already evaluated with official images and
-  permitted policy inputs. Two available attempts recorded first scored laps
-  of 13.926 s and 14.576 s, then reached 11 scored collisions and were
-  disqualified. There are zero valid 10-lap attempts in the full saved results
-  set, so these are diagnostic baselines only—not a champion time.
+- Earlier reports with first scored laps of 13.926 s and 14.576 s reused the
+  checkpoint filename but predate the recorded write time of this checkpoint;
+  their initial policy action traces differ. The reports do not contain a
+  checkpoint hash, so they cannot be attributed to these exact checkpoint
+  bytes and are withdrawn as a baseline for this run. Fresh direct evaluations
+  of the exact SHA are recorded below. There are zero valid 10-lap attempts in
+  the saved results set.
 - Official Devkit base image:
   `autodriveecosystem/autodrive_roboracer_api:2026-iros-compete`,
   `sha256:4ce4334657feb4c6760aa61f23a76f8962bf80e8e746e2547b082985a95a46a2`.
