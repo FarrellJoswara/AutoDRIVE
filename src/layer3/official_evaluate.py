@@ -85,6 +85,67 @@ def verify_vehicle_motion(
     }
 
 
+def summarize_evaluator_positions(
+    positions: List[List[float]], *, max_points: int = 600
+) -> Dict[str, Any]:
+    """Summarize and bound the evaluator-only horizontal IPS route trace.
+
+    Position is restricted diagnostic data. This trace is written only to the
+    evaluation report; it is never passed to the policy or included in its
+    observation/action diagnostics.
+    """
+    if max_points < 2:
+        raise ValueError("max_points must be at least 2")
+    valid = [
+        [float(value) for value in point]
+        for point in positions
+        if len(point) >= 2 and all(math.isfinite(float(value)) for value in point)
+    ]
+    if not valid:
+        return {
+            "source": "restricted_ips_evaluator_only",
+            "positions_collected": 0,
+            "path_length_m": None,
+            "net_displacement_m": None,
+            "path_efficiency": None,
+            "max_distance_from_start_m": None,
+            "sampled_xz_m": [],
+        }
+
+    horizontal = [
+        (point[0], point[2] if len(point) >= 3 else point[1])
+        for point in valid
+    ]
+    path_length = sum(
+        math.hypot(current[0] - previous[0], current[1] - previous[1])
+        for previous, current in zip(horizontal, horizontal[1:])
+    )
+    origin = horizontal[0]
+    net_displacement = math.hypot(
+        horizontal[-1][0] - origin[0], horizontal[-1][1] - origin[1]
+    )
+    max_distance = max(
+        math.hypot(point[0] - origin[0], point[1] - origin[1])
+        for point in horizontal
+    )
+    if len(horizontal) <= max_points:
+        sample_indices = list(range(len(horizontal)))
+    else:
+        sample_indices = sorted({
+            round(index * (len(horizontal) - 1) / (max_points - 1))
+            for index in range(max_points)
+        })
+    return {
+        "source": "restricted_ips_evaluator_only",
+        "positions_collected": len(horizontal),
+        "path_length_m": path_length,
+        "net_displacement_m": net_displacement,
+        "path_efficiency": net_displacement / path_length if path_length > 0 else None,
+        "max_distance_from_start_m": max_distance,
+        "sampled_xz_m": [list(horizontal[index]) for index in sample_indices],
+    }
+
+
 def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
     """Summarize a bounded stream of policy or observation values."""
     if not values:
@@ -321,6 +382,7 @@ def evaluate_attempt(
         ),
         "action_trace": action_trace,
         "motion_verification": motion_status,
+        "position_diagnostics": summarize_evaluator_positions(position_trace),
         "score_status": score_status,
         "valid_for_comparison": score_status == "valid",
     })
