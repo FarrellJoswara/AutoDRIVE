@@ -201,6 +201,27 @@ def _policy_observation_trace(observation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _simulator_alignment_trace(env: Any, info: Dict[str, Any]) -> Dict[str, Any]:
+    """Return evaluator-only IPS/LiDAR pairing for map registration diagnostics.
+
+    These restricted simulator fields are deliberately kept outside the policy
+    observation and are emitted only when the caller requested a trace.
+    """
+    result: Dict[str, Any] = {}
+    position = info.get("race_position")
+    if position is not None:
+        result["race_position"] = [float(value) for value in position]
+    snap = getattr(env, "_last_snap", None)
+    if snap is not None:
+        ranges = getattr(snap, "lidar_ranges", None)
+        if ranges is not None:
+            result["simulator_lidar_ranges"] = [float(value) for value in ranges]
+        heading = getattr(snap, "heading_yaw", None)
+        if heading is not None:
+            result["simulator_heading_yaw_rad"] = float(heading)
+    return result
+
+
 def action_observation_diagnostics(
     *,
     policy_throttle: List[float],
@@ -302,6 +323,7 @@ def evaluate_attempt(
             action_trace.append({
                 "step": steps,
                 **trace_observation,
+                **_simulator_alignment_trace(env, info),
                 "policy_throttle": command[0],
                 "policy_steering": command[1],
                 "applied_throttle": float(info.get("throttle_command", 0.0)),

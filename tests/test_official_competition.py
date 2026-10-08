@@ -30,6 +30,7 @@ from src.layer3.official_evaluate import (
     collision_penalty_seconds,
     evaluate_attempt,
     _policy_observation_trace,
+    _simulator_alignment_trace,
     summarize_attempt,
     verify_vehicle_motion,
 )
@@ -117,6 +118,77 @@ def test_official_trace_records_only_policy_input_observations_compactly():
         "state": np.zeros(9, dtype=np.float32),
     })
     assert history_trace["lidar_min_front"] == 0.4
+
+
+def test_alignment_trace_pairs_restricted_ips_and_raw_lidar_without_changing_policy_input():
+    observation = {
+        "lidar": np.asarray([0.1, 0.2, 0.3], dtype=np.float32),
+        "state": np.zeros(9, dtype=np.float32),
+    }
+    env = SimpleNamespace(_last_snap=SimpleNamespace(
+        lidar_ranges=np.asarray([1.0, 2.0, 3.0], dtype=np.float32),
+        heading_yaw=0.75,
+    ))
+
+    alignment = _simulator_alignment_trace(env, {"race_position": (1.0, 2.0, 3.0)})
+    policy_trace = _policy_observation_trace(observation)
+
+    assert alignment == {
+        "race_position": [1.0, 2.0, 3.0],
+        "simulator_lidar_ranges": [1.0, 2.0, 3.0],
+        "simulator_heading_yaw_rad": 0.75,
+    }
+    assert "race_position" not in policy_trace
+    assert "simulator_lidar_ranges" not in policy_trace
+
+
+def test_official_evaluator_attaches_alignment_capture_to_bounded_action_trace():
+    class Model:
+        def predict(self, obs, deterministic=True):
+            return np.zeros(2, dtype=np.float32), None
+
+    class Env:
+        def __init__(self):
+            self._last_snap = SimpleNamespace(
+                lidar_ranges=np.asarray([1.0, 2.0, 3.0], dtype=np.float32),
+                heading_yaw=0.25,
+            )
+
+        def reset(self):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                {"race_position": (0.0, 0.0, 0.0), "race_complete": False},
+            )
+
+        def step(self, action):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                0.0,
+                False,
+                False,
+                {
+                    "race_position": (1.0, 2.0, 3.0),
+                    "race_complete": False,
+                    "control_interval_s": 0.05,
+                    "lidar_scan_rate_hz": 40.0,
+                    "race_lap_times_s": [],
+                    "race_collisions": 0,
+                    "throttle_command": 0.0,
+                    "steering_command": 0.0,
+                },
+            )
+
+    result = evaluate_attempt(
+        Model(), Env(), wall_timeout_s=2.0, max_steps=1, attempt_index=1,
+        trace_steps=1, motion_check_after_s=10.0,
+    )
+
+    trace = result["action_trace"]
+    assert len(trace) == 1
+    assert trace[0]["race_position"] == [1.0, 2.0, 3.0]
+    assert trace[0]["simulator_lidar_ranges"] == [1.0, 2.0, 3.0]
+    assert trace[0]["simulator_heading_yaw_rad"] == 0.25
+    assert trace[0]["observation_state"] == [0.0] * 9
 
 
 def test_motion_preflight_rejects_stationary_ips_and_accepts_displacement():
