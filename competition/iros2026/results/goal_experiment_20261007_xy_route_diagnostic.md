@@ -15,8 +15,11 @@ superseded. This report and its metrics use X/Y as the ground plane.
 ## Exact experiment
 
 - Starting checkpoint: none; fixed deterministic `lidar_gap` controller.
-- API image: `autodriveecosystem/autodrive_roboracer_api:2026-iros-compete`,
-  image ID `sha256:0a24abcba892faf8b51b3ebc680b26f2f80fb121719f3325992dae348da598a8`.
+- Derived policy/evaluator image: `aicar-iros2026:latest`, image ID
+  `sha256:0a24abcba892faf8b51b3ebc680b26f2f80fb121719f3325992dae348da598a8`.
+- Official Devkit base image:
+  `autodriveecosystem/autodrive_roboracer_api:2026-iros-compete`, image ID
+  `sha256:4ce4334657feb4c6760aa61f23a76f8962bf80e8e746e2547b082985a95a46a2`.
 - Simulator image: `autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete`,
   image ID `sha256:749fbef07942109d18497cbcf6ffe9452e06ae487f2bfc915e92440bc4b4663d`.
 - Inputs: official permitted sensor observations; no route trace/IPS data was
@@ -44,6 +47,14 @@ vertical Z only 0.0074 m (about 5.4–6.1 cm). This rules out the earlier
 interpretation that the car was moving vertically. It instead shows repeated
 motion within a narrow part of the track, with strong backtracking/oscillation
 and repeated contacts, rather than a completed route.
+
+The measured control loop averaged 19.76 Hz (50.47 ms median interval) while
+the scan metadata reported about 40 Hz. This is an observed property of this
+local controller run, not a competition-mandated action period. Because this
+was a fixed-controller diagnostic with a local wall guard, its route behavior
+and rate are debugging evidence only; it is not a comparable race score or
+promotion result. The official process uses the official Devkit base with the
+team's algorithm container; see the [2026 technical guide](https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-guide-2026/).
 
 This result diagnoses the fixed LiDAR-gap baseline as ineffective under this
 setup. It does **not** establish that PPO has the same behavior, identify a
