@@ -1,5 +1,11 @@
 # Official Route Diagnostic — 2026-10-07
 
+> **Superseded coordinate interpretation:** The initial report below projected
+> the ROS `/ips` position into X/Z, based on the Unity telemetry frame. That was
+> the wrong frame for this field. Official ROS IPS uses X/Y for the track plane
+> and Z for height. Use [the corrected X/Y report](goal_experiment_20261007_xy_route_diagnostic.md)
+> for all route conclusions; the original JSON and commit are retained as history.
+
 ## Purpose
 
 Diagnose why the deterministic `lidar_gap` baseline fails to finish its official

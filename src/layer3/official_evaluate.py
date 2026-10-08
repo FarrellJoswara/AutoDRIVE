@@ -88,11 +88,13 @@ def verify_vehicle_motion(
 def summarize_evaluator_positions(
     positions: List[List[float]], *, max_points: int = 600
 ) -> Dict[str, Any]:
-    """Summarize and bound the evaluator-only horizontal IPS route trace.
+    """Summarize and bound an evaluator-only official ROS IPS route trace.
 
     Position is restricted diagnostic data. This trace is written only to the
     evaluation report; it is never passed to the policy or included in its
-    observation/action diagnostics.
+    observation/action diagnostics. Official ROS IPS uses the AutoDRIVE frame
+    (x/y horizontal, z vertical); it is not the Unity-swizzled TelemetrySnapshot
+    position.
     """
     if max_points < 2:
         raise ValueError("max_points must be at least 2")
@@ -109,11 +111,16 @@ def summarize_evaluator_positions(
             "net_displacement_m": None,
             "path_efficiency": None,
             "max_distance_from_start_m": None,
-            "sampled_xz_m": [],
+            "max_3d_displacement_from_start_m": None,
+            "vertical_min_m": None,
+            "vertical_max_m": None,
+            "vertical_span_m": None,
+            "sampled_xy_m": [],
+            "sampled_xyz_m": [],
         }
 
     horizontal = [
-        (point[0], point[2] if len(point) >= 3 else point[1])
+        (point[0], point[1])
         for point in valid
     ]
     path_length = sum(
@@ -128,6 +135,13 @@ def summarize_evaluator_positions(
         math.hypot(point[0] - origin[0], point[1] - origin[1])
         for point in horizontal
     )
+    max_3d_displacement = max(
+        math.sqrt(sum((current[axis] - valid[0][axis]) ** 2 for axis in range(3)))
+        for current in valid
+    ) if all(len(point) >= 3 for point in valid) else None
+    vertical_values = [point[2] for point in valid] if all(
+        len(point) >= 3 for point in valid
+    ) else []
     if len(horizontal) <= max_points:
         sample_indices = list(range(len(horizontal)))
     else:
@@ -142,7 +156,15 @@ def summarize_evaluator_positions(
         "net_displacement_m": net_displacement,
         "path_efficiency": net_displacement / path_length if path_length > 0 else None,
         "max_distance_from_start_m": max_distance,
-        "sampled_xz_m": [list(horizontal[index]) for index in sample_indices],
+        "max_3d_displacement_from_start_m": max_3d_displacement,
+        "vertical_min_m": min(vertical_values) if vertical_values else None,
+        "vertical_max_m": max(vertical_values) if vertical_values else None,
+        "vertical_span_m": (
+            max(vertical_values) - min(vertical_values) if vertical_values else None
+        ),
+        "sampled_xy_m": [list(horizontal[index]) for index in sample_indices],
+        "sampled_xyz_m": [list(valid[index][:3]) for index in sample_indices]
+        if all(len(point) >= 3 for point in valid) else [],
     }
 
 
