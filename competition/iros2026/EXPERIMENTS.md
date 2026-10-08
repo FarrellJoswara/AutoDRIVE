@@ -2,7 +2,7 @@
 
 ### Official PPO continuation from the best transfer seed — four epochs
 
-- Starting checkpoint: `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_80000_steps.zip` (SHA-256 `33C37807A951990597C7247F8650178D791DD47AECD082969473707F55BE6FFC`). Two existing official-image attempts recorded first scored laps of 13.926 s and 14.576 s but were disqualified at 11 collisions; neither is a race result.
+- Starting checkpoint: `logs/rl/lidar_speed_consistency_finetune_20261007/ckpt/ppo_80000_steps.zip` (SHA-256 `33C37807A951990597C7247F8650178D791DD47AECD082969473707F55BE6FFC`). Earlier reports with 13.926 s and 14.576 s first laps reused the same checkpoint filename but predate this checkpoint's write time; their action traces differ, and they cannot be attributed to these checkpoint bytes. Withdraw those laps as a baseline for this continuation. Direct fresh-process evaluations of the exact SHA are recorded below; neither has produced a valid race result.
 - Planned controlled change: increase PPO `n_epochs` from 1 to 4 while resuming this checkpoint in the official simulator. Keep `n_steps=1024`, learning rate `1e-5`, reward, observations, controls, episode flow, and all other PPO values fixed. Bounded run: 20,480 additional steps with 4,096-step checkpoints.
 - Exact settings, image digests, baseline limitations and results will be maintained in `results/official_ppo80k_epochs4_experiment_20261007.md`.
 - Run `9dec8907c63c` started successfully. Before rollout, effective PPO settings were verified against the request (`n_epochs=4`, `n_steps=1024`, LR `1e-5`, `gamma=0.99`, `gae_lambda=0.95`, batch 64, clip 0.2, entropy 0.01); the official run-specific Watch telemetry connected at the 80,000-step resume point. Race evaluation is pending.
@@ -890,3 +890,15 @@ Diagnostic artifacts: `results/lidar_gap_coast_diag_30s_20261007.json`,
   policy from this single attempt; compare repeated fresh-process runs before
   changing the competition action mapping. Raw report:
   `results/official_ppo80k_source_zero_attempt1_20261007.json`.
+
+- **2026-10-07 — official PPO learning-rate test:** managed run
+  `e3370f5ed16c`, resuming the preserved 80k checkpoint; changed only LR from
+  `1e-5` to `1e-4`, keeping four epochs and all other settings fixed. Effective
+  optimizer LR and PPO configuration were verified before rollout. Run is
+  active; results pending. Detailed plan and provenance correction:
+  `results/official_learning_rate_1e4_experiment_20261007.md`.
+- **Checkpoint provenance correction:** the previously reported 13.926/14.576 s
+  attempts reused a checkpoint filename but have different initial action
+  traces and predate the exact 80k checkpoint used by the four-epoch official
+  continuation. They are withdrawn as its baseline; do not use those laps to
+  claim improvement.
