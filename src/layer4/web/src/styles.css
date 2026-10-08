@@ -373,6 +373,203 @@ label.check {
   margin-bottom: 0.85rem;
 }
 
+.official-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 999px;
+  color: var(--accent);
+  padding: 0.18rem 0.55rem;
+  font: 600 0.72rem var(--font-mono);
+  text-transform: uppercase;
+}
+
+.official-run-list,
+.official-settings-form {
+  margin-top: 1.25rem;
+}
+
+.official-run-card {
+  background: color-mix(in srgb, var(--bg1) 82%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  margin: 0.55rem 0;
+}
+
+.official-run-card[data-selected="true"] {
+  border-color: var(--accent);
+}
+
+.official-run-select {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.2rem 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.official-run-select > span:first-child {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.official-run-select small,
+.official-run-meta {
+  color: var(--muted);
+  font: 0.75rem var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.official-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0.55rem 0;
+}
+
+.official-settings-form .grid {
+  margin-top: 0.75rem;
+}
+
+.watch-heading,
+.watch-run-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.watch-heading h2 {
+  margin: 0;
+}
+
+.watch-view-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--bg0);
+}
+
+.watch-view-toggle button {
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  padding: 0.42rem 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.watch-view-toggle button:hover {
+  color: var(--text);
+  background: var(--bg2);
+}
+
+.watch-view-toggle button[aria-pressed="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg1));
+}
+
+.watch-view-toggle button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.watch-run-select {
+  min-width: min(100%, 22rem);
+}
+
+.watch-run-status {
+  justify-content: flex-start;
+  padding: 0.65rem 0;
+  color: var(--muted);
+  font: 0.78rem var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.watch-empty {
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.official-car-list {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.official-car-list button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.75rem;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  padding: 0.5rem;
+  cursor: pointer;
+}
+
+.official-car-list button[data-selected="true"] {
+  border-color: var(--accent);
+}
+
+.official-car-list small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.official-watch-data {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.official-watch-data h3 {
+  margin-top: 0;
+}
+
+.official-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.55rem;
+}
+
+.official-metric-grid > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 0.45rem;
+}
+
+.official-metric-grid span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.official-metric-grid strong {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+
+.official-watch-footnote {
+  margin-top: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 .evaluator-panel {
   margin: 0 0 0.85rem;
   padding: 0.65rem 0.75rem;

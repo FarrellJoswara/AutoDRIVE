@@ -8,11 +8,13 @@ blocks on a hung hub.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import queue
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -73,8 +75,12 @@ def _lap_fields(info: Dict[str, Any]) -> Dict[str, Any]:
 class _Publisher:
     """Daemon thread: drop-oldest queue → HTTP POST with timeouts + breaker."""
 
-    def __init__(self, hub_url: str, maxsize: int = 4) -> None:
+    def __init__(
+        self, hub_url: str, *, snapshot_path: Optional[Path] = None, maxsize: int = 4
+    ) -> None:
         self.url = hub_url.rstrip("/") + "/telemetry"
+        self.snapshot_path = snapshot_path
+        self._last_snapshot_write = 0.0
         self._q: queue.Queue = queue.Queue(maxsize=maxsize)
         self._stop = object()
         self._thread = threading.Thread(
@@ -125,6 +131,32 @@ class _Publisher:
             if item is self._stop:
                 break
             now = time.monotonic()
+            if (
+                self.snapshot_path is not None
+                and item.get("kind") == "fleet"
+                and now - self._last_snapshot_write >= 1.0
+            ):
+                try:
+                    self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.snapshot_path.write_text(
+                        json.dumps(item, separators=(",", ":")), encoding="utf-8"
+                    )
+                    self._last_snapshot_write = now
+                except (OSError, TypeError, ValueError):
+                    logger.warning("hub_callback: could not persist latest Watch frame")
+            if self.snapshot_path is not None and item.get("kind") in {"metrics", "phase"}:
+                target_name = (
+                    "latest_training_phase.json"
+                    if item.get("kind") == "phase"
+                    else "latest_telemetry.json"
+                )
+                try:
+                    self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    (self.snapshot_path.parent / target_name).write_text(
+                        json.dumps(item, separators=(",", ":")), encoding="utf-8"
+                    )
+                except (OSError, TypeError, ValueError):
+                    logger.warning("hub_callback: could not persist latest run telemetry")
             if now < self._backoff_until:
                 continue
             try:
@@ -156,6 +188,7 @@ class HubTelemetryCallback(BaseCallback):
         lidar_beams: int = 120,
         lidar_max_envs: int = 4,
         runtime: str = "custom",
+        run_dir: Optional[Path] = None,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose)
@@ -166,6 +199,7 @@ class HubTelemetryCallback(BaseCallback):
         self.lidar_beams = max(1, int(lidar_beams))
         self.lidar_max_envs = max(0, int(lidar_max_envs))
         self.runtime = str(runtime)
+        self.run_dir = Path(run_dir) if run_dir is not None else None
         self.rollout_size = 1
         self._pub: Optional[_Publisher] = None
         self._last_fleet_t = 0.0
@@ -187,9 +221,17 @@ class HubTelemetryCallback(BaseCallback):
         self._last_yaw: Dict[int, float] = {}
         self._latest_ppo_diagnostics: Dict[str, float] = {}
         self._latest_ppo_step: Optional[int] = None
+        self._clock_source_counts: Dict[str, int] = {}
+        self._clock_elapsed_by_env: Dict[int, float] = {}
+        self._wall_elapsed_by_env: Dict[int, float] = {}
+        self._clock_total_elapsed_by_env: Dict[int, float] = {}
+        self._wall_total_elapsed_by_env: Dict[int, float] = {}
+        self._clock_lap_count_by_env: Dict[int, int] = {}
+        self._clock_lap_comparisons: List[Dict[str, float]] = []
 
     def _on_training_start(self) -> None:
-        self._pub = _Publisher(self.hub_url)
+        snapshot_path = self.run_dir / "watch_latest.json" if self.run_dir else None
+        self._pub = _Publisher(self.hub_url, snapshot_path=snapshot_path)
         n = getattr(self.training_env, "num_envs", 1)
         self.rollout_size = max(1, int(n) * int(getattr(self.model, "n_steps", 1)))
         self._ep_returns = np.zeros(n, dtype=np.float64)
@@ -204,6 +246,7 @@ class HubTelemetryCallback(BaseCallback):
         self._last_yaw = {}
         self._last_collision_counts = {}
         self._episode_collision_counts = {}
+        self._clock_lap_count_by_env = {env_id: 0 for env_id in range(n)}
         self._publish_phase("rollout")
 
     def _publish_phase(self, phase: str) -> None:
@@ -282,10 +325,46 @@ class HubTelemetryCallback(BaseCallback):
         if infos is not None:
             for i, raw in enumerate(infos):
                 info = raw if isinstance(raw, dict) else {}
+                source = str(info.get("control_interval_source", "unknown"))
+                self._clock_source_counts[source] = self._clock_source_counts.get(source, 0) + 1
+                try:
+                    elapsed = float(info.get("control_interval_s", 0.0))
+                except (TypeError, ValueError):
+                    elapsed = 0.0
+                if np.isfinite(elapsed) and elapsed > 0:
+                    self._clock_elapsed_by_env[i] = self._clock_elapsed_by_env.get(i, 0.0) + elapsed
+                    self._clock_total_elapsed_by_env[i] = self._clock_total_elapsed_by_env.get(i, 0.0) + elapsed
+                try:
+                    wall_elapsed = float(info.get("control_interval_wall_s", 0.0))
+                except (TypeError, ValueError):
+                    wall_elapsed = 0.0
+                if np.isfinite(wall_elapsed) and wall_elapsed > 0:
+                    self._wall_elapsed_by_env[i] = self._wall_elapsed_by_env.get(i, 0.0) + wall_elapsed
+                    self._wall_total_elapsed_by_env[i] = self._wall_total_elapsed_by_env.get(i, 0.0) + wall_elapsed
                 current_laps = max(0, int(
                     info.get("race_laps_completed", info.get("lap_count", 0)) or 0
                 ))
                 previous_laps = self._last_episode_laps.get(i, 0)
+                raw_lap_count = int(info.get("lap_count", 0) or 0)
+                previous_raw_lap_count = self._clock_lap_count_by_env.get(i, raw_lap_count)
+                if raw_lap_count > previous_raw_lap_count:
+                    try:
+                        official_lap_s = float(info.get("last_lap_time_s", 0.0))
+                    except (TypeError, ValueError):
+                        official_lap_s = 0.0
+                    action_elapsed_s = self._clock_elapsed_by_env.get(i, 0.0)
+                    wall_elapsed_s = self._wall_elapsed_by_env.get(i, 0.0)
+                    if np.isfinite(official_lap_s) and official_lap_s > 0:
+                        self._clock_lap_comparisons.append({
+                            "env_id": int(i), "action_elapsed_s": action_elapsed_s,
+                            "wall_elapsed_s": wall_elapsed_s,
+                            "official_lap_time_s": official_lap_s,
+                            "ratio": action_elapsed_s / official_lap_s,
+                        })
+                        self._clock_lap_comparisons = self._clock_lap_comparisons[-100:]
+                    self._clock_elapsed_by_env[i] = 0.0
+                    self._wall_elapsed_by_env[i] = 0.0
+                self._clock_lap_count_by_env[i] = raw_lap_count
                 self._completed_laps += max(0, current_laps - previous_laps)
                 self._last_episode_laps[i] = current_laps
                 lap_time = info.get("race_best_lap_time_s", info.get("best_lap_time_s"))
@@ -328,6 +407,8 @@ class HubTelemetryCallback(BaseCallback):
                     self._last_episode_laps[i] = 0
                     self._ten_lap_recent[i] = []
                     self._ten_lap_seen_splits[i] = 0
+                    self._clock_elapsed_by_env[i] = 0.0
+                    self._clock_lap_count_by_env.pop(i, None)
 
         if self.num_timesteps % self.every_n == 0:
             rewards = self.locals.get("rewards")
@@ -403,7 +484,11 @@ class HubTelemetryCallback(BaseCallback):
                 continue
             pose = (float(pos[0]), float(pos[2]))
             yaw = float(info["yaw"]) if "yaw" in info else None
-            speed = float(info["true_speed"]) if "true_speed" in info else None
+            speed = (
+                float(info["watch_speed_mps"])
+                if "watch_speed_mps" in info
+                else float(info["true_speed"]) if "true_speed" in info else None
+            )
             if yaw is None or abs(yaw) < 1e-4:
                 prev = self._last_pose.get(i)
                 if prev is not None:
@@ -507,7 +592,11 @@ class HubTelemetryCallback(BaseCallback):
                 pose = [float(pos[0]), float(pos[2])]
 
             yaw = float(info["yaw"]) if "yaw" in info else None
-            speed = float(info["true_speed"]) if "true_speed" in info else None
+            speed = (
+                float(info["watch_speed_mps"])
+                if "watch_speed_mps" in info
+                else float(info["true_speed"]) if "true_speed" in info else None
+            )
             # Prefer Layer-1 yaw. If still ~0, use per-step pose delta / sticky.
             # Old 5cm threshold at 15 Hz never fired at ~0.3 m/s → yaw stuck at 0.
             if pose is not None and (yaw is None or abs(yaw) < 1e-4):
@@ -535,6 +624,11 @@ class HubTelemetryCallback(BaseCallback):
                 if i < len(episode_collision_counts)
                 else 0,
                 "speed": speed,
+                "speed_source": (
+                    "lidar_estimate" if "watch_speed_mps" in info
+                    else "wheel_encoder" if self.runtime == "official"
+                    else "simulator"
+                ),
                 "v_long": info.get("v_long"),
                 "throttle_command": info.get("throttle_command"),
                 "steering_command": info.get("steering_command"),
@@ -586,6 +680,25 @@ class HubTelemetryCallback(BaseCallback):
         }
 
     def _on_training_end(self) -> None:
+        if self.run_dir is not None:
+            try:
+                (self.run_dir / "timing_diagnostics.json").write_text(
+                    json.dumps({
+                        "clock_sources": self._clock_source_counts,
+                        "ros_action_elapsed_s_by_env": self._clock_total_elapsed_by_env,
+                        "wall_action_elapsed_s_by_env": self._wall_total_elapsed_by_env,
+                        "ros_to_wall_elapsed_ratio_by_env": {
+                            str(env_id): self._clock_total_elapsed_by_env[env_id] / wall_s
+                            for env_id, wall_s in self._wall_total_elapsed_by_env.items()
+                            if wall_s > 0 and env_id in self._clock_total_elapsed_by_env
+                        },
+                        "completed_lap_clock_comparisons": self._clock_lap_comparisons,
+                        "comparison_note": "Sum of action intervals between policy decisions compared with the official lap timer; boundary intervals and the first post-reset lap include reset timing differences.",
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                logger.warning("Could not save clock diagnostics: %s", exc)
         if self._pub is not None:
             self._publish_phase("stopped")
             self._pub.stop(join_timeout=2.0)
@@ -593,7 +706,7 @@ class HubTelemetryCallback(BaseCallback):
 
 
 def maybe_hub_callback(
-    run_id: str, *, runtime: str = "custom"
+    run_id: str, *, runtime: str = "custom", run_dir: Optional[Path] = None
 ) -> Optional[HubTelemetryCallback]:
     """Return a callback when HUB_URL is set; else None (CLI parity)."""
     hub = os.environ.get("HUB_URL", "").strip()
@@ -602,6 +715,7 @@ def maybe_hub_callback(
     return HubTelemetryCallback(
         hub_url=hub,
         run_id=run_id,
+        run_dir=run_dir,
         every_n=_env_int("AICAR_TELEMETRY_EVERY_N", 200),
         fleet_hz=_env_float("AICAR_FLEET_HZ", 15.0),
         lidar_beams=_env_int("AICAR_LIDAR_DISPLAY_BEAMS", 120),

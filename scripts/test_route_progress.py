@@ -154,7 +154,7 @@ class RouteProgressTests(unittest.TestCase):
         )
         self.assertEqual(recovered_ground, 0.0)
 
-    def test_frontier_reward_increases_quadratically_with_average_pace_and_caps(self) -> None:
+    def test_frontier_reward_pace_bonus_strength_scales_quadratic_increase_and_caps(self) -> None:
         from src.layer2.rewards import compute_reward_components
 
         common = dict(
@@ -167,6 +167,7 @@ class RouteProgressTests(unittest.TestCase):
             cfg=RewardConfig(
                 route_progress_scale=10.0,
                 frontier_pace_target_mps=6.0,
+                frontier_pace_bonus_strength=2.0,
                 time_penalty_per_second=0.0,
             ),
         )
@@ -180,9 +181,9 @@ class RouteProgressTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(at_zero["route_progress"], 10.0)
-        self.assertAlmostEqual(at_half_target["route_progress"], 12.5)
-        self.assertAlmostEqual(at_target["route_progress"], 20.0)
-        self.assertAlmostEqual(above_target["route_progress"], 20.0)
+        self.assertAlmostEqual(at_half_target["route_progress"], 15.0)
+        self.assertAlmostEqual(at_target["route_progress"], 30.0)
+        self.assertAlmostEqual(above_target["route_progress"], 30.0)
         no_progress = compute_reward_components(
             frontier_advanced_m=0.0, frontier_average_speed_mps=6.0, **{
                 key: value for key, value in common.items()
@@ -190,6 +191,35 @@ class RouteProgressTests(unittest.TestCase):
             }
         )
         self.assertEqual(no_progress["route_progress"], 0.0)
+
+    def test_current_push_pace_uses_only_the_current_frontier_advance(self) -> None:
+        from src.layer2.rewards import compute_reward_components
+
+        cfg = RewardConfig(
+            route_progress_scale=10.0,
+            frontier_pace_target_mps=6.0,
+            frontier_pace_bonus_strength=2.0,
+            frontier_pace_source="current_push",
+            time_penalty_per_second=0.0,
+        )
+        common = dict(
+            v_long=0.0,
+            frontier_advanced_m=0.5,
+            frontier_average_speed_mps=1.0,
+            collision_event=False,
+            slip_angle=0.0,
+            prev_steering=0.0,
+            steering=0.0,
+            cfg=cfg,
+        )
+        slow_average_fast_push = compute_reward_components(
+            frontier_current_speed_mps=6.0, **common
+        )
+        fast_average_slow_push = compute_reward_components(
+            frontier_current_speed_mps=1.0, **{**common, "frontier_average_speed_mps": 6.0}
+        )
+        self.assertAlmostEqual(slow_average_fast_push["route_progress"], 15.0)
+        self.assertAlmostEqual(fast_average_slow_push["route_progress"], 5.2777777778)
 
     def test_backward_motion_penalty_scales_with_reverse_distance(self) -> None:
         cfg = RewardConfig(backward_speed_penalty_scale=2.0, time_penalty_per_second=0.0)

@@ -7,7 +7,8 @@ import {
   ReplayStatus,
   TrainingPhaseTelemetry,
   TrainStatus,
-  getTrainStatus,
+  OfficialRunTelemetry,
+  RunSummary,
   getReplayStatus,
   wsUrl,
 } from "./api";
@@ -33,6 +34,7 @@ interface StoreState {
   fleetAgeMs: number;
   replayFleet: FleetTelemetry | null;
   replayFleetAgeMs: number;
+  officialRunId: string | null;
 }
 
 let state: StoreState = {
@@ -48,6 +50,7 @@ let state: StoreState = {
   fleetAgeMs: Infinity,
   replayFleet: null,
   replayFleetAgeMs: Infinity,
+  officialRunId: null,
 };
 
 /** Last-value fleet for rAF canvas — updated every WS sample without React. */
@@ -60,6 +63,7 @@ let lastReplayUiEmit = 0;
 
 let trainingPhaseHot: TrainingPhaseTelemetry | null = null;
 let evaluatorLiveHot: EvaluatorLiveTelemetry | null = null;
+let officialMetricKey: string | null = null;
 
 /** Latest evaluator pose for the animation-frame canvas path. */
 export function getEvaluatorLiveHot(): EvaluatorLiveTelemetry | null {
@@ -109,27 +113,91 @@ function pushMetric(m: MetricsTelemetry) {
 }
 
 /** Return recent metrics in time order for charts mounted after training starts. */
-export function getMetricsHistoryHot(): MetricsTelemetry[] {
+export function getMetricsHistoryHot(runId?: string): MetricsTelemetry[] {
   const history: MetricsTelemetry[] = [];
   const start = (metricsHistoryNext - metricsHistoryLength + METRICS_CAP) % METRICS_CAP;
   for (let offset = 0; offset < metricsHistoryLength; offset += 1) {
-    history.push(metricsHistoryHot[(start + offset) % METRICS_CAP]);
+    const sample = metricsHistoryHot[(start + offset) % METRICS_CAP];
+    if (!runId || sample.run_id === runId) history.push(sample);
   }
   return history;
 }
 
-function ingestFleet(p: FleetTelemetry) {
+export function setOfficialRunSelection(run: RunSummary | null) {
+  const runId = run?.run_id ?? null;
+  if (state.officialRunId === runId) {
+    if (run) setState({ status: runToLegacyStatus(run) });
+    return;
+  }
+  fleetHot = null;
+  fleetHotReceivedAt = 0;
+  trainingPhaseHot = null;
+  evaluatorLiveHot = null;
+  officialMetricKey = null;
+  state = {
+    ...state,
+    officialRunId: runId,
+    fleet: null,
+    fleetAgeMs: Infinity,
+    metrics: null,
+    metricsLen: 0,
+    trainingPhase: null,
+    status: run ? runToLegacyStatus(run) : null,
+  };
+  emit();
+  emitFleetFrame();
+}
+
+function runToLegacyStatus(run: RunSummary): TrainStatus {
+  const status = state.status;
+  return {
+    state: run.state === "failed" ? "error"
+      : run.state === "completed" || run.state === "stopped" ? "exited"
+      : run.state,
+    pid: run.pid ?? null,
+    started_at: run.started_at ?? null,
+    argv: [],
+    exit_code: run.exit_code ?? null,
+    stop_reason: run.stop_reason ?? null,
+    log_path: run.log_path ?? null,
+    hub_url: status?.hub_url ?? "",
+    error: run.error ?? null,
+    cleanup_error: run.cleanup_error ?? null,
+    stopped_containers: [],
+  };
+}
+
+export function ingestOfficialRunTelemetry(snapshot: OfficialRunTelemetry) {
+  if (!snapshot.run_id || snapshot.run_id !== state.officialRunId) return;
+  if (snapshot.fleet) {
+    const sourceTs = Date.parse(snapshot.fleet.ts);
+    const ageMs = Number.isFinite(sourceTs) ? Math.max(0, Date.now() - sourceTs) : 0;
+    ingestFleet(snapshot.fleet, ageMs);
+  }
+  if (snapshot.metrics) {
+    const key = `${snapshot.metrics.run_id}:${snapshot.metrics.step}:${snapshot.metrics.ts}`;
+    if (key !== officialMetricKey) {
+      officialMetricKey = key;
+      pushMetric(snapshot.metrics);
+    }
+  }
+  if (snapshot.training_phase) ingestTrainingPhase({ ...snapshot.training_phase, runtime: snapshot.training_phase.runtime ?? "official" });
+  const selected = state.status;
+  if (selected) setState({ status: { ...selected, state: selected.state } });
+}
+
+function ingestFleet(p: FleetTelemetry, sourceAgeMs = 0) {
   fleetHot = p;
-  fleetHotReceivedAt = performance.now();
+  fleetHotReceivedAt = performance.now() - Math.max(0, sourceAgeMs);
   emitFleetFrame();
   const now = performance.now();
   // Throttle React side-panel updates (~4 Hz); canvas reads getFleetHot()
   if (now - lastFleetUiEmit >= 1000 / FLEET_UI_HZ) {
     lastFleetUiEmit = now;
-    setState({ fleet: p, fleetAgeMs: 0 });
+    setState({ fleet: p, fleetAgeMs: Math.max(0, sourceAgeMs) });
   } else {
     // Keep age fresh without full panel churn when possible
-    state = { ...state, fleetAgeMs: 0 };
+    state = { ...state, fleetAgeMs: Math.max(0, sourceAgeMs) };
   }
 }
 
@@ -192,16 +260,6 @@ function ingestTrainingPhase(phase: TrainingPhaseTelemetry | null) {
 
 async function resyncStatus() {
   try {
-    const status = await getTrainStatus();
-    setState({ status });
-    ingestTrainingPhase(status.last_train_phase ?? null);
-    if (status.last_telemetry) {
-      pushMetric(status.last_telemetry);
-    }
-    if (status.last_fleet) {
-      ingestFleet(status.last_fleet);
-      setState({ fleet: status.last_fleet, fleetAgeMs: 0 });
-    }
     const replay = await getReplayStatus();
     setState({ replayStatus: replay });
     if (replay.last_fleet) {
@@ -213,6 +271,9 @@ async function resyncStatus() {
   }
 }
 
+// WebSocket frames provide the live path. Poll the persisted latest frame as a
+// recovery path too, so Watch survives a missed/reconnecting socket or hub
+// restart and does not depend on opening the page at exactly the right time.
 function scheduleReconnect() {
   setState({ conn: "reconnecting" });
   if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
@@ -248,9 +309,9 @@ function connect() {
       };
       if (msg.type === "status") {
         const status = msg.payload as TrainStatus;
-        setState({ status });
+        if (!state.officialRunId) setState({ status });
         emitFleetFrame();
-        if (status.state === "starting") ingestTrainingPhase(null);
+        if (status.state === "starting" && !state.officialRunId) ingestTrainingPhase(null);
       } else if (msg.type === "train_phase") {
         ingestTrainingPhase(msg.payload as TrainingPhaseTelemetry);
       } else if (msg.type === "evaluator_live") {
@@ -263,11 +324,11 @@ function connect() {
       } else if (msg.type === "telemetry") {
         const p = msg.payload as MetricsTelemetry & FleetTelemetry;
         if (p.kind === "fleet") {
-          ingestFleet(p as FleetTelemetry);
+          if (!state.officialRunId || p.run_id === state.officialRunId) ingestFleet(p as FleetTelemetry);
         } else if (p.kind === "phase") {
-          ingestTrainingPhase(p as unknown as TrainingPhaseTelemetry);
+          if (!state.officialRunId || p.run_id === state.officialRunId) ingestTrainingPhase(p as unknown as TrainingPhaseTelemetry);
         } else {
-          pushMetric(p as MetricsTelemetry);
+          if (!state.officialRunId || p.run_id === state.officialRunId) pushMetric(p as MetricsTelemetry);
         }
       }
     } catch {

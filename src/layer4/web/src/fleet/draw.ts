@@ -342,7 +342,7 @@ export function drawEvaluatorCarIncremental(
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, 120, 64);
   if (!car) return;
-  const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  const { scale } = worldToScreenTransform(bounds, cssW, cssH);
   drawEvaluatorCar(ctx, car, scale, 16, 30, dpr);
 }
 

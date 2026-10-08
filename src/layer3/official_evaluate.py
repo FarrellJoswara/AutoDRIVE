@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import numpy as np
 import statistics
 import time
 from datetime import datetime, timezone
@@ -247,6 +249,7 @@ def evaluate_attempt(
     motion_check_after_s: float = 3.0,
     motion_minimum_displacement_m: float = 0.25,
     disqualification_limit: int = 10,
+    on_step: Any = None,
 ) -> Dict[str, Any]:
     obs, info = env.reset()
     started = time.monotonic()
@@ -282,7 +285,7 @@ def evaluate_attempt(
             stop_reason = "step_guard"
             break
         observation_states.append([float(v) for v in obs["state"]])
-        normalized_lidar_minima.append(float(min(obs["lidar"])))
+        normalized_lidar_minima.append(float(np.min(obs["lidar"])))
         trace_observation = (
             _policy_observation_trace(obs)
             if len(action_trace) < max(0, int(trace_steps))
@@ -314,6 +317,8 @@ def evaluate_attempt(
         applied_throttle.append(float(info.get("throttle_command", 0.0)))
         applied_steering.append(float(info.get("steering_command", 0.0)))
         steps += 1
+        if on_step is not None:
+            on_step(steps, obs, info)
         interval = float(info.get("control_interval_s", 0.0))
         scan_rate = float(info.get("lidar_scan_rate_hz", 0.0))
         if math.isfinite(interval) and interval > 0:
@@ -464,6 +469,36 @@ def evaluate(
         observation_profile=observation_profile,
     )
     runs: List[Dict[str, Any]] = []
+    publisher = None
+    last_frame_at = 0.0
+    hub_url = os.environ.get("HUB_URL", "")
+    run_id = os.environ.get("AICAR_RUN_ID", "")
+    if hub_url and run_id:
+        from src.layer3.hub_callback import _Publisher
+        publisher = _Publisher(hub_url, snapshot_path=(output_path.parent / "watch_latest.json") if output_path else None)
+
+    def publish_frame(step, observation, info):
+        nonlocal last_frame_at
+        if publisher is None or time.monotonic() - last_frame_at < 0.1:
+            return
+        from src.layer3.hub_callback import _lap_fields, _min_pool_lidar
+        last_frame_at = time.monotonic()
+        position = info.get("race_position")
+        scan = observation["lidar"]
+        if getattr(scan, "ndim", 1) > 1:
+            scan = scan[-1]
+        publisher.enqueue({
+            "kind": "fleet", "runtime": "official", "channel": "replay",
+            "run_id": run_id, "step": step, "episode": 1, "map_id": "none",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "lidar_range_min": 0.06, "lidar_range_max": 10.0,
+            "cars": [{"env_id": 0, "pose": [position[0], position[2]] if position else None,
+                      "yaw": info.get("yaw"), "speed": info.get("watch_speed_mps"),
+                      "speed_source": "lidar_estimate", "episode_return": None,
+                      "collision": bool(info.get("collision_event")),
+                      "collision_count": info.get("race_collisions", 0),
+                      "lidar": _min_pool_lidar(scan, 120), **_lap_fields(info)}],
+        })
     try:
         for attempt in range(1, attempts + 1):
             runs.append(evaluate_attempt(
@@ -474,6 +509,7 @@ def evaluate(
                 attempt_index=attempt,
                 trace_steps=trace_steps,
                 disqualification_limit=10,
+                on_step=publish_frame,
             ))
         completed = [
             run for run in runs
@@ -510,7 +546,11 @@ def evaluate(
         }, indent=2), flush=True)
         return result
     finally:
-        env.close()
+        try:
+            env.close()
+        finally:
+            if publisher is not None:
+                publisher.stop()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -519,7 +559,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--controller", choices=("ppo", "lidar_gap", "straight"), default="ppo")
     parser.add_argument(
         "--observation-profile",
-        choices=("official_sensors", "official_sensors_history"),
+        choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
         default="official_sensors",
     )
     parser.add_argument("--attempts", type=int, default=1)

@@ -28,7 +28,7 @@ class Settings(BaseModel):
     evaluation_every_timesteps: int = Field(default=50_000, ge=1)
     evaluation_runs_per_snapshot: int = Field(default=3, ge=1, le=10)
     evaluation_metric: Literal[
-        "frontier_speed", "reward_per_simulated_second", "total_reward"
+        "frontier_speed", "reward_per_simulated_second", "total_reward", "ten_lap_time"
     ] = "total_reward"
     ppo_learning_rate: float = Field(default=3e-4, gt=0, le=0.01)
     ppo_n_steps: int = Field(default=1024, ge=64, le=8192, multiple_of=64)
@@ -68,6 +68,8 @@ class Settings(BaseModel):
     backward_speed_penalty_scale: float = Field(default=1.0, ge=0)
     route_progress_scale: float = Field(default=10.0, ge=0)
     frontier_pace_target_mps: float = Field(default=6.0, gt=0)
+    frontier_pace_bonus_strength: float = Field(default=1.0, ge=0)
+    frontier_pace_source: Literal["episode_average", "current_push"] = "episode_average"
     time_penalty_per_second: float = Field(default=5.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
     collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
@@ -288,6 +290,10 @@ class Settings(BaseModel):
             str(self.route_progress_scale),
             "--frontier-pace-target-mps",
             str(self.frontier_pace_target_mps),
+            "--frontier-pace-bonus-strength",
+            str(self.frontier_pace_bonus_strength),
+            "--frontier-pace-source",
+            self.frontier_pace_source,
             "--time-penalty-per-second",
             str(self.time_penalty_per_second),
             "--collision-penalty-magnitude",

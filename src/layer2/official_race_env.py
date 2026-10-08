@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 import gymnasium as gym
 import numpy as np
 
-from src.layer1.ros2_racer import RacerRos2
+from src.layer1.ros2_racer import OfficialRosTransportError, RacerRos2
 from src.layer1.telemetry import TelemetrySnapshot
 from .spaces import (
     NegativeThrottleMode,
@@ -41,6 +41,7 @@ class OfficialRaceEnv(gym.Env):
         warmup_laps: int = 1,
         race_laps: int = 10,
         timeout_s: float = 180.0,
+        frame_timeout_s: float = 5.0,
         steering_action_scale: float = 1.0,
         straight_throttle_gain: float = 1.0,
         straight_throttle_steering_threshold: float = 0.15,
@@ -53,6 +54,8 @@ class OfficialRaceEnv(gym.Env):
         training_timeout_s: float = 600.0,
         training_lap_reward: float = 100.0,
         training_failure_penalty: float = 1000.0,
+        training_time_cost_per_simulated_second: float = 1.0,
+        training_collision_penalty_base: float = 10.0,
     ) -> None:
         super().__init__()
         if warmup_laps < 0 or race_laps < 1:
@@ -65,19 +68,36 @@ class OfficialRaceEnv(gym.Env):
             raise ValueError("straight_throttle_steering_threshold must be in [0, 1]")
 
         self.training_mode = bool(training_mode)
+        if observation_profile not in (
+            "official_sensors", "official_sensors_history", "official_sensors_camera"
+        ):
+            raise ValueError("unsupported official race observation profile")
+        self.observation_profile = observation_profile
+        self.include_camera = observation_profile == "official_sensors_camera"
+        if frame_timeout_s <= 0:
+            raise ValueError("frame_timeout_s must be positive")
+        # Race setup/metric waits may legitimately be longer. A policy step,
+        # however, must never block for the full race-level timeout while the
+        # simulator has stopped producing observations.
+        self.frame_timeout_s = min(float(frame_timeout_s), float(timeout_s))
         self.training_timeout_s = max(0.0, float(training_timeout_s))
         self.training_lap_reward = max(0.0, float(training_lap_reward))
         self.training_failure_penalty = max(0.0, float(training_failure_penalty))
+        self.training_time_cost_per_simulated_second = max(
+            0.0, float(training_time_cost_per_simulated_second)
+        )
+        self.training_collision_penalty_base = max(
+            0.0, float(training_collision_penalty_base)
+        )
         self.racer = racer or RacerRos2(
             vehicle_id=vehicle_id,
             timeout_s=timeout_s,
+            frame_timeout_s=self.frame_timeout_s,
             include_race_metrics=True,
             allow_training_reset=self.training_mode,
+            require_camera=self.include_camera,
         )
         self._owns_racer = racer is None
-        if observation_profile not in ("official_sensors", "official_sensors_history"):
-            raise ValueError("unsupported official race observation profile")
-        self.observation_profile = observation_profile
         self._observation_builder = OfficialObservationBuilder(
             observation_profile=observation_profile
         )
@@ -95,7 +115,8 @@ class OfficialRaceEnv(gym.Env):
         self.steering_mode = steering_mode
         self.action_space = make_action_space()
         self.observation_space = make_observation_space(
-            lidar_history_frames=4 if observation_profile == "official_sensors_history" else 1
+            lidar_history_frames=4 if observation_profile == "official_sensors_history" else 1,
+            include_camera=self.include_camera,
         )
         self._initial_lap_count = 0
         self._last_lap_count = 0
@@ -140,9 +161,11 @@ class OfficialRaceEnv(gym.Env):
         self._training_elapsed_s = 0.0
         self._last_snap = snap
         initial_obs = self._observation_builder.reset(snap)
-        return initial_obs, self._build_info(
-            snap, metrics, collision_event=False
+        info = self._build_info(snap, metrics, collision_event=False)
+        info["watch_speed_mps"] = abs(
+            float(self._observation_builder.last_forward_speed_mps)
         )
+        return initial_obs, info
 
     def step(self, action: np.ndarray):
         throttle, steering = transform_policy_action(
@@ -159,7 +182,13 @@ class OfficialRaceEnv(gym.Env):
         previous_race_laps = self._race_laps_count
         previous_lap_count = self._last_lap_count
         previous_race_collisions = self._race_collisions(self._last_collision_count)
-        snap = self.racer.step(throttle, steering)
+        try:
+            snap = self.racer.step(throttle, steering)
+        except OfficialRosTransportError as exc:
+            raise RuntimeError(
+                "OfficialRaceEnv.step cannot continue because the official ROS "
+                f"transport did not deliver a fresh observation: {exc}"
+            ) from exc
         self._episode_steps += 1
         scan_interval_s = max(0.0, float(self.racer.last_step_duration_s))
         action_interval_s = max(
@@ -228,6 +257,11 @@ class OfficialRaceEnv(gym.Env):
             "control_interval_s": float(
                 getattr(self.racer, "last_control_interval_s", 0.0)
             ),
+            "control_interval_source": getattr(self.racer, "control_interval_source", "unknown"),
+            "scan_interval_source": getattr(self.racer, "scan_interval_source", "unknown"),
+            "control_interval_wall_s": float(
+                getattr(self.racer, "last_control_wall_interval_s", 0.0)
+            ),
         })
         observation = self._observation_builder.observe(
             snap,
@@ -235,11 +269,17 @@ class OfficialRaceEnv(gym.Env):
             steering,
             elapsed_s=step_duration_s,
         )
+        # The encoder-derived ``true_speed`` is useful for diagnostics but can
+        # report wheel spin while the body is stopped at a wall. Watch displays
+        # the same acceleration-guarded LiDAR estimate used by the policy.
+        info["watch_speed_mps"] = abs(
+            float(self._observation_builder.last_forward_speed_mps)
+        )
         reward = 0.0
         truncated = False
         if self.training_mode:
             reward_components = {
-                "race_time_cost": -step_duration_s,
+                "race_time_cost": -self.training_time_cost_per_simulated_second * step_duration_s,
                 "warmup_completion": 0.0,
                 "lap_completion": 0.0,
                 "collision_penalty": 0.0,
@@ -266,7 +306,7 @@ class OfficialRaceEnv(gym.Env):
             if race_was_active:
                 new_collisions = max(0, race_collisions - previous_race_collisions)
                 reward_components["collision_penalty"] = -sum(
-                    10.0 * collision_index
+                    self.training_collision_penalty_base * collision_index
                     for collision_index in range(
                         previous_race_collisions + 1,
                         previous_race_collisions + new_collisions + 1,
@@ -348,19 +388,24 @@ class OfficialObservationBuilder:
     """
 
     def __init__(self, *, observation_profile: str = "official_sensors") -> None:
-        if observation_profile not in ("official_sensors", "official_sensors_history"):
+        if observation_profile not in (
+            "official_sensors", "official_sensors_history", "official_sensors_camera"
+        ):
             raise ValueError("unsupported official race observation profile")
         self.observation_profile = observation_profile
+        self.include_camera = observation_profile == "official_sensors_camera"
         self._lidar_history: list[np.ndarray] = []
         self._lidar_speed_estimator = LidarOdometry()
         self._observation_heading_yaw: Optional[float] = None
         self._last_lidar_forward_speed_mps = 0.0
+        self.last_forward_speed_mps = 0.0
 
     def reset(self, snap: TelemetrySnapshot) -> Dict[str, np.ndarray]:
         self._lidar_history = []
         self._lidar_speed_estimator.reset()
         self._observation_heading_yaw = float(snap.heading_yaw)
         self._last_lidar_forward_speed_mps = 0.0
+        self.last_forward_speed_mps = 0.0
         if self.observation_profile == "official_sensors_history":
             scan = _normalize_lidar(snap)
             self._lidar_history = [scan.copy(), scan.copy(), scan.copy()]
@@ -376,6 +421,7 @@ class OfficialObservationBuilder:
             forward_speed_mps=0.0,
             lateral_speed_mps=0.0,
             lidar_history=history,
+            include_camera=self.include_camera,
         )
 
     def observe(
@@ -410,6 +456,7 @@ class OfficialObservationBuilder:
                 elapsed_s,
             )
         self._last_lidar_forward_speed_mps = forward_speed
+        self.last_forward_speed_mps = forward_speed
         history = (
             self._lidar_history
             if self.observation_profile == "official_sensors_history"
@@ -422,6 +469,7 @@ class OfficialObservationBuilder:
             forward_speed_mps=forward_speed,
             lateral_speed_mps=0.0,
             lidar_history=history,
+            include_camera=self.include_camera,
         )
         if history is not None:
             self._lidar_history.append(_normalize_lidar(snap))

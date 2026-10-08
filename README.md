@@ -8,6 +8,14 @@ Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing:
 
 # START HERE — one command
 
+Mission Control now uses official IROS 2026 simulator/API pairs for Train and
+Replay. Each training run has one PPO learner; its environment count controls
+parallel sampling. Watch selects a run, and Replay preserves the checkpoint's
+recorded observation and action settings. Custom Compose simulation is opt-in
+through the `custom-development` profile. Older custom-workflow guidance below
+is historical. See the [reliability audit](docs/reliability-audit-2026-10-08.md)
+for executed evidence and remaining timing/performance limitations.
+
 ```bash
 python main.py
 ```
@@ -15,8 +23,8 @@ python main.py
 That is the easy start. It will:
 
 1. Check Docker Desktop is running  
-2. Download the AutoDRIVE simulator zip from GitHub Releases if `./simulator/` is missing  
-3. Reuse cached brain/sim images; build only images that are missing
+2. Pull the official simulator image if missing
+3. Reuse the brain image and rebuild the official API image when its sources change
 4. Wait until Mission Control is healthy  
 5. Open **http://127.0.0.1:8090** in your browser  
 
@@ -27,10 +35,10 @@ is newer. It does not rebuild or pull the large CUDA brain image on normal start
 | Command | What it does |
 | :--- | :--- |
 | `python main.py` | Start everything + open UI |
-| `python main.py --sims 4` | Same, but 4 sim containers |
-| `python main.py --build` | Force rebuild both Docker images |
+| `python main.py --sims 4` | Default to 4 official environments per learner |
+| `python main.py --build` | Rebuild brain and official API images |
 | `python main.py --no-build` | Use cached images only; fail if either is missing |
-| `python main.py --stop` | Tear the stack down |
+| `python main.py --stop` | Stop official runs cooperatively, then stop the hub |
 
 **Requirements:** Docker Desktop running. The first run builds an image only if it is missing; this can take a while.
 **UI:** http://127.0.0.1:8090 — Train · Maps · Watch · Replay

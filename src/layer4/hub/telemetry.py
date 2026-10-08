@@ -23,6 +23,12 @@ class TelemetryBus:
     last_replay_fleet: Optional[Dict[str, Any]] = None
     last_replay_status: Optional[Dict[str, Any]] = None
     metrics_ring: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=600))
+    # Official training streams are isolated by run. The legacy scalar fields
+    # remain as a compatibility view for non-training diagnostics.
+    run_metrics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    run_fleets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    run_phases: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    run_evaluators: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     _clients: Set["WSClient"] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -38,19 +44,24 @@ class TelemetryBus:
                 kind = payload.get("kind", "metrics")
                 if kind == "fleet":
                     self.last_fleet = payload
+                    self._store_run_payload(self.run_fleets, payload)
                 elif kind == "phase":
                     self.last_train_phase = payload
+                    self._store_run_payload(self.run_phases, payload)
                 else:
                     self.last_metrics = payload
                     self.metrics_ring.append(payload)
+                    self._store_run_payload(self.run_metrics, payload)
             elif event_type == "replay_telemetry" and payload.get("kind") == "fleet":
                 self.last_replay_fleet = payload
             elif event_type == "replay_status":
                 self.last_replay_status = payload
             elif event_type == "train_phase":
                 self.last_train_phase = payload
+                self._store_run_payload(self.run_phases, payload)
             elif event_type == "evaluator_live":
                 self.last_evaluator_live = payload
+                self._store_run_payload(self.run_evaluators, payload)
             clients = list(self._clients)
             loop = self._loop
 
@@ -65,6 +76,33 @@ class TelemetryBus:
             except RuntimeError:
                 pass
         _fanout()
+
+    @staticmethod
+    def _store_run_payload(
+        destination: Dict[str, Dict[str, Any]], payload: Dict[str, Any]
+    ) -> None:
+        run_id = payload.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            destination[run_id] = payload
+
+    def run_snapshot(self, run_id: str) -> Dict[str, Any]:
+        """Get latest official training telemetry without crossing run streams."""
+        with self._lock:
+            return {
+                "run_id": run_id,
+                "last_metrics": self.run_metrics.get(run_id),
+                "last_fleet": self.run_fleets.get(run_id),
+                "last_train_phase": self.run_phases.get(run_id),
+                "last_evaluator_live": self.run_evaluators.get(run_id),
+            }
+
+    def clear_run(self, run_id: str) -> None:
+        """Clear only one run's in-memory latest values."""
+        with self._lock:
+            self.run_metrics.pop(run_id, None)
+            self.run_fleets.pop(run_id, None)
+            self.run_phases.pop(run_id, None)
+            self.run_evaluators.pop(run_id, None)
 
     def publish_status(self, payload: Dict[str, Any]) -> None:
         self.publish("status", payload)
@@ -81,6 +119,19 @@ class TelemetryBus:
     def clear_train_phase(self) -> None:
         with self._lock:
             self.last_train_phase = None
+
+    def clear_train_telemetry(self) -> None:
+        """Drop the prior run's live values before a new run starts."""
+        with self._lock:
+            self.last_metrics = None
+            self.last_fleet = None
+            self.last_train_phase = None
+            self.last_evaluator_live = None
+            self.metrics_ring.clear()
+            self.run_metrics.clear()
+            self.run_fleets.clear()
+            self.run_phases.clear()
+            self.run_evaluators.clear()
 
     def attach(self, client: "WSClient") -> None:
         with self._lock:
@@ -106,6 +157,12 @@ class TelemetryBus:
                 out.append({"type": "replay_telemetry", "payload": self.last_replay_fleet})
             if self.last_replay_status is not None:
                 out.append({"type": "replay_status", "payload": self.last_replay_status})
+            # Reconnects get the latest frame for every active run; the client
+            # selects by run_id and never treats these as one shared fleet.
+            out.extend({"type": "telemetry", "payload": p} for p in self.run_metrics.values())
+            out.extend({"type": "telemetry", "payload": p} for p in self.run_fleets.values())
+            out.extend({"type": "train_phase", "payload": p} for p in self.run_phases.values())
+            out.extend({"type": "evaluator_live", "payload": p} for p in self.run_evaluators.values())
         return out
 
 

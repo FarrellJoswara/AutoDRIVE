@@ -53,7 +53,7 @@ Exports: `AutoDriveEnv`, `RewardConfig`, `compute_reward`, `default_simulator_pa
 | Piece | Role |
 |-------|------|
 | `LIDAR_BEAMS = 1081`, `STATE_DIM = 9` | Full live scan and normalized sensor/control state |
-| `make_action_space()` | `Box(-1, 1, shape=(2,))` → `[throttle, steering]` |
+| `make_action_space()` | `Box(-1, 1, shape=(2,))` → normalized `[throttle, steering]`; `throttle_mode=forward_only` maps normalized throttle onto actuator `[0, 1]` |
 | `make_observation_space()` | Dict: `lidar` ∈ `[0,1]^1081`, `state` ∈ `[-5,5]^9` |
 | `snapshot_to_obs(snap, prev_throttle, prev_steering)` | Build the obs dict |
 | `_normalize_lidar` | Map ranges to `[0, 1]` |
@@ -100,8 +100,11 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 On mapped tracks, Layer 2 projects each pose onto the route. Only a new
 high-water frontier advance earns positive per-step reward; recovering or
 repeating already-travelled route distance does not. The per-metre reward rises
-quadratically with episode-average frontier speed and reaches a 2x cap at the
-configurable pace target (6 m/s by default). A cost of 5 reward units per
+quadratically with the configured frontier pace source (episode-average pace by
+default, or the current action's new-frontier distance divided by acknowledged
+simulated duration). Its maximum multiplier is
+`1 + frontier_pace_bonus_strength` at the configurable pace target (6 m/s by
+default); the default strength of 1 preserves the 2x cap. A cost of 5 reward units per
 simulated second also favors faster progress and makes stalling accumulate cost.
 Backward body-frame motion is penalized, and a frontier push is withheld if the
 car is moving backward relative to its body beyond the reverse deadband. A
@@ -220,3 +223,13 @@ python scripts/demo.py check-env   # needs torch + stable-baselines3
 Multi-car-in-one-env · waypoints / lap bonuses · LiDAR downsampling · state normalization · PPO (Layer 3) · terminate-on-crash  
 
 See also [PLAN.md §6](../../PLAN.md).
+# Official camera observation profile
+
+Official training and deployment may select `official_sensors_camera` to add
+the permitted `/autodrive/roboracer_1/front_camera` RGB stream alongside the
+existing LiDAR and state inputs. Layer 1 decodes `sensor_msgs/msg/Image`; Layer
+2 samples it to a fixed 160×90 RGB tensor and fails closed if a fresh camera
+frame is unavailable. Layer 3 uses the `lidar_camera_cnn` extractor. This input
+shape is intentionally a separate profile: existing LiDAR-only checkpoints
+remain compatible with their original profiles and require a fresh model to
+learn from camera images.

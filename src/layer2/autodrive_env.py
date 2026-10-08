@@ -604,6 +604,7 @@ class AutoDriveEnv(gym.Env):
             step_duration_s=step_duration_s,
             frontier_advanced_m=(progress["advanced_m"] if progress is not None else None),
             frontier_average_speed_mps=average_frontier_speed_mps,
+            frontier_current_speed_mps=(frontier_advanced_m / step_duration_s if step_duration_s > 0 else 0.0),
             collision_event=collision_event,
             episode_failure=episode_failure,
             positive_episode_return=self._positive_episode_return,

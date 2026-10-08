@@ -17,11 +17,16 @@ from fastapi.staticfiles import StaticFiles
 
 from src.layer4.hub.map_activate import activate_map
 from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
-from src.layer4.hub.replay_job import ReplayJob
+from src.layer4.hub.official_run_manager import OfficialRunManager
+from src.layer4.hub.official_replay_job import OfficialReplayJob
+from src.layer4.hub.official_models import list_official_models
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
-from src.layer4.hub.train_job import TrainJob
+from src.layer4.official_settings import (
+    OfficialTrainSettings,
+    load_official_train_settings,
+    save_official_train_settings,
+)
 from src.layer4.settings import ROOT, Settings, load_settings, save_settings
-from src.layer3.train import _PPO_N_STEPS
 
 
 def _resolve_web_dist() -> Path:
@@ -45,9 +50,10 @@ HUB_PORT = int(os.environ.get("HUB_PORT", os.environ.get("READY_PORT", "8090")))
 HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
-job = TrainJob(hub_url=HUB_PUBLIC_URL, on_status=lambda s: bus.publish_status(s))
-replay_job = ReplayJob(hub_url=HUB_PUBLIC_URL, on_status=lambda s: bus.publish_replay_status(s))
+official_runs = OfficialRunManager()
+replay_job = OfficialReplayJob(official_runs, on_status=lambda s: bus.publish_replay_status(s))
 _settings: Settings = load_settings()
+_official_train_settings: OfficialTrainSettings = load_official_train_settings()
 
 
 @asynccontextmanager
@@ -55,9 +61,14 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     bus.bind_loop(asyncio.get_running_loop())
+    # Official training containers are deliberately reconciled rather than
+    # stopped here; they own persistent per-run state and may survive a hub
+    # restart. Replay remains a separate short-lived development feature.
+    try:
+        await asyncio.to_thread(official_runs.reconcile)
+    except Exception:
+        pass
     # A hard hub restart can leave the standalone replay simulator behind.
-    # It is safe to remove at startup because no ReplayJob process survives
-    # the previous hub process.
     try:
         from src.layer4.hub.docker_control import remove_replay_sim
 
@@ -67,8 +78,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Stop the Layer 3 process first; its exit watcher also removes Docker.
-        # Then remove unconditionally to cover an already-exited process.
+        official_runs.close()
+        # Then clean up the short-lived replay process/container.
         try:
             await asyncio.to_thread(replay_job.stop)
         except Exception:
@@ -108,12 +119,20 @@ async def api_shutdown(request: Request) -> Dict[str, Any]:
     qp = request.query_params
     stop_stack = qp.get("stack", "").strip().lower() in {"1", "true", "yes"}
     stopped: list[str] = []
-    train_status: Optional[Dict[str, Any]] = None
-
+    train_status: list[Dict[str, Any]] = []
     try:
-        train_status = await asyncio.to_thread(job.stop)
-    except Exception:
-        train_status = None
+        active_runs = [
+            row for row in official_runs.list_runs()["runs"]
+            if row.get("state") in {"starting", "running", "stopping"}
+        ]
+        train_status = await asyncio.gather(*[
+            asyncio.to_thread(official_runs.stop_run, str(row["run_id"]))
+            for row in active_runs
+        ])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Could not stop official runs: {exc}") from exc
+    if any(row.get("state") != "stopped" or row.get("cleanup_error") for row in train_status):
+        raise HTTPException(status_code=503, detail="Official run cleanup is incomplete; keep the hub running and retry Stop.")
 
     try:
         await asyncio.to_thread(replay_job.stop)
@@ -437,8 +456,10 @@ async def api_activate_map(map_id: str, request: Request) -> Any:
     if request.query_params.get("force", "").strip().lower() in {"1", "true", "yes"}:
         force = True
 
-    train_state = job.status().get("state")
-    train_running = train_state in {"starting", "running", "stopping"}
+    train_running = any(
+        run.get("state") in {"starting", "running", "stopping"}
+        for run in official_runs.list_runs()["runs"]
+    )
 
     try:
         result = await asyncio.to_thread(
@@ -462,25 +483,272 @@ async def api_activate_map(map_id: str, request: Request) -> Any:
 
 @app.get("/train/status")
 async def train_status() -> Dict[str, Any]:
-    st = job.status()
-    st["last_telemetry"] = bus.last_metrics
-    st["last_fleet"] = bus.last_fleet
-    st["last_train_phase"] = bus.last_train_phase
+    runs = official_runs.list_runs()["runs"]
+    selected = next(
+        (item for item in runs if item.get("state") in {"starting", "running", "stopping"}),
+        runs[0] if runs else None,
+    )
+    if selected is None:
+        return {"state": "idle", "run_id": None, "last_fleet": None, "last_telemetry": None}
+    telemetry = _run_telemetry(selected["run_id"])
+    return {
+        **selected,
+        "pid": None,
+        "argv": [],
+        "hub_url": HUB_PUBLIC_URL,
+        "last_fleet": telemetry.get("last_fleet"),
+        "last_fleet_age_ms": _watch_snapshot_age_ms(telemetry.get("last_fleet")),
+        "last_telemetry": telemetry.get("last_metrics"),
+        "last_train_phase": telemetry.get("last_train_phase"),
+        "last_evaluation": telemetry.get("last_evaluation"),
+    }
+
+
+@app.get("/train/official-settings")
+async def get_official_train_settings() -> Dict[str, Any]:
+    return {"settings": _official_train_settings.model_dump(mode="json")}
+
+
+@app.put("/train/official-settings")
+async def put_official_train_settings(body: OfficialTrainSettings) -> Dict[str, Any]:
+    global _official_train_settings
+    _official_train_settings = body
+    path = save_official_train_settings(body)
+    return {"ok": True, "path": str(path), "settings": body.model_dump(mode="json")}
+
+
+def _run_telemetry(run_id: str) -> Dict[str, Any]:
+    latest = bus.run_snapshot(run_id)
     try:
-        evaluation_path = _settings.resolve_out() / "evaluation_status.json"
-        st["last_evaluation"] = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        persisted = official_runs.telemetry(run_id)
+    except KeyError:
+        raise
+    run_dir = _run_output_dir(run_id)
+
+    def read_snapshot(filename: str) -> Optional[Dict[str, Any]]:
+        try:
+            value = json.loads((run_dir / filename).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(value, dict) or value.get("run_id") != run_id:
+            return None
+        return value
+
+    fleet = latest.get("last_fleet") or persisted.get("last_fleet") or read_snapshot("watch_latest.json")
+    latest_metrics = latest.get("last_metrics") or persisted.get("last_metrics") or read_snapshot("latest_telemetry.json")
+    phase = latest.get("last_train_phase") or persisted.get("last_train_phase") or read_snapshot("latest_training_phase.json")
+    evaluator_live = latest.get("last_evaluator_live") or persisted.get("last_evaluator_live")
+    try:
+        evaluation = json.loads((run_dir / "evaluation_status.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        st["last_evaluation"] = None
-    return st
+        evaluation = None
+    history = []
+    try:
+        for row in (run_dir / "evaluation_history.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                parsed = json.loads(row)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                history.append(parsed)
+    except OSError:
+        pass
+    return {
+        "run_id": run_id,
+        "updated_at": (fleet or latest_metrics or {}).get("ts"),
+        "fleet": fleet,
+        "last_fleet": fleet,
+        "last_metrics": latest_metrics,
+        "last_train_phase": phase,
+        "last_evaluator_live": evaluator_live,
+        "last_evaluation": evaluation,
+        "map_id": "none",
+    }
+
+
+def _run_output_dir(run_id: str) -> Path:
+    run = official_runs.get_run(run_id)
+    raw = run.get("output_dir")
+    path = Path(raw).resolve() if raw else (ROOT / "logs" / "rl" / f"official_run_{run_id}").resolve()
+    root = (ROOT / "logs" / "rl").resolve()
+    if not path.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="invalid run output path")
+    return path
+
+
+@app.get("/train/runs")
+async def list_official_runs() -> Dict[str, Any]:
+    return official_runs.list_runs()
+
+
+def _latest_run_id() -> Optional[str]:
+    runs = official_runs.list_runs()["runs"]
+    selected = next(
+        (row for row in runs if row.get("state") in {"starting", "running", "stopping"}),
+        runs[0] if runs else None,
+    )
+    return str(selected["run_id"]) if selected and selected.get("run_id") else None
+
+
+@app.post("/train/runs")
+async def create_official_run(request: Request) -> Dict[str, Any]:
+    global _official_train_settings
+    try:
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise ValueError("request body must be an object")
+        config = OfficialTrainSettings.model_validate(raw.get("config", raw))
+        save_official_train_settings(config)
+        _official_train_settings = config
+        display_name = raw.get("display_name")
+        if display_name is not None and not isinstance(display_name, str):
+            raise ValueError("display_name must be a string")
+        return await __import__("asyncio").to_thread(
+            official_runs.create_run, config.model_dump(mode="json"), display_name
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/train/runs/{run_id}")
+async def get_official_run(run_id: str) -> Dict[str, Any]:
+    try:
+        return official_runs.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="official run not found") from exc
+
+
+@app.post("/train/runs/{run_id}/stop")
+async def stop_official_run(run_id: str) -> Dict[str, Any]:
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(official_runs.stop_run, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="official run not found") from exc
+
+
+@app.get("/train/runs/{run_id}/telemetry")
+async def official_run_telemetry(run_id: str) -> Dict[str, Any]:
+    try:
+        return _run_telemetry(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="official run not found") from exc
+
+
+@app.get("/train/runs/{run_id}/evaluations")
+async def official_run_evaluations(run_id: str) -> list[Dict[str, Any]]:
+    try:
+        output_dir = _run_output_dir(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="official run not found") from exc
+    try:
+        rows = (output_dir / "evaluation_history.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    result = []
+    for row in rows:
+        try:
+            item = json.loads(row)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            result.append(item)
+    return result
+
+
+@app.get("/train/runs/{run_id}/ppo-diagnostics")
+async def official_run_ppo_diagnostics(run_id: str) -> Dict[str, Any]:
+    import asyncio
+
+    try:
+        output_dir = _run_output_dir(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="official run not found") from exc
+
+    def read_updates() -> list[Dict[str, Any]]:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+        tags = {
+            "fps": "time/fps", "approx_kl": "train/approx_kl",
+            "clip_fraction": "train/clip_fraction", "entropy_loss": "train/entropy_loss",
+            "explained_variance": "train/explained_variance", "learning_rate": "train/learning_rate",
+            "loss": "train/loss", "policy_gradient_loss": "train/policy_gradient_loss",
+            "std": "train/std", "value_loss": "train/value_loss",
+        }
+        by_step: Dict[int, Dict[str, float]] = {}
+        for event_file in output_dir.rglob("events.out.tfevents.*"):
+            accumulator = EventAccumulator(str(event_file.parent), size_guidance={"scalars": 0})
+            accumulator.Reload()
+            available = set(accumulator.Tags().get("scalars", []))
+            for key, tag in tags.items():
+                if tag in available:
+                    for scalar in accumulator.Scalars(tag):
+                        if math.isfinite(scalar.value):
+                            by_step.setdefault(int(scalar.step), {})[key] = float(scalar.value)
+        return [{"step": step, "values": values} for step, values in sorted(by_step.items())]
+
+    try:
+        updates = await asyncio.to_thread(read_updates)
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="TensorBoard is unavailable") from exc
+    return {"run_id": run_id, "updates": updates}
+
+
+def _watch_snapshot_age_ms(payload: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Age of the source frame, not how recently the hub served it."""
+    if not isinstance(payload, dict):
+        return None
+    timestamp = payload.get("ts")
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - parsed).total_seconds() * 1000))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _read_watch_snapshot(path: Path) -> Optional[Dict[str, Any]]:
+    """Read one persisted fleet frame, tolerating a concurrent file refresh."""
+    for _ in range(3):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("kind") == "fleet":
+            return payload
+        return None
+    return None
+
+
+def _latest_watch_snapshot() -> Optional[Dict[str, Any]]:
+    """Recover an official run's Watch frame after a hub restart."""
+    for run in official_runs.list_runs()["runs"]:
+        if run.get("state") not in {"starting", "running", "stopping"}:
+            continue
+        try:
+            frame = official_runs.telemetry(str(run["run_id"])).get("fleet")
+        except (KeyError, OSError, ValueError):
+            frame = None
+        if isinstance(frame, dict) and frame.get("runtime") == "official":
+            return frame
+    return None
 
 
 @app.get("/train/evaluations")
 async def train_evaluations() -> list[Dict[str, Any]]:
     """Return the complete persisted evaluator history for the active run output."""
-    settings = job.last_settings or _settings
-    # The training job's log file lives beside its artifacts and avoids
-    # resolving a fresh timestamped output directory when `out` is unset.
-    output_dir = Path(job.log_path).parent if job.log_path else settings.resolve_out()
+    run_id = _latest_run_id()
+    if not run_id:
+        return []
+    output_dir = _run_output_dir(run_id)
     history_path = output_dir / "evaluation_history.jsonl"
     try:
         lines = history_path.read_text(encoding="utf-8").splitlines()
@@ -500,6 +768,13 @@ async def train_evaluations() -> list[Dict[str, Any]]:
 @app.get("/train/ppo-diagnostics")
 async def train_ppo_diagnostics() -> Dict[str, Any]:
     """Read durable PPO scalar history from this run's TensorBoard event files."""
+    run_id = _latest_run_id()
+    if not run_id:
+        return {"run_id": None, "updates": []}
+    return await official_run_ppo_diagnostics(run_id)
+
+    # Kept unreachable for one compatibility release while old deployments
+    # switch to the per-run endpoint above.
     import asyncio
 
     output_dir = Path(job.log_path).parent if job.log_path else _settings.resolve_out()
@@ -560,138 +835,24 @@ async def train_ppo_diagnostics() -> Dict[str, Any]:
 
 @app.post("/train/start")
 async def train_start(request: Request) -> Dict[str, Any]:
-    """Body = full Settings snapshot (preferred); empty body → last saved Settings.
-
-    Locks in settings.map_id before Popen: activate that map (restart sims only
-    when it differs from the currently active physics map).
-    """
-    import asyncio
-
-    global _settings
-    settings = _settings
-    try:
-        raw = await request.json()
-        if isinstance(raw, dict) and raw:
-            settings = Settings.model_validate(raw)
-    except Exception:
-        pass
-    _settings = settings
-    try:
-        await asyncio.to_thread(save_settings, _settings)
-    except Exception:
-        pass
-
-    # Lock in map selection for this run (Train dropdown → physics + Watch underlay).
-    mid = (settings.map_id or "none").strip() or "none"
-    if MAPS_DIR is not None:
-        try:
-            from src.layer4.hub.map_activate import read_active_map
-
-            current = read_active_map(MAPS_DIR).get("id")
-            current_key = current if current else "none"
-            if mid != current_key:
-                await asyncio.to_thread(
-                    activate_map,
-                    MAPS_DIR,
-                    mid,
-                    restart=True,
-                    train_running=False,
-                    force=False,
-                )
-            elif mid != "none":
-                # Same map already active — still ensure spawn/meta without sim bounce.
-                await asyncio.to_thread(
-                    activate_map,
-                    MAPS_DIR,
-                    mid,
-                    restart=False,
-                    train_running=False,
-                    force=False,
-                )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500, detail=f"map activate failed: {exc}"
-            ) from exc
-
-    try:
-        # Popen can stall briefly on Windows; never block the event loop.
-        if job.status().get("state") not in {"starting", "running", "stopping"}:
-            bus.clear_train_phase()
-        return await asyncio.to_thread(job.start, settings)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise HTTPException(status_code=410, detail="Custom-simulator training is disabled. Use POST /train/runs for official AutoDRIVE training.")
 
 
 @app.post("/train/stop")
 async def train_stop() -> Dict[str, Any]:
-    import asyncio
-
-    # Use persisted settings when the hub restarted and no TrainJob instance
-    # owns the old subprocess anymore; this lets Stop clean up orphaned sims.
-    return await asyncio.to_thread(job.stop, settings=_settings)
+    raise HTTPException(status_code=410, detail="Use POST /train/runs/{run_id}/stop to stop one official run.")
 
 
 @app.get("/api/replay/models")
 async def replay_models() -> list[Dict[str, Any]]:
     import asyncio
 
-    models_root = (ROOT / "logs" / "rl").resolve()
-    if not models_root.is_dir():
-        return []
-
-    def scan() -> list[Dict[str, Any]]:
-        models: list[Dict[str, Any]] = []
-        try:
-            runs = list(scandir(models_root))
-        except OSError:
-            return []
-        for run in runs:
-            if not run.is_dir(follow_symlinks=False):
-                continue
-            candidates: list[Path] = []
-            try:
-                with scandir(run.path) as entries:
-                    candidates.extend(
-                        Path(entry.path) for entry in entries
-                        if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".zip")
-                    )
-                checkpoint_dir = Path(run.path) / "ckpt"
-                if checkpoint_dir.is_dir():
-                    with scandir(checkpoint_dir) as entries:
-                        checkpoints = [
-                            (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
-                            for entry in entries
-                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".zip")
-                        ]
-                    candidates.extend(path for _, path in sorted(checkpoints, reverse=True)[:5])
-            except OSError:
-                continue
-            for path in candidates:
-                try:
-                    stat = path.stat()
-                    relative = path.relative_to(models_root).as_posix()
-                except OSError:
-                    continue
-                models.append({
-                    "id": relative,
-                    "label": f"{run.name}/{path.name}",
-                    "modified": stat.st_mtime,
-                })
-        return sorted(models, key=lambda model: model["modified"], reverse=True)[:200]
-
-    return await asyncio.to_thread(scan)
+    return await asyncio.to_thread(list_official_models, ROOT / "logs" / "rl")
 
 
 @app.get("/api/replay/status")
 async def replay_status() -> Dict[str, Any]:
     result = replay_job.status()
-    result["last_fleet"] = bus.last_replay_fleet
     return result
 
 
@@ -717,30 +878,12 @@ async def replay_start(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="invalid model selection") from exc
     if not model_path.is_file() or model_path.suffix.lower() != ".zip":
         raise HTTPException(status_code=404, detail="checkpoint not found")
-    if map_id != "none":
-        map_entry = next((m for m in list_maps_api(MAPS_DIR) if m.get("id") == map_id), None)
-        if map_entry is None:
-            raise HTTPException(status_code=404, detail=f"unknown map: {map_id}")
-        if map_entry.get("mesh_status") != "ready":
-            raise HTTPException(status_code=400, detail=f"map is not ready for replay: {map_id}")
-    replay_settings = _settings
-    in_docker = os.environ.get("AICAR_IN_DOCKER", "").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    if map_id != "none" or device not in {"auto", "cpu"}:
+        raise HTTPException(status_code=400, detail="Official replay uses its image track and CPU policy runtime")
     try:
-        return await asyncio.to_thread(
-            replay_job.start,
-            model_path=model_path,
-            map_id=map_id,
-            seed=seed,
-            device=device,
-            simulator_env=replay_settings.simulator_env(),
-            env_kwargs=replay_settings.to_env_kwargs(
-                headless=True,
-                auto_launch=not in_docker,
-                map_id=map_id,
-            ),
-        )
+        return await asyncio.to_thread(replay_job.start, model_path=model_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
@@ -766,12 +909,7 @@ async def replay_reset() -> Dict[str, Any]:
 
 @app.get("/settings")
 async def get_settings() -> Dict[str, Any]:
-    return {
-        **_settings.model_dump(mode="json"),
-        # Display-only metadata so the UI can calculate rollout-aligned
-        # evaluation snapshots using Layer 3's actual PPO configuration.
-        "ppo_n_steps": _PPO_N_STEPS,
-    }
+    return _settings.model_dump(mode="json")
 
 
 @app.put("/settings")
@@ -782,10 +920,7 @@ async def put_settings(body: Settings) -> Dict[str, Any]:
     return {
         "ok": True,
         "path": str(path),
-        "settings": {
-            **_settings.model_dump(mode="json"),
-            "ppo_n_steps": _PPO_N_STEPS,
-        },
+        "settings": _settings.model_dump(mode="json"),
     }
 
 
@@ -797,6 +932,8 @@ async def post_telemetry(request: Request) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="invalid JSON") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be object")
+    if payload.get("run_id"):
+        official_runs.ingest_telemetry(payload)
     bus.publish("replay_telemetry" if payload.get("channel") == "replay" else "telemetry", payload)
     return {"ok": "1"}
 
@@ -811,6 +948,7 @@ async def post_train_phase(request: Request) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="invalid training phase payload")
     if payload.get("phase") not in {"rollout", "ppo_update", "stopped"}:
         raise HTTPException(status_code=400, detail="invalid training phase")
+    official_runs.ingest_telemetry(payload)
     bus.publish_train_phase(payload)
     return {"ok": "1"}
 
@@ -828,6 +966,7 @@ async def post_evaluator_live(request: Request) -> Dict[str, str]:
             or not isinstance(payload.get("yaw"), (int, float))
             or not isinstance(payload.get("speed"), (int, float))):
         raise HTTPException(status_code=400, detail="invalid evaluator pose")
+    official_runs.ingest_evaluator_live(payload)
     bus.publish_evaluator_live(payload)
     return {"ok": "1"}
 
@@ -839,7 +978,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     bus.attach(client)
     # Resync: push last known status + telemetry
     try:
-        await ws.send_json({"type": "status", "payload": job.status()})
+        await ws.send_json({"type": "status", "payload": await train_status()})
         await ws.send_json({"type": "replay_status", "payload": replay_job.status()})
         for ev in bus.snapshot_for_client():
             await ws.send_json(ev)

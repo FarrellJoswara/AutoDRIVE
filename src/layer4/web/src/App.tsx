@@ -1,7 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { shutdownHub } from "./api";
-import { TrainPage, type TrainPageHandle } from "./pages/Train";
-import { MapsPage } from "./pages/Maps";
+import { TrainPage } from "./pages/Train";
 import { startStore, useHubStore } from "./store";
 import "./styles.css";
 
@@ -12,7 +11,7 @@ const ReplayPage = lazy(() =>
   import("./pages/Replay").then((m) => ({ default: m.ReplayPage }))
 );
 
-type Page = "train" | "maps" | "watch" | "replay";
+type Page = "train" | "watch" | "replay";
 
 function trainingNotice(status: ReturnType<typeof useHubStore>["status"]) {
   if (!status || (status.state !== "exited" && status.state !== "error")) return null;
@@ -36,9 +35,18 @@ function trainingNotice(status: ReturnType<typeof useHubStore>["status"]) {
     if (status.log_path) detail += ` Log: ${status.log_path}`;
     level = "error";
   } else if (terminatedBySignal) {
-    title = "Training interrupted";
-    detail = "The training process received SIGTERM (exit -15) and shut down. This is a termination signal, not a Python exception; the notice alone cannot identify what sent it.";
+    title = status.stop_reason === "user_requested" ? "Training stopped" : "Training terminated";
+    detail = status.stop_reason === "user_requested"
+      ? "Training received a stop request and shut down. The final model may be available in the run folder."
+      : "The process received SIGTERM (exit -15). This is a termination signal, so it does not identify its sender or indicate a Python exception.";
     if (status.log_path) detail += ` Log: ${status.log_path}`;
+  } else if (status.stop_reason === "operator_stop" || status.stop_reason === "user_requested") {
+    title = "Training stopped";
+    detail = "Stopped by request. Check the run artifacts to confirm which checkpoints were saved.";
+    level = "info";
+  } else if (status.stop_reason === "evaluation_complete") {
+    title = "Evaluation finished";
+    detail = "Open Replay for the attempt result. Completion does not necessarily mean a valid race score.";
   } else if (status.stop_reason) {
     title = "Training finished";
     detail = status.stop_reason === "lap_target"
@@ -57,16 +65,9 @@ function trainingNotice(status: ReturnType<typeof useHubStore>["status"]) {
 export function App() {
   const [page, setPage] = useState<Page>("train");
   const [shuttingDown, setShuttingDown] = useState(false);
-  const [trainBusy, setTrainBusy] = useState(false);
-  const [trainReady, setTrainReady] = useState(false);
   const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
   const { conn, status } = useHubStore();
   const notice = trainingNotice(status);
-  const trainRef = useRef<TrainPageHandle>(null);
-  const running =
-    status?.state === "running" ||
-    status?.state === "starting" ||
-    status?.state === "stopping";
 
   useEffect(() => {
     startStore();
@@ -93,22 +94,6 @@ export function App() {
           AiCar <span>Mission Control</span>
         </h1>
         <div className="header-actions">
-          <button
-            type="button"
-            className="btn primary header-run-btn"
-            disabled={!trainReady || trainBusy || running}
-            onClick={() => void trainRef.current?.start()}
-          >
-            Start
-          </button>
-          <button
-            type="button"
-            className="btn danger header-run-btn"
-            disabled={!trainReady || trainBusy || status?.state === "stopping"}
-            onClick={() => void trainRef.current?.stop()}
-          >
-            {running ? "Stop" : "Stop simulators"}
-          </button>
           <div className="conn" data-state={conn}>
             {conn}
           </div>
@@ -127,7 +112,6 @@ export function App() {
         {(
           [
             ["train", "Train"],
-            ["maps", "Maps"],
             ["watch", "Watch"],
             ["replay", "Replay"],
           ] as const
@@ -175,13 +159,8 @@ export function App() {
       )}
 
       <div hidden={page !== "train"}>
-        <TrainPage
-          ref={trainRef}
-          onBusyChange={setTrainBusy}
-          onReadyChange={setTrainReady}
-        />
+        <TrainPage />
       </div>
-      {page === "maps" && <MapsPage />}
       {page === "watch" && (
         <Suspense
           fallback={

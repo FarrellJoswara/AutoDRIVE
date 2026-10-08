@@ -66,6 +66,96 @@ def test_invalid_simulation_ack_cannot_create_reward():
         env.step(np.zeros(2))
 
 
+def test_steering_action_scale_is_applied_to_simulator_command():
+    racer = ClockRacer(0.086)
+    received = []
+    original_step = racer.step
+
+    def record_step(throttle, steering):
+        received.append((throttle, steering))
+        return original_step(throttle, steering)
+
+    racer.step = record_step
+    env = AutoDriveEnv(racer=racer, steering_action_scale=0.94)
+    env.reset()
+    received.clear()
+    _, _, _, _, info = env.step(np.array([0.4, 0.8], dtype=np.float32))
+    assert received[-1] == pytest.approx((0.4, 0.8 * 0.94))
+    assert info["steering_command"] == pytest.approx(0.8 * 0.94)
+
+
+def test_straight_throttle_gain_applies_only_below_executed_steering_threshold():
+    racer = ClockRacer(0.086)
+    received = []
+    original_step = racer.step
+
+    def record_step(throttle, steering):
+        received.append((throttle, steering))
+        return original_step(throttle, steering)
+
+    racer.step = record_step
+    env = AutoDriveEnv(
+        racer=racer,
+        steering_action_scale=0.949,
+        straight_throttle_gain=1.10,
+        straight_throttle_steering_threshold=0.15,
+    )
+    env.reset()
+    received.clear()
+    env.step(np.array([0.4, 0.1], dtype=np.float32))
+    assert received[-1] == pytest.approx((0.44, 0.1 * 0.949))
+
+    received.clear()
+    env.step(np.array([0.4, 0.2], dtype=np.float32))
+    assert received[-1] == pytest.approx((0.4, 0.2 * 0.949))
+
+    received.clear()
+    env.step(np.array([-0.4, 0.0], dtype=np.float32))
+    assert received[-1] == pytest.approx((-0.4, 0.0))
+
+
+def test_straight_throttle_gain_is_capped_at_full_throttle():
+    racer = ClockRacer(0.086)
+    received = []
+    original_step = racer.step
+
+    def record_step(throttle, steering):
+        received.append((throttle, steering))
+        return original_step(throttle, steering)
+
+    racer.step = record_step
+    env = AutoDriveEnv(
+        racer=racer,
+        straight_throttle_gain=1.5,
+        straight_throttle_steering_threshold=0.15,
+    )
+    env.reset()
+    received.clear()
+    env.step(np.array([0.9, 0.0], dtype=np.float32))
+    assert received[-1][0] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("scale", [-0.01, 1.01, float("nan"), float("inf")])
+def test_steering_action_scale_must_be_finite_and_bounded(scale):
+    with pytest.raises(ValueError, match="steering_action_scale"):
+        AutoDriveEnv(racer=ClockRacer(), steering_action_scale=scale)
+
+
+@pytest.mark.parametrize("gain", [0.99, 2.01, float("nan"), float("inf")])
+def test_straight_throttle_gain_must_be_finite_and_bounded(gain):
+    with pytest.raises(ValueError, match="straight_throttle_gain"):
+        AutoDriveEnv(racer=ClockRacer(), straight_throttle_gain=gain)
+
+
+@pytest.mark.parametrize("threshold", [-0.01, 1.01, float("nan"), float("inf")])
+def test_straight_throttle_threshold_must_be_finite_and_bounded(threshold):
+    with pytest.raises(ValueError, match="straight_throttle_steering_threshold"):
+        AutoDriveEnv(
+            racer=ClockRacer(),
+            straight_throttle_steering_threshold=threshold,
+        )
+
+
 def test_evaluation_normalizes_by_reported_duration():
     from src.layer3.evaluate import evaluate_until_episode_end
 

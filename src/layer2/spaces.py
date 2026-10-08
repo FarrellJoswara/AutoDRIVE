@@ -18,6 +18,8 @@ from src.layer1.telemetry import TelemetrySnapshot
 # The Bridge scan is configured for -135..+135 degrees at 0.25-degree steps.
 # Both endpoints are present in live packets, hence 1081 measurements.
 LIDAR_BEAMS: int = 1081
+CAMERA_HEIGHT: int = 90
+CAMERA_WIDTH: int = 160
 
 # Normalized state channels, kept distinct from policy commands so PPO can
 # observe when the simulator's actuator feedback differs from what was sent.
@@ -101,7 +103,8 @@ def transform_policy_action(
 
 
 def make_observation_space(
-    lidar_beams: int = LIDAR_BEAMS, *, lidar_history_frames: int = 1
+    lidar_beams: int = LIDAR_BEAMS, *, lidar_history_frames: int = 1,
+    include_camera: bool = False,
 ) -> spaces.Dict:
     """Declare canonical range readings and nine individually scaled state values."""
     if lidar_beams != LIDAR_BEAMS:
@@ -112,17 +115,20 @@ def make_observation_space(
         (lidar_beams,) if lidar_history_frames == 1
         else (lidar_history_frames, lidar_beams)
     )
-    return spaces.Dict(
-        {
-            "lidar": spaces.Box(low=0.0, high=1.0, shape=lidar_shape, dtype=np.float32),
-            "state": spaces.Box(
-                low=-_STATE_CLIP,
-                high=_STATE_CLIP,
-                shape=(STATE_DIM,),
-                dtype=np.float32,
-            ),
-        }
-    )
+    observation_spaces = {
+        "lidar": spaces.Box(low=0.0, high=1.0, shape=lidar_shape, dtype=np.float32),
+        "state": spaces.Box(
+            low=-_STATE_CLIP,
+            high=_STATE_CLIP,
+            shape=(STATE_DIM,),
+            dtype=np.float32,
+        ),
+    }
+    if include_camera:
+        observation_spaces["camera"] = spaces.Box(
+            low=0, high=255, shape=(CAMERA_HEIGHT, CAMERA_WIDTH, 3), dtype=np.uint8
+        )
+    return spaces.Dict(observation_spaces)
 
 
 def _normalize_lidar(snap: TelemetrySnapshot, lidar_beams: int = LIDAR_BEAMS) -> np.ndarray:
@@ -185,6 +191,7 @@ def snapshot_to_obs(
     forward_speed_mps: float | None = None,
     lateral_speed_mps: float | None = None,
     lidar_history: list[np.ndarray] | None = None,
+    include_camera: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Build the normalized policy observation from one Bridge snapshot.
 
@@ -235,7 +242,20 @@ def snapshot_to_obs(
         # ordered oldest→newest so temporal convolutions have a stable meaning.
         lidar_observation = np.stack([*history, current_lidar], axis=0).astype(np.float32)
 
-    return {
+    observation = {
         "lidar": lidar_observation,
         "state": np.clip(state_raw, -_STATE_CLIP, _STATE_CLIP).astype(np.float32),
     }
+    if include_camera:
+        raw_image = snap.camera_image_rgb
+        if raw_image is None:
+            raise ValueError("front camera image is required by the official camera observation profile")
+        image = np.asarray(raw_image)
+        if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError("front camera image must be an HxWx3 uint8 RGB array")
+        if image.shape[0] <= 0 or image.shape[1] <= 0:
+            raise ValueError("front camera image must have nonzero width and height")
+        rows = np.linspace(0, image.shape[0] - 1, CAMERA_HEIGHT).astype(np.intp)
+        cols = np.linspace(0, image.shape[1] - 1, CAMERA_WIDTH).astype(np.intp)
+        observation["camera"] = np.ascontiguousarray(image[rows[:, None], cols[None, :], :])
+    return observation

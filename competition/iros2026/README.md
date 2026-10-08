@@ -19,8 +19,12 @@ simulator and Devkit images. The four-layer boundaries remain explicit:
    (`src/layer3/official_evaluate.py`) reads restricted lap/collision metrics
    only to report a test result; those metrics never reach policy inputs or
    choose actions.
-4. **Layer 4** remains the existing Train/Watch UI and training infrastructure;
-   this work does not change its runtime or the simulator compose stack.
+4. **Layer 4** creates official simulator/API pairs for Train and Replay.
+   Parallel environments use separate ROS domains and feed one PPO learner.
+   Watch is scoped to a selected run; Replay preserves saved observation/action
+   settings in a fresh official evaluation. See the
+   [reliability audit](../../docs/reliability-audit-2026-10-08.md) for verification
+   evidence and remaining limitations.
 
 ## Official rules represented
 
@@ -51,6 +55,20 @@ IROS `compete` settings. Build the policy image from the repository root:
 
 ```powershell
 docker build -f competition/iros2026/Dockerfile -t aicar-iros2026 .
+```
+
+Mission Control keeps CPU as the portable default. To enable NVIDIA PPO
+updates, build the optional CUDA image and choose **NVIDIA GPU (CUDA)** in the
+official training settings. The host must support Docker GPU passthrough (the
+NVIDIA Container Toolkit on Linux, or a configured Docker Desktop WSL2 GPU).
+The CUDA image uses the same official ROS/Devkit base and only changes the
+PyTorch wheel; simulator/API bridge workers remain CPU containers.
+
+```powershell
+docker build -f competition/iros2026/Dockerfile `
+  --build-arg AICAR_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 `
+  --build-arg AICAR_TORCH_PACKAGE='torch==2.2.2+cu121' `
+  -t aicar-iros2026:cuda .
 ```
 
 The policy image is derived directly from
@@ -125,9 +143,10 @@ docker run --rm --name aicar-official-train-sim `
 `AICAR_MODE=train` is a development/training mode, not a submission mode. It
 enables restricted reward/reset handling only inside the trainer. `AICAR_MODE=policy`
 remains the race path and cannot publish reset or subscribe to restricted
-metrics. When `HUB_URL` points to the local Layer 4 hub, official training
-publishes the simulator car, normalized LiDAR display, lap/collision counters,
-PPO metrics, and rollout progress to the Watch page. Training charges simulated
+metrics. Official training publishes the simulator car, normalized LiDAR
+display, lap/collision counters, PPO metrics, and rollout progress to the Watch
+page. The launcher defaults `HUB_URL` to `http://host.docker.internal:8090`;
+set `AICAR_HUB_URL` or `HUB_URL` for another hub address. Training charges simulated
 time throughout warm-up and the scored
 race, gives a lap-completion bonus for both the required warm-up and scored
 laps, and applies official escalating collision penalties during scored laps;

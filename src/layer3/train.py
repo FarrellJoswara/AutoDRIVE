@@ -7,8 +7,10 @@ import copy
 import json
 import math
 import os
+import signal
 import statistics
 import sys
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -42,7 +44,7 @@ def aggregate_evaluation_attempts(
     """Summarize repeated runs; the median is the checkpoint-selection signal."""
     if not attempts:
         raise ValueError("at least one evaluation attempt is required")
-    if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward"}:
+    if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward", "ten_lap_time"}:
         raise ValueError(f"unsupported evaluation metric: {selection_metric}")
     metric_fields = (
         "simulated_seconds", "frontier_distance_m", "frontier_speed_mps",
@@ -84,6 +86,16 @@ def aggregate_evaluation_attempts(
     for run in attempts:
         for reason, count in run.get("termination_reasons", {}).items():
             aggregate["termination_reasons"][reason] = aggregate["termination_reasons"].get(reason, 0) + int(count)
+    if selection_metric == "ten_lap_time":
+        aggregate["selection_score"] = (
+            statistics.median(ten_lap_times) if ten_lap_times else None
+        )
+        aggregate["selection_score_mean"] = (
+            statistics.mean(ten_lap_times) if ten_lap_times else None
+        )
+        aggregate["selection_score_best"] = min(ten_lap_times) if ten_lap_times else None
+        return aggregate
+
     score_field = {
         "frontier_speed": "frontier_speed_mps",
         "reward_per_simulated_second": "reward_per_simulated_second",
@@ -94,6 +106,38 @@ def aggregate_evaluation_attempts(
     aggregate["selection_score_mean"] = statistics.mean(scores)
     aggregate["selection_score_best"] = max(scores)
     return aggregate
+
+
+def evaluation_improved(
+    *,
+    metric: str,
+    score: Optional[float],
+    successful_attempts: int,
+    best_score: Optional[float],
+    best_successful_attempts: Optional[int],
+    min_improvement_pct: float,
+) -> bool:
+    """Compare candidates, prioritizing ten-lap completion count before time."""
+    if metric == "ten_lap_time":
+        # A snapshot with no completed 10-lap attempt has no valid lap-time
+        # score and must never become the initial champion. In particular,
+        # do not promote an all-crash first evaluation or reduce exploration.
+        if successful_attempts <= 0 or score is None:
+            return False
+        if best_successful_attempts is None:
+            return True
+        if successful_attempts != best_successful_attempts:
+            return successful_attempts > best_successful_attempts
+        if best_score is None:
+            return True
+        pct = (best_score - score) / max(abs(best_score), 1e-6) * 100.0
+        return score < best_score and pct >= min_improvement_pct
+    if score is None:
+        return False
+    if best_score is None:
+        return True
+    pct = (score - best_score) / max(abs(best_score), 1e-6) * 100.0
+    return score > best_score and pct >= min_improvement_pct
 
 
 def _device_arg(value: str) -> str:
@@ -183,6 +227,31 @@ class RunStopCallback(BaseCallback):
         return True
 
 
+class RequestedStopCallback(BaseCallback):
+    """Checkpoint and stop at the next completed step after SIGTERM."""
+
+    def __init__(self, requested: threading.Event, recovery_path: Path) -> None:
+        super().__init__(verbose=0)
+        self.requested = requested
+        self.recovery_path = Path(recovery_path)
+        self.stop_reason: Optional[str] = None
+
+    def _on_step(self) -> bool:
+        if self.requested.is_set():
+            self.stop_reason = "operator_stop"
+            try:
+                self.recovery_path.parent.mkdir(parents=True, exist_ok=True)
+                self.model.save(str(self.recovery_path.with_suffix("")))
+                print(
+                    f"SIGTERM stop requested; saved recovery policy to {self.recovery_path}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"SIGTERM recovery checkpoint failed: {exc}", flush=True)
+            return False
+        return True
+
+
 class EvaluationCallback(BaseCallback):
     """Asynchronously evaluate snapshots until failure, frontier stall, or ten laps."""
 
@@ -202,7 +271,7 @@ class EvaluationCallback(BaseCallback):
         self.every_timesteps = max(1, int(every_timesteps))
         self.frame_skip = max(1, int(frame_skip))
         self.runs_per_snapshot = max(1, int(runs_per_snapshot))
-        if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward"}:
+        if selection_metric not in {"frontier_speed", "reward_per_simulated_second", "total_reward", "ten_lap_time"}:
             raise ValueError(f"unsupported evaluation metric: {selection_metric}")
         self.selection_metric = selection_metric
         self.plateau_min_timesteps = max(0, int(plateau_min_timesteps))
@@ -214,6 +283,7 @@ class EvaluationCallback(BaseCallback):
         self.plateau_scale = float(exploration_plateau_scale)
         self.next_eval = self.every_timesteps
         self.best_score: Optional[float] = None
+        self.best_successful_attempts: Optional[int] = None
         self.stale_evaluations = 0
         self.stop_reason: Optional[str] = None
         self.history_path = self.out_dir / "evaluation_history.jsonl"
@@ -315,6 +385,7 @@ class EvaluationCallback(BaseCallback):
                     "simulated_seconds",
                     "laps_observed",
                     "lap_times_s",
+                    "lap_diagnostics",
                     "best_10_lap_time_s",
                     "reward_per_simulated_second",
                     "total_reward",
@@ -393,13 +464,20 @@ class EvaluationCallback(BaseCallback):
                 candidate.unlink(missing_ok=True)
             raise RuntimeError("deterministic policy evaluation failed") from exc
 
-        score = float(result["selection_score"])
-        improved = self.best_score is None
-        if self.best_score is not None:
-            pct = (score - self.best_score) / max(abs(self.best_score), 1e-6) * 100.0
-            improved = score > self.best_score and pct >= self.min_improvement_pct
+        score_value = result.get("selection_score")
+        score = float(score_value) if score_value is not None else None
+        successful_attempts = int(result.get("successful_attempts", 0))
+        improved = evaluation_improved(
+            metric=self.selection_metric,
+            score=score,
+            successful_attempts=successful_attempts,
+            best_score=self.best_score,
+            best_successful_attempts=self.best_successful_attempts,
+            min_improvement_pct=self.min_improvement_pct,
+        )
         if improved:
             self.best_score = score
+            self.best_successful_attempts = successful_attempts
             self.stale_evaluations = 0
             best_path = self.out_dir / "best_evaluated_model.zip"
             if candidate is None or not candidate.is_file():
@@ -432,7 +510,7 @@ class EvaluationCallback(BaseCallback):
             "evaluation: "
             f"snapshot_steps={result['timesteps']} frontier={result['frontier_distance_m']:.1f}m "
             f"pace={result['frontier_speed_mps']:.3f}m/s "
-            f"selection={self.selection_metric}:{score:.3f} "
+            f"selection={self.selection_metric}:{score if score is not None else 'n/a'} "
             f"crashes={result['collisions']} laps={result['laps_observed']} "
             f"stale={self.stale_evaluations}", flush=True,
         )
@@ -537,11 +615,15 @@ def train(
     from src.layer3.envs import make_vec_env
 
     env_kwargs = dict(env_kwargs or {})
-    uses_scan_history = env_kwargs.get("observation_profile") == "official_sensors_history"
-    if uses_scan_history != (policy_architecture == "temporal_lidar_cnn"):
+    observation_profile = env_kwargs.get("observation_profile")
+    expected_architecture = {
+        "official_sensors_history": "temporal_lidar_cnn",
+        "official_sensors_camera": "lidar_camera_cnn",
+    }.get(observation_profile, "lidar_cnn")
+    if expected_architecture != policy_architecture:
         raise ValueError(
-            "official_sensors_history requires temporal_lidar_cnn, and temporal_lidar_cnn "
-            "requires official_sensors_history"
+            f"observation profile {observation_profile!r} requires "
+            f"policy architecture {expected_architecture!r}, got {policy_architecture!r}"
         )
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -556,8 +638,8 @@ def train(
         f"device={resolved_device} out={out_dir}"
     )
     print(
-        f"ppo: lr={learning_rate} n_steps={_PPO_N_STEPS} batch={_PPO_BATCH_SIZE} "
-        f"n_epochs={n_epochs} gamma={_PPO_GAMMA} ent_coef={_PPO_ENT_COEF} "
+        f"ppo: lr={learning_rate} n_steps={n_steps} batch={_PPO_BATCH_SIZE} "
+        f"n_epochs={n_epochs} gamma={gamma} gae_lambda={gae_lambda} ent_coef={_PPO_ENT_COEF} "
         f"clip={_PPO_CLIP_RANGE}"
     )
     if env_kwargs:
@@ -566,7 +648,14 @@ def train(
     # A successful lap target ends this car's episode; the overall PPO job
     # continues with a fresh episode. Zero disables the optional target.
     env_kwargs["laps_per_episode"] = max(0, int(laps_per_episode))
-    vec_env = make_vec_env(n_envs, seed=seed, **env_kwargs)
+    stop_requested = threading.Event()
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, lambda *_: stop_requested.set())
+    try:
+        vec_env = make_vec_env(n_envs, seed=seed, **env_kwargs)
+    except BaseException:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        raise
     evaluation_env = None
     try:
         if resume is not None:
@@ -580,6 +669,7 @@ def train(
                 "LidarStateExtractor": "lidar_cnn",
                 "PooledLidarStateExtractor": "lidar_cnn_pooled",
                 "TemporalLidarStateExtractor": "temporal_lidar_cnn",
+                "LidarCameraStateExtractor": "lidar_camera_cnn",
             }.get(extractor_name)
             if checkpoint_architecture != policy_architecture:
                 raise ValueError(
@@ -595,6 +685,8 @@ def train(
             model.learning_rate = float(learning_rate)
             model.lr_schedule = ConstantSchedule(float(learning_rate))
             model.n_epochs = int(n_epochs)
+            model.gamma = float(gamma)
+            model.gae_lambda = float(gae_lambda)
             for group in model.policy.optimizer.param_groups:
                 group["lr"] = float(learning_rate)
             # Checkpoints retain the source run's TensorBoard folder. Bind the
@@ -697,7 +789,7 @@ def train(
         )
         from src.layer3.hub_callback import maybe_hub_callback
 
-        hub_cb = maybe_hub_callback(run_id=out_dir.name)
+        hub_cb = maybe_hub_callback(run_id=out_dir.name, run_dir=out_dir)
         evaluation_cb = EvaluationCallback(
             evaluation_env,
             out_dir=out_dir,
@@ -715,10 +807,14 @@ def train(
             live_pose_publisher=hub_cb.publish_evaluator_live if hub_cb is not None else None,
         )
         simulator_pause_cb = SimulatorPauseCallback()
+        requested_stop_cb = RequestedStopCallback(
+            stop_requested, out_dir / "ppo_signal_recovery.zip"
+        )
         callbacks = [simulator_pause_cb, evaluation_cb, checkpoint_cb, stop_cb]
         if hub_cb is not None:
             callbacks.append(hub_cb)
             print(f"hub telemetry: HUB_URL set → publishing to hub (run_id={out_dir.name})")
+        callbacks.append(requested_stop_cb)
 
         model.learn(
             # SB3 requires a finite target; plateau stopping ends unbounded runs.
@@ -735,7 +831,12 @@ def train(
             model = PPO.load(str(selected_path), env=vec_env, device=resolved_device)
             final_policy_source = "best_evaluated_model"
         stop_record = {
-            "reason": evaluation_cb.stop_reason or stop_cb.stop_reason or "timestep_limit",
+            "reason": (
+                requested_stop_cb.stop_reason
+                or evaluation_cb.stop_reason
+                or stop_cb.stop_reason
+                or "timestep_limit"
+            ),
             "num_timesteps": ppo_timesteps,
             "max_duration_seconds": max(0.0, float(max_duration_seconds)),
             "plateau": evaluation_cb.latest,
@@ -751,9 +852,14 @@ def train(
         print(f"saved {final_path}.zip")
         return Path(str(final_path) + ".zip")
     finally:
-        if evaluation_env is not None:
-            evaluation_env.close()
-        vec_env.close()
+        try:
+            if evaluation_env is not None:
+                evaluation_env.close()
+        finally:
+            try:
+                vec_env.close()
+            finally:
+                signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -777,7 +883,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--learning-rate", type=float, default=_PPO_LR)
     p.add_argument(
         "--policy-architecture",
-        choices=("lidar_cnn", "lidar_cnn_pooled", "temporal_lidar_cnn"),
+        choices=("lidar_cnn", "lidar_cnn_pooled", "temporal_lidar_cnn", "lidar_camera_cnn"),
         default="lidar_cnn",
         help="Legacy flattened LiDAR CNN or sector-pooled LiDAR CNN",
     )
@@ -793,7 +899,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--evaluation-metric",
-        choices=("frontier_speed", "reward_per_simulated_second", "total_reward"),
+        choices=("frontier_speed", "reward_per_simulated_second", "total_reward", "ten_lap_time"),
         default="total_reward",
     )
     p.add_argument("--exploration-std-min", type=float, default=0.2)
@@ -827,7 +933,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--observation-profile",
-        choices=("simulator", "official_sensors", "official_sensors_history"),
+        choices=("simulator", "official_sensors", "official_sensors_history", "official_sensors_camera"),
         default="simulator",
         help="Use full simulator telemetry or match the official allowed sensor inputs",
     )
@@ -856,7 +962,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--route-progress-scale", type=float, default=10.0)
     p.add_argument(
         "--frontier-pace-target-mps", type=float, default=6.0,
-        help="Average frontier pace at which per-metre reward reaches 2x",
+        help="Average frontier pace at which the pace multiplier reaches its cap",
+    )
+    p.add_argument(
+        "--frontier-pace-bonus-strength", type=float, default=1.0,
+        help="Quadratic bonus strength; 1 gives a 2x cap, 2 gives a 3x cap",
+    )
+    p.add_argument(
+        "--frontier-pace-source", choices=("episode_average", "current_push"),
+        default="episode_average",
+        help="Measure pace bonus from episode-average frontier speed or the current frontier advance",
     )
     p.add_argument("--time-penalty-per-second", type=float, default=5.0)
     p.add_argument("--collision-penalty-magnitude", type=float, default=100.0)

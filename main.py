@@ -4,13 +4,15 @@ AiCar — one command to start everything.
 
   python main.py
 
-Builds only missing Docker images, starts brain + sims, waits for Mission Control,
+Builds missing/stale runtime images, starts Mission Control,
 and opens its bundled web UI in the browser.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -27,7 +29,6 @@ HEALTH_URL = f"{HUB_URL}/health"
 DEFAULT_SIMS = 2
 SERVICE_IMAGES = {
     "brain": "aicar-brain:latest",
-    "sim": "aicar-sim:latest",
 }
 
 # GitHub release asset with gitignored Unity binaries (linux + windows).
@@ -155,28 +156,57 @@ def _image_exists(docker: str, image: str) -> bool:
     return result.returncode == 0
 
 
-def _ensure_images(docker: str, *, force_build: bool, no_build: bool) -> None:
-    missing = [
-        service for service, image in SERVICE_IMAGES.items()
-        if not _image_exists(docker, image)
-    ]
-    if force_build:
-        services = list(SERVICE_IMAGES)
-        _banner("Rebuilding Docker images (explicit --build)")
-        _compose(docker, "build", *services)
-        return
-    if not missing:
-        print("Docker images: reusing cached brain and simulator images.")
-        return
-    if no_build:
-        _banner("Docker image missing")
-        print("Missing: " + ", ".join(SERVICE_IMAGES[name] for name in missing))
-        print("Run `python main.py --build` once to create the missing image(s).")
-        sys.exit(1)
+OFFICIAL_API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_IMAGE", "aicar-iros2026")
+OFFICIAL_SIM_IMAGE = os.environ.get("AICAR_OFFICIAL_SIM_IMAGE", "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete")
 
-    _banner("Building missing Docker images")
-    print("Only building: " + ", ".join(missing))
-    _compose(docker, "build", *missing)
+
+def _official_source_hash() -> str:
+    digest = hashlib.sha256()
+    paths = sorted((ROOT / "src").rglob("*.py")) + [
+        ROOT / "competition/iros2026/Dockerfile", ROOT / "competition/iros2026/run_container.sh"]
+    for path in paths:
+        digest.update(path.relative_to(ROOT).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _ensure_images(docker: str, *, force_build: bool, no_build: bool) -> None:
+    brain_missing = not _image_exists(docker, SERVICE_IMAGES["brain"])
+    api_missing = not _image_exists(docker, OFFICIAL_API_IMAGE)
+    sim_missing = not _image_exists(docker, OFFICIAL_SIM_IMAGE)
+    source_hash = _official_source_hash()
+    image_hash = subprocess.run(
+        [docker, "image", "inspect", "--format", '{{index .Config.Labels "aicar.source_hash"}}', OFFICIAL_API_IMAGE],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip() if not api_missing else ""
+    api_stale = image_hash != source_hash
+    if no_build and (brain_missing or api_missing or sim_missing or api_stale):
+        raise RuntimeError("Official runtime images are missing or do not match this checkout. Run without --no-build.")
+    if force_build or brain_missing:
+        _compose(docker, "build", "brain")
+    if force_build or api_stale:
+        subprocess.run([docker, "build", "-f", "competition/iros2026/Dockerfile", "-t", OFFICIAL_API_IMAGE,
+                        "--label", f"aicar.source_hash={source_hash}", "."], cwd=ROOT, check=True)
+    if sim_missing:
+        subprocess.run([docker, "pull", OFFICIAL_SIM_IMAGE], check=True)
+
+
+def _stop_managed_runs(docker: str) -> None:
+    try:
+        with urllib.request.urlopen(f"{HUB_URL}/train/runs", timeout=10) as response:
+            runs = json.load(response)["runs"]
+        for run in runs:
+            if run.get("state") in {"starting", "running", "stopping"}:
+                request = urllib.request.Request(f"{HUB_URL}/train/runs/{run['run_id']}/stop", method="POST")
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    result = json.load(response)
+                if result.get("cleanup_error") or result.get("state") == "failed":
+                    raise RuntimeError(f"Run cleanup did not complete: {result}")
+    except (urllib.error.URLError, OSError):
+        running = subprocess.run([docker, "ps", "-q", "--filter", "label=aicar.managed=official-run"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        if running:
+            raise RuntimeError("Mission Control is unreachable and official runs still exist. Restore the hub and stop them before shutting down.")
 
 
 def _ensure_web_ui() -> None:
@@ -251,14 +281,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--sims",
         type=int,
-        default=DEFAULT_SIMS,
-        help=f"Number of sim containers (default {DEFAULT_SIMS})",
+        default=None,
+        help="Save the default official environment count for the next UI training run (1-8)",
     )
     build_group = parser.add_mutually_exclusive_group()
     build_group.add_argument(
         "--build",
         action="store_true",
-        help="Force rebuild both Docker images (normally cached images are reused)",
+        help="Rebuild Mission Control and the official policy image",
     )
     build_group.add_argument(
         "--no-build",
@@ -293,17 +323,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.stop:
         _banner("Stopping AiCar")
-        _compose(docker, "down", check=False)
+        _stop_managed_runs(docker)
+        _compose(docker, "down", check=True)
         print("Stopped.")
         return 0
 
-    _ensure_simulator(args.sim_url, skip_download=args.no_download_sim)
+    if args.sims is not None:
+        if not 1 <= args.sims <= 8:
+            parser.error("--sims must be between 1 and 8")
+        settings_path = ROOT / "logs/layer4/official_train_settings.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+        settings["n_envs"] = args.sims
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     _ensure_web_ui()
     _ensure_images(docker, force_build=args.build, no_build=args.no_build)
 
-    _banner("Starting AiCar (brain + sims + Mission Control)")
-    up_args = ["up", "-d", "--no-build"]
-    up_args.extend(["--scale", f"sim={max(1, args.sims)}"])
+    _banner("Starting Mission Control (official simulators start with each run)")
+    up_args = ["up", "-d", "--no-build", "brain"]
     _compose(docker, *up_args)
 
     _wait_health()

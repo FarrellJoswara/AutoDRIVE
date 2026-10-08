@@ -1,11 +1,13 @@
-"""Minimal Docker Engine client for stopping compose-managed containers."""
+"""Small Docker Engine API client for existing Compose and official runs."""
 
 from __future__ import annotations
 
 import http.client
 import json
 import os
+import re
 import socket
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -50,6 +52,205 @@ def _request(
         return json.loads(body)
     finally:
         conn.close()
+
+
+def _filters(labels: List[str]) -> str:
+    return quote(json.dumps({"label": labels}, separators=(",", ":")))
+
+
+def create_official_run_network(run_id: str) -> str:
+    """Create a private bridge network owned by one official training run."""
+    name = f"aicar-run-{run_id}"
+    response = _request(
+        "POST", "/networks/create",
+        body={
+            "Name": name,
+            "Driver": "bridge",
+            "CheckDuplicate": True,
+            "Labels": {"aicar.managed": "official-run", "aicar.run_id": run_id},
+        },
+    )
+    return str(response.get("Id") or name)
+
+
+def remove_official_run_network(network_id: str) -> None:
+    _request("DELETE", f"/networks/{quote(network_id, safe='')}")
+
+
+def list_official_run_containers(run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    labels = ["aicar.managed=official-run"]
+    if run_id:
+        labels.append(f"aicar.run_id={run_id}")
+    return _request(
+        "GET", f"/containers/json?all=1&filters={_filters(labels)}"
+    )
+
+
+def list_official_run_networks(run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    labels = ["aicar.managed=official-run"]
+    if run_id:
+        labels.append(f"aicar.run_id={run_id}")
+    filters = _filters(labels)
+    return _request("GET", f"/networks?filters={filters}")
+
+
+def inspect_container(container_id: str) -> Dict[str, Any]:
+    return _request("GET", f"/containers/{quote(container_id, safe='')}/json")
+
+
+def create_official_run_container(
+    *, run_id: str, role: str, image: str, network_name: str,
+    env: Optional[List[str]] = None, binds: Optional[List[str]] = None,
+    entrypoint: Optional[List[str]] = None, command: Optional[List[str]] = None,
+    extra_hosts: Optional[List[str]] = None, working_dir: Optional[str] = None,
+    metadata_labels: Optional[Dict[str, str]] = None,
+    gpu: bool = False,
+) -> str:
+    """Create and start a run-scoped API or simulator container."""
+    if not re.fullmatch(r"(?:api|sim)(?:-[1-7])?", role):
+        raise ValueError("official run container role must be api or sim")
+    name = f"aicar-run-{run_id}-{role}"
+    labels = {
+        "aicar.managed": "official-run",
+        "aicar.run_id": run_id,
+        "aicar.role": role,
+    }
+    labels.update(metadata_labels or {})
+    config: Dict[str, Any] = {
+        "Image": image,
+        "Env": list(env or []),
+        "Labels": labels,
+        "Hostname": name,
+        "HostConfig": {
+            "NetworkMode": network_name,
+            "Binds": list(binds or []),
+            "RestartPolicy": {"Name": "no"},
+            "Init": True,
+            "ExtraHosts": list(extra_hosts or []),
+        },
+        "NetworkingConfig": {
+            "EndpointsConfig": {network_name: {"Aliases": [role, name]}}
+        },
+    }
+    if gpu:
+        config["HostConfig"]["DeviceRequests"] = [{
+            "Driver": "nvidia", "Count": -1, "DeviceIDs": [],
+            "Capabilities": [["gpu"]], "Options": {},
+        }]
+    if entrypoint is not None:
+        config["Entrypoint"] = entrypoint
+    if command is not None:
+        config["Cmd"] = command
+    if working_dir:
+        config["WorkingDir"] = working_dir
+    response = _request(
+        "POST", f"/containers/create?name={quote(name, safe='')}", body=config
+    )
+    container_id = str(response["Id"])
+    try:
+        _request("POST", f"/containers/{quote(container_id, safe='')}/start")
+    except Exception:
+        try:
+            remove_official_run_container(container_id)
+        except Exception:
+            pass
+        raise
+    return container_id
+
+
+def stop_official_run_container(container_id: str, *, timeout_s: int = 60) -> None:
+    """Stop exactly one run-owned container; already-stopped is harmless."""
+    try:
+        _request(
+            "POST", f"/containers/{quote(container_id, safe='')}/stop?t={int(timeout_s)}",
+            timeout_s=max(30.0, float(timeout_s) + 10.0),
+        )
+    except RuntimeError as exc:
+        # Docker returns 304 when the container is not running (handled by
+        # _request); 404 means it was already removed during reconciliation.
+        if " 404 " not in str(exc):
+            raise
+
+
+def remove_official_run_container(container_id: str) -> None:
+    _request(
+        "DELETE", f"/containers/{quote(container_id, safe='')}?force=1&v=1"
+    )
+
+
+def official_run_container_logs(container_id: str) -> str:
+    """Return all currently buffered stdout/stderr for a run container."""
+    conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=30.0)
+    try:
+        path = f"/containers/{quote(container_id, safe='')}/logs?stdout=1&stderr=1&timestamps=1"
+        conn.request("GET", path, headers={"Host": "localhost"})
+        response = conn.getresponse()
+        data = response.read()
+        if response.status not in range(200, 300):
+            raise RuntimeError(
+                f"Docker API GET {path}: {response.status} "
+                f"{data.decode('utf-8', errors='replace')}"
+            )
+        # Docker's multiplexed stream uses an 8-byte header per frame. Strip
+        # framing when present; TTY logs may be a plain byte stream.
+        chunks: List[bytes] = []
+        offset = 0
+        framed = bool(data) and data[0] in (1, 2)
+        while framed and offset + 8 <= len(data):
+            size = int.from_bytes(data[offset + 4:offset + 8], "big")
+            end = offset + 8 + size
+            if end > len(data):
+                framed = False
+                break
+            chunks.append(data[offset + 8:end])
+            offset = end
+        payload = b"".join(chunks) if framed and offset == len(data) else data
+        return payload.decode("utf-8", errors="replace")
+    finally:
+        conn.close()
+
+
+def find_host_path_for_container_path(container_path: Path) -> Path:
+    """Map a path in the hub to its Docker-host bind source.
+
+    The daemon interprets bind sources on its own host, not inside the hub
+    container. Resolve through the hub's mount table instead of assuming that
+    `/app/logs` exists on the daemon host at the same path.
+    """
+    configured_logs = os.environ.get("AICAR_HOST_LOGS_DIR", "").strip()
+    if configured_logs:
+        requested = container_path.resolve()
+        try:
+            from src.layer4.settings import ROOT
+
+            relative = requested.relative_to((ROOT / "logs").resolve())
+        except ValueError:
+            raise RuntimeError(f"{container_path} is outside the hub logs directory")
+        return Path(configured_logs).expanduser().resolve() / relative
+    hostname = os.environ.get("HOSTNAME", "").strip()
+    if hostname and os.environ.get("AICAR_IN_DOCKER", "").lower() in {"1", "true", "yes", "on"}:
+        try:
+            own = inspect_container(hostname)
+            requested = container_path.resolve()
+            candidates = []
+            for mount in own.get("Mounts", []):
+                if not mount.get("Source") or not mount.get("Destination"):
+                    continue
+                dest = Path(str(mount["Destination"]))
+                try:
+                    relative = requested.relative_to(dest)
+                except ValueError:
+                    continue
+                candidates.append((len(str(dest)), Path(str(mount["Source"])) / relative))
+            if candidates:
+                return max(candidates, key=lambda item: item[0])[1]
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"cannot map {container_path} to a Docker-host bind mount; configure "
+            "AICAR_HOST_LOGS_DIR or mount the hub logs directory"
+        )
+    return container_path.resolve()
 
 
 def _list_compose_containers(*, service: Optional[str] = "sim", all_containers: bool = False) -> List[Dict[str, Any]]:

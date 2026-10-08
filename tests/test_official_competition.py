@@ -306,12 +306,7 @@ def test_race_env_counts_only_collisions_after_warmup():
 
 
 def test_ros_control_waits_for_scan_after_command_and_declared_period():
-    racer = object.__new__(RacerRos2)
-    racer._condition = threading.Condition()
-    racer._step_counter = 0
-    racer._last_scan_receipt = 0.0
-    racer._closed = False
-    racer.timeout_s = 0.5
+    racer = RacerRos2(node=object(), timeout_s=0.5, frame_timeout_s=0.5)
     racer._telemetry = object()
     command_time = time.monotonic()
     earliest_time = command_time + 0.04

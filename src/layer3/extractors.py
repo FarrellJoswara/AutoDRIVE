@@ -138,12 +138,53 @@ class TemporalLidarStateExtractor(BaseFeaturesExtractor):
         return self.merge(torch.cat([pooled, self.state_net(state)], dim=1))
 
 
+class LidarCameraStateExtractor(BaseFeaturesExtractor):
+    """Fuse official LiDAR, front RGB camera, and proprioceptive state."""
+
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 256):
+        super().__init__(observation_space, features_dim=features_dim)
+        n_lidar = int(observation_space.spaces["lidar"].shape[0])
+        n_state = int(observation_space.spaces["state"].shape[0])
+        camera_shape = observation_space.spaces["camera"].shape
+        if len(camera_shape) != 3 or 3 not in (camera_shape[0], camera_shape[2]):
+            raise ValueError("camera observation must be RGB HxWx3")
+        self.lidar_net = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2), nn.ReLU(),
+            nn.AdaptiveAvgPool1d(64), nn.Flatten(),
+        )
+        self.camera_net = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=5, stride=2, padding=2), nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), nn.ReLU(),
+            nn.AdaptiveAvgPool2d((4, 6)), nn.Flatten(),
+        )
+        self.state_net = nn.Sequential(
+            nn.Linear(n_state, 64), nn.ReLU(), nn.Linear(64, 64), nn.ReLU()
+        )
+        self.merge = nn.Sequential(
+            nn.Linear(64 * 64 + 64 * 4 * 6 + 64, features_dim), nn.ReLU()
+        )
+
+    def forward(self, observations: dict) -> torch.Tensor:
+        lidar = observations["lidar"].float().unsqueeze(1)
+        camera = observations["camera"].float()
+        if camera.shape[-1] == 3:
+            camera = camera.permute(0, 3, 1, 2)
+        camera = camera / 255.0
+        state = observations["state"].float()
+        return self.merge(torch.cat(
+            [self.lidar_net(lidar), self.camera_net(camera), self.state_net(state)], dim=1
+        ))
+
+
 def policy_kwargs_for_architecture(architecture: str) -> dict:
     """Return SB3 policy kwargs for a named, checkpoint-compatible network."""
     extractors = {
         "lidar_cnn": LidarStateExtractor,
         "lidar_cnn_pooled": PooledLidarStateExtractor,
         "temporal_lidar_cnn": TemporalLidarStateExtractor,
+        "lidar_camera_cnn": LidarCameraStateExtractor,
     }
     try:
         extractor = extractors[architecture]

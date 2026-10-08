@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetCar, FleetTelemetry } from "../api";
+import type { EvaluatorCarTelemetry, EvaluatorLiveTelemetry, FleetCar, FleetTelemetry, TrainingPhaseTelemetry } from "../api";
 import {
   DrawFrameOpts,
   ViewState,
@@ -42,6 +42,11 @@ export interface FleetCanvasProps {
   evaluatorSnapshotTimesteps?: number | null;
   trainingStep?: number;
   rolloutSize?: number;
+  /** Run-scoped telemetry for overview canvases that must not read global store state. */
+  telemetryOverride?: FleetTelemetry | null;
+  telemetryAgeMs?: number;
+  runState?: string;
+  phaseOverride?: TrainingPhaseTelemetry | null;
 }
 
 /**
@@ -76,7 +81,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
 
   useEffect(() => {
     scheduleFrameRef.current();
-  }, [props.fleetSource, props.evaluatorActive, props.evaluatorCar, props.evaluatorSnapshotTimesteps, props.trainingStep, props.rolloutSize]);
+  }, [props.fleetSource, props.evaluatorActive, props.evaluatorCar, props.evaluatorSnapshotTimesteps, props.trainingStep, props.rolloutSize, props.telemetryOverride, props.telemetryAgeMs, props.runState, props.phaseOverride]);
 
   // Load occupancy map
   useEffect(() => {
@@ -184,11 +189,18 @@ export function FleetCanvas(props: FleetCanvasProps) {
       raf = 0;
 
       const p = propsRef.current;
-      const fleet = p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
-      const age = p.fleetSource === "replay" ? getReplayFleetHotAgeMs() : getFleetHotAgeMs();
-      const stale = age > 500;
-      const phase = p.fleetSource === "train" ? getTrainingPhaseHot() : null;
-      const trainState = getTrainingStateHot();
+      const hasTelemetryOverride = p.telemetryOverride !== undefined;
+      const fleet = hasTelemetryOverride
+        ? p.telemetryOverride ?? null
+        : p.fleetSource === "replay" ? getReplayFleetHot() : getFleetHot();
+      const age = hasTelemetryOverride
+        ? p.telemetryOverride ? p.telemetryAgeMs ?? 0 : Infinity
+        : p.fleetSource === "replay" ? getReplayFleetHotAgeMs() : getFleetHotAgeMs();
+      const stale = age > (p.fleetSource === "replay" ? 1500 : 500);
+      const phase = p.phaseOverride !== undefined
+        ? p.phaseOverride
+        : p.fleetSource === "train" ? getTrainingPhaseHot() : null;
+      const trainState = p.runState ?? getTrainingStateHot();
       const trainActive = trainState === "starting" || trainState === "running" || trainState === "stopping";
       const ppoUpdating =
         trainActive &&

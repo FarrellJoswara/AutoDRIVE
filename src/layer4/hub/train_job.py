@@ -166,7 +166,10 @@ class TrainJob:
             if self.state == "starting":
                 self.state = "running"
             self._watcher = threading.Thread(
-                target=self._watch_exit, name="train-job-watcher", daemon=True
+                target=self._watch_exit,
+                args=(proc, settings, log_file),
+                name="train-job-watcher",
+                daemon=True,
             )
             self._watcher.start()
 
@@ -174,13 +177,12 @@ class TrainJob:
 
         return self.status()
 
-    def _watch_exit(self) -> None:
-        proc = self._proc
-        if proc is None:
-            return
+    def _watch_exit(self, proc: subprocess.Popen, settings: Settings, log_file: Any) -> None:
         code = proc.wait()
         with self._lock:
-            settings = self.last_settings
+            # A stale watcher must never publish the state of a newer run.
+            if self._proc is not proc:
+                return
             if code == 0 and settings is not None:
                 stop_path = settings.resolve_out() / "stop_reason.json"
                 try:
@@ -191,20 +193,26 @@ class TrainJob:
                     self.stop_reason = None
             cleanup_pending = self._docker_cleanup_enabled(settings)
             self.exit_code = int(code) if code is not None else None
+            # Keep the run reserved until simulator cleanup finishes. Otherwise
+            # a quick restart can race the old cleanup and stop the new sims.
             self.state = "stopping" if cleanup_pending else "exited"
-            self.pid = None
-            self._proc = None
-            if self._log_file is not None:
-                try:
-                    self._log_file.close()
-                except Exception:
-                    pass
+            if not cleanup_pending:
+                self.pid = None
+                self._proc = None
+            try:
+                log_file.close()
+            except Exception:
+                pass
+            if self._log_file is log_file:
                 self._log_file = None
         self._broadcast()
         if cleanup_pending:
             self._cleanup_docker_services(settings)
             with self._lock:
-                self.state = "exited"
+                if self._proc is proc:
+                    self.state = "exited"
+                    self.pid = None
+                    self._proc = None
             self._broadcast()
 
     @staticmethod
@@ -246,6 +254,7 @@ class TrainJob:
                 cleanup_settings = None
                 inactive = False
                 self.state = "stopping"
+                self.stop_reason = "user_requested"
 
         # The hub may have restarted after losing its in-memory Popen handle.
         # In that case the explicit UI Stop action still needs to clean up the
@@ -274,20 +283,24 @@ class TrainJob:
                     proc.kill()
                 except Exception:
                     pass
+                with self._lock:
+                    self.stop_reason = "forced_termination_after_grace_period"
                 try:
                     proc.wait(timeout=5)
                 except Exception:
                     pass
 
-            # watcher sets exited; give it a moment
-            for _ in range(25):
+            # The watcher owns final state publication; keep Start blocked
+            # through Docker simulator cleanup as well as child termination.
+            deadline = time.monotonic() + 60.0
+            while time.monotonic() < deadline:
                 with self._lock:
-                    if self.state == "exited" or self._proc is None:
+                    if self.state in {"exited", "error", "idle"} or self._proc is not proc:
                         break
                 time.sleep(0.1)
 
         with self._lock:
-            if self.state not in {"exited", "error", "idle"}:
+            if self.state not in {"exited", "error", "idle", "stopping"}:
                 self.state = "exited"
                 if proc is not None and self.exit_code is None and proc.poll() is not None:
                     self.exit_code = proc.poll()

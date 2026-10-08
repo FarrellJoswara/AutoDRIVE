@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 import unittest
 import importlib
 from types import SimpleNamespace
@@ -16,7 +17,9 @@ from src.layer2.rewards import RewardConfig
 from src.layer3.envs import env_kwargs_from_args
 from src.layer3.train import (
     aggregate_evaluation_attempts,
+    evaluation_improved,
     RunStopCallback,
+    RequestedStopCallback,
     SimulatorPauseCallback,
     build_arg_parser,
 )
@@ -24,6 +27,15 @@ from src.layer4.settings import Settings
 
 
 class RunStopCallbackTests(unittest.TestCase):
+    def test_requested_stop_is_honored_at_next_callback_boundary(self) -> None:
+        requested = threading.Event()
+        callback = RequestedStopCallback(requested)
+
+        self.assertTrue(callback._on_step())
+        requested.set()
+        self.assertFalse(callback._on_step())
+        self.assertEqual(callback.stop_reason, "operator_stop")
+
     def test_repeated_evaluation_uses_median_not_luckiest_attempt(self) -> None:
         attempts = [
             {"frontier_speed_mps": 2.0, "total_reward": 20.0, "laps_observed": 0,
@@ -52,14 +64,90 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertEqual(result["collision_rate"], 1 / 3)
         self.assertEqual(result["collisions"], 1)
 
+    def test_ten_lap_selection_uses_completion_count_then_median_time(self) -> None:
+        attempts = [
+            {"frontier_speed_mps": 5.0, "total_reward": 100.0, "laps_observed": 10,
+             "simulated_seconds": 65.0, "frontier_distance_m": 300.0,
+             "reward_per_simulated_second": 1.5, "collisions": 0,
+             "failed_episodes": 0, "lap_times_s": [6.5] * 10,
+             "best_10_lap_time_s": 65.0, "termination_reasons": {"lap_target": 1}},
+            {"frontier_speed_mps": 4.0, "total_reward": 60.0, "laps_observed": 10,
+             "simulated_seconds": 68.0, "frontier_distance_m": 300.0,
+             "reward_per_simulated_second": 1.2, "collisions": 0,
+             "failed_episodes": 0, "lap_times_s": [6.8] * 10,
+             "best_10_lap_time_s": 68.0, "termination_reasons": {"lap_target": 1}},
+            {"frontier_speed_mps": 6.0, "total_reward": 500.0, "laps_observed": 4,
+             "simulated_seconds": 30.0, "frontier_distance_m": 180.0,
+             "reward_per_simulated_second": 6.0, "collisions": 1,
+             "failed_episodes": 0, "lap_times_s": [6.0] * 4,
+             "best_10_lap_time_s": None, "termination_reasons": {"collision": 1}},
+        ]
+
+        result = aggregate_evaluation_attempts(attempts, 50_000, "ten_lap_time")
+
+        self.assertEqual(result["successful_attempts"], 2)
+        self.assertEqual(result["selection_score"], 66.5)
+        self.assertEqual(result["selection_score_best"], 65.0)
+
+    def test_ten_lap_selection_has_no_time_score_without_completion(self) -> None:
+        result = aggregate_evaluation_attempts(
+            [{"frontier_speed_mps": 3.0, "total_reward": 50.0, "laps_observed": 4,
+              "simulated_seconds": 30.0, "frontier_distance_m": 90.0,
+              "reward_per_simulated_second": 1.0, "collisions": 1,
+              "failed_episodes": 0, "lap_times_s": [7.0] * 4,
+              "best_10_lap_time_s": None, "termination_reasons": {"collision": 1}}],
+            50_000,
+            "ten_lap_time",
+        )
+
+        self.assertEqual(result["successful_attempts"], 0)
+        self.assertIsNone(result["selection_score"])
+        self.assertIsNone(result["best_10_lap_time_s"])
+
+    def test_ten_lap_selection_prefers_completion_reliability_then_speed(self) -> None:
+        compare = lambda time, completed, best_time, best_completed: evaluation_improved(
+            metric="ten_lap_time",
+            score=time,
+            successful_attempts=completed,
+            best_score=best_time,
+            best_successful_attempts=best_completed,
+            min_improvement_pct=1.0,
+        )
+
+        self.assertTrue(compare(80.0, 3, 68.0, 2))
+        self.assertFalse(compare(60.0, 1, 68.0, 2))
+        self.assertTrue(compare(67.0, 2, 68.0, 2))
+        self.assertFalse(compare(67.5, 2, 68.0, 2))
+
+    def test_ten_lap_selection_never_promotes_an_all_failure_first_snapshot(self) -> None:
+        self.assertFalse(evaluation_improved(
+            metric="ten_lap_time",
+            score=None,
+            successful_attempts=0,
+            best_score=None,
+            best_successful_attempts=None,
+            min_improvement_pct=1.0,
+        ))
+        self.assertTrue(evaluation_improved(
+            metric="ten_lap_time",
+            score=72.0,
+            successful_attempts=1,
+            best_score=None,
+            best_successful_attempts=None,
+            min_improvement_pct=1.0,
+        ))
+
     def test_main_passes_lap_episode_setting_into_training(self) -> None:
         train_module = importlib.import_module("src.layer3.train")
         with patch.object(train_module, "train", return_value="checkpoint.zip") as run:
             result = train_module.main(
-                ["--n-envs", "1", "--laps-per-episode", "7", "--device", "cpu"]
+                ["--n-envs", "1", "--laps-per-episode", "7", "--gamma", "0.999", "--gae-lambda", "0.99", "--device", "cpu"]
             )
         self.assertEqual(result, 0)
         self.assertEqual(run.call_args.kwargs["laps_per_episode"], 7)
+        self.assertEqual(run.call_args.kwargs["gamma"], 0.999)
+        self.assertEqual(run.call_args.kwargs["gae_lambda"], 0.99)
+        self.assertEqual(run.call_args.kwargs["n_steps"], 1024)
 
     def test_training_settings_have_no_lap_targets_or_evaluation_time_cap(self) -> None:
         settings = Settings()
@@ -70,6 +158,19 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertEqual(args.frontier_stagnation_seconds, 10.0)
         self.assertEqual(settings.time_penalty_per_second, 5.0)
         self.assertEqual(settings.frontier_pace_target_mps, 6.0)
+        self.assertEqual(settings.frontier_pace_bonus_strength, 1.0)
+        self.assertEqual(settings.frontier_pace_source, "episode_average")
+        self.assertEqual(settings.ppo_n_steps, 1024)
+        self.assertEqual(args.n_steps, 1024)
+        self.assertEqual(settings.steering_action_scale, 1.0)
+        self.assertEqual(args.steering_action_scale, 1.0)
+        self.assertEqual(settings.straight_throttle_gain, 1.0)
+        self.assertEqual(args.straight_throttle_gain, 1.0)
+        self.assertEqual(settings.straight_throttle_steering_threshold, 0.15)
+        self.assertEqual(args.straight_throttle_steering_threshold, 0.15)
+        self.assertEqual(settings.ppo_gamma, 0.99)
+        self.assertEqual(settings.ppo_gae_lambda, 0.95)
+        self.assertEqual(args.gae_lambda, 0.95)
         self.assertEqual(args.evaluation_every_timesteps, 50_000)
         self.assertEqual(settings.evaluation_runs_per_snapshot, 3)
         self.assertEqual(args.evaluation_runs_per_snapshot, 3)
@@ -79,6 +180,9 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertEqual(args.n_epochs, 8)
         self.assertEqual(settings.evaluation_metric, "total_reward")
         self.assertEqual(args.evaluation_metric, "total_reward")
+        settings = Settings(evaluation_metric="ten_lap_time")
+        args = build_arg_parser().parse_args(settings.to_train_argv())
+        self.assertEqual(args.evaluation_metric, "ten_lap_time")
         self.assertEqual(settings.laps_per_episode, 10)
         self.assertEqual(args.laps_per_episode, 10)
         self.assertFalse(hasattr(args, "evaluation_duration_seconds"))
@@ -91,23 +195,36 @@ class RunStopCallbackTests(unittest.TestCase):
         self.assertIn('--laps-per-episode', argv)
 
     def test_ppo_optimizer_parameters_flow_from_settings_to_cli(self) -> None:
-        settings = Settings(ppo_learning_rate=1e-4, ppo_n_epochs=4)
+        settings = Settings(ppo_learning_rate=1e-4, ppo_n_epochs=4, ppo_gamma=0.999, ppo_gae_lambda=0.99)
         args = build_arg_parser().parse_args(settings.to_train_argv())
         self.assertEqual(args.learning_rate, 1e-4)
         self.assertEqual(args.n_epochs, 4)
+        self.assertEqual(args.gamma, 0.999)
+        self.assertEqual(args.gae_lambda, 0.99)
 
     def test_settings_and_env_kwargs_are_backend_driven(self) -> None:
         configured = Settings(map_id='porto', n_envs=4,
+                              ppo_n_steps=2048,
                               frontier_pace_target_mps=4.5,
+                              frontier_pace_bonus_strength=2.0,
+                              steering_action_scale=0.94,
+                              straight_throttle_gain=1.1,
+                              straight_throttle_steering_threshold=0.15,
                               collision_penalty_magnitude=250,
                               collision_reward_percent=35,
                               episode_failure_reward_percent=40)
         args = build_arg_parser().parse_args(configured.to_train_argv())
         env_kwargs = env_kwargs_from_args(args)
         self.assertEqual(env_kwargs['map_id'], 'porto')
+        self.assertEqual(args.n_steps, 2048)
         self.assertEqual(env_kwargs['laps_per_episode'], 10)
         self.assertEqual(env_kwargs['time_penalty_per_second'], 5.0)
         self.assertEqual(env_kwargs['frontier_pace_target_mps'], 4.5)
+        self.assertEqual(env_kwargs['frontier_pace_bonus_strength'], 2.0)
+        self.assertEqual(env_kwargs['frontier_pace_source'], 'episode_average')
+        self.assertEqual(env_kwargs['steering_action_scale'], 0.94)
+        self.assertEqual(env_kwargs['straight_throttle_gain'], 1.1)
+        self.assertEqual(env_kwargs['straight_throttle_steering_threshold'], 0.15)
         self.assertEqual(env_kwargs['collision_penalty_magnitude'], 250.0)
         self.assertEqual(env_kwargs['collision_reward_percent'], 35.0)
         self.assertEqual(env_kwargs['episode_failure_penalty_magnitude'], 100.0)
@@ -226,6 +343,8 @@ class CollisionTerminationTests(unittest.TestCase):
     ):
         env = AutoDriveEnv.__new__(AutoDriveEnv)
         env.frame_skip = 1
+        env.observation_profile = "simulator"
+        env._observation_encoder_positions = None
         env.racer = SimpleNamespace(step=lambda *_: snap)
         env._last_snap = None
         env._episode_steps = 0
@@ -233,6 +352,13 @@ class CollisionTerminationTests(unittest.TestCase):
         env._idle_steps = 0
         env._prev_steering = 0.0
         env._prev_throttle = 0.0
+        env.steering_action_scale = 1.0
+        env.straight_throttle_gain = 1.0
+        env.straight_throttle_steering_threshold = 0.15
+        env._lidar_speed_estimator = SimpleNamespace(reset=lambda: None)
+        env._observation_heading_yaw = None
+        env._last_lidar_forward_speed_mps = 0.0
+        env._lidar_history = []
         env._prev_collision_count = 1
         env._prev_collision_flag = previous_collision_flag
         env._pending_collision_event = pending_collision_event
@@ -258,6 +384,10 @@ class CollisionTerminationTests(unittest.TestCase):
         env.laps_per_episode = laps_per_episode
         env.reward_config = RewardConfig()
         env.lidar_beams = 1080
+        if not hasattr(snap, "encoder_left"):
+            snap.encoder_left = 0.0
+        if not hasattr(snap, "encoder_right"):
+            snap.encoder_right = 0.0
 
         with patch("src.layer2.autodrive_env.snapshot_to_obs", return_value={"state": np.zeros(1)}):
             return env.step(np.array([0.0, 0.0], dtype=np.float32))
@@ -295,15 +425,22 @@ class CollisionTerminationTests(unittest.TestCase):
             collision=False,
             timestamp=1.0,
             position=(0.0, 0.0, 0.0),
+            encoder_left=0.0,
+            encoder_right=0.0,
         )
         collision_during_settle = SimpleNamespace(
             collision_count=1,
             collision=True,
             timestamp=1.1,
             position=(0.0, 0.0, 0.0),
+            encoder_left=0.0,
+            encoder_right=0.0,
         )
         env = AutoDriveEnv.__new__(AutoDriveEnv)
         env.frame_skip = 1
+        env.observation_profile = "simulator"
+        env._observation_encoder_positions = None
+        env._lidar_speed_estimator = SimpleNamespace(reset=lambda: None)
         env.racer = SimpleNamespace(
             reset=lambda: before_reset_settles,
             step=lambda *_: collision_during_settle,
@@ -332,6 +469,9 @@ class CollisionTerminationTests(unittest.TestCase):
         tracker = SimpleNamespace(reset=lambda *_: self.fail("frontier was re-anchored"))
         env = AutoDriveEnv.__new__(AutoDriveEnv)
         env.frame_skip = 1
+        env.observation_profile = "simulator"
+        env._observation_encoder_positions = None
+        env._lidar_speed_estimator = SimpleNamespace(reset=lambda: None)
         env.racer = SimpleNamespace(
             reset=lambda: stale_pose,
             step=lambda *_: stale_pose,
@@ -349,11 +489,16 @@ class CollisionTerminationTests(unittest.TestCase):
             collision=False,
             timestamp=1.0,
             position=(4.097, 0.15, 1.069),
+            encoder_left=0.0,
+            encoder_right=0.0,
         )
         reset_calls = []
         progress_state = {"progress_m": 25.6105}
         env = AutoDriveEnv.__new__(AutoDriveEnv)
         env.frame_skip = 1
+        env.observation_profile = "simulator"
+        env._observation_encoder_positions = None
+        env._lidar_speed_estimator = SimpleNamespace(reset=lambda: None)
         env.racer = SimpleNamespace(
             reset=lambda: settled_pose,
             step=lambda *_: settled_pose,

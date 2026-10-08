@@ -231,6 +231,9 @@ class TelemetrySnapshot:
     lidar_scan_rate: float = 40.0
     lidar_range_min: float = 0.06
     lidar_range_max: float = 10.0
+    # RGB camera frame from the permitted front_camera topic. Kept optional so
+    # existing Bridge-only and LiDAR-only checkpoints retain their schema.
+    camera_image_rgb: Optional[np.ndarray] = None
 
     # Actuator States & Feedback
     throttle: float = 0.0
@@ -398,6 +401,10 @@ class TelemetrySnapshot:
             ),
             lidar_range_max=float(
                 data.get("V1 LIDAR Range Max", data.get("V1 Lidar Range Max", 10.0))
+            ),
+            camera_image_rgb=(
+                np.asarray(data["V1 Front Camera Image"], dtype=np.uint8)
+                if data.get("V1 Front Camera Image") is not None else None
             ),
             throttle=th,
             steering=st,

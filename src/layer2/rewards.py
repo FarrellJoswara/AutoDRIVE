@@ -50,7 +50,7 @@ Default weight is 0.0 (off).
 Reward priorities
 -----------------
 New best-so-far frontier distance is the only positive driving reward, with a
-quadratic episode-average pace multiplier capped at 2x. Time costs penalize
+quadratic episode-average pace multiplier capped at 1 + bonus strength. Time costs penalize
 elapsed time; reverse travel, collisions, and non-stall failed episode endings
 cost reward. Frontier stalls reset after their timeout without an extra
 terminal cost. Laps are diagnostic and never change reward or episode life.
@@ -59,6 +59,7 @@ terminal cost. Laps are diagnostic and never change reward or episode life.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
@@ -83,6 +84,9 @@ class RewardConfig:
     route_progress_scale: float = 10.0
     # Average frontier pace at which the progress reward reaches its 2x cap.
     frontier_pace_target_mps: float = 6.0
+    # Strength of the quadratic pace bonus. 1 preserves a 2x cap; 2 yields 3x.
+    frontier_pace_bonus_strength: float = 1.0
+    frontier_pace_source: Literal["episode_average", "current_push"] = "episode_average"
 
     # Cost per simulated second, including while making progress. This makes
     # slower completion less profitable than faster completion over the same route.
@@ -111,6 +115,7 @@ def compute_reward_components(
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
     frontier_average_speed_mps: float = 0.0,
+    frontier_current_speed_mps: float = 0.0,
     positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
@@ -187,11 +192,18 @@ def compute_reward_components(
     if frontier_advanced_m is not None:
         advanced_m = max(0.0, float(frontier_advanced_m))
         target_pace = max(1e-6, float(cfg.frontier_pace_target_mps))
+        pace_speed = (
+            frontier_current_speed_mps
+            if cfg.frontier_pace_source == "current_push"
+            else frontier_average_speed_mps
+        )
         normalized_pace = min(
             1.0,
-            max(0.0, float(frontier_average_speed_mps)) / target_pace,
+            max(0.0, float(pace_speed)) / target_pace,
         )
-        pace_multiplier = 1.0 + normalized_pace * normalized_pace
+        pace_multiplier = 1.0 + max(
+            0.0, float(cfg.frontier_pace_bonus_strength)
+        ) * normalized_pace * normalized_pace
         route_reward = cfg.route_progress_scale * pace_multiplier * advanced_m
         reverse_deadband = max(0.0, float(cfg.backward_speed_deadband_mps))
         if route_reward > 0.0 and float(v_long) < -reverse_deadband:
@@ -246,6 +258,7 @@ def compute_reward(
     route_progress_delta_m: float | None = None,
     frontier_advanced_m: float | None = None,
     frontier_average_speed_mps: float = 0.0,
+    frontier_current_speed_mps: float = 0.0,
     positive_episode_return: float = 0.0,
     collision_event: bool,
     episode_failure: bool = False,
@@ -261,6 +274,7 @@ def compute_reward(
         route_progress_delta_m=route_progress_delta_m,
         frontier_advanced_m=frontier_advanced_m,
         frontier_average_speed_mps=frontier_average_speed_mps,
+        frontier_current_speed_mps=frontier_current_speed_mps,
         positive_episode_return=positive_episode_return,
         collision_event=collision_event,
         episode_failure=episode_failure,
