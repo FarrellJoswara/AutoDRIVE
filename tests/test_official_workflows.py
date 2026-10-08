@@ -145,7 +145,11 @@ def test_replay_rejects_checkpoint_without_provenance(manager, tmp_path):
 
 
 def test_official_settings_bound_worker_count():
-    assert OfficialTrainSettings(n_envs=2).to_container_env(hub_url="http://hub", run_id="r")["AICAR_TRAIN_N_ENVS"] == "2"
+    settings = OfficialTrainSettings(n_envs=2)
+    environment = settings.to_container_env(hub_url="http://hub", run_id="r")
+    assert environment["AICAR_TRAIN_N_ENVS"] == "2"
+    assert settings.collision_reward_percent == 100.0
+    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "100.0"
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"

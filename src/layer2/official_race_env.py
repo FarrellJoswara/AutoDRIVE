@@ -58,7 +58,7 @@ class OfficialRaceEnv(gym.Env):
         training_timeout_s: float = 600.0,
         training_time_cost_per_simulated_second: float = 5.0,
         training_collision_penalty_magnitude: float = 100.0,
-        training_collision_reward_percent: float = 20.0,
+        training_collision_reward_percent: float = 100.0,
         training_failure_penalty: float = 100.0,
         training_frontier_stagnation_s: float = 10.0,
         frontier_path: Optional[Path] = None,

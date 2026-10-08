@@ -148,16 +148,15 @@ remains the race path and cannot publish reset or subscribe to restricted
 metrics. Official training publishes the simulator car, normalized LiDAR
 display, lap/collision counters, PPO metrics, and rollout progress to the Watch
 page. The launcher defaults `HUB_URL` to `http://host.docker.internal:8090`;
-set `AICAR_HUB_URL` or `HUB_URL` for another hub address. Training charges simulated
-time throughout warm-up and the scored
-race, gives a lap-completion bonus for both the required warm-up and scored
-laps, and applies official escalating collision penalties during scored laps;
-disqualification or the full-episode watchdog receives a large failure cost.
-The watchdog covers warm-up too, so a policy that cannot reach the scored race
-cannot run indefinitely without feedback. These training-only signals never
-enter policy observations. Shaping weights are recorded in each run's
-`config.json` and must be evaluated by completed official races, not rollout
-reward alone.
+set `AICAR_HUB_URL` or `HUB_URL` for another hub address. Official PPO training
+uses the demonstrated-route frontier for progress, charges simulated time, and
+ends a car life on collision. A collision subtracts the fixed collision cost
+plus 100% of that life’s positive frontier return; route progress is not
+awarded again after reset. Lap crossings are diagnostics only and do not award
+training reward. The frontier uses restricted IPS only for training reward and
+episode control; policy observations remain sensor-only. Shaping weights are
+recorded in each run's `config.json` and must be evaluated by completed
+official races, not rollout reward alone.
 
 For GUI operation, configure the simulator's Connection target as the relay
 host on port 4568, press Connection, then switch to Autonomous mode and the

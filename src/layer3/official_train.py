@@ -182,7 +182,7 @@ def train_official(
     warmup_laps: int = 0,
     time_cost_per_simulated_second: float = 5.0,
     collision_penalty_magnitude: float = 100.0,
-    collision_reward_percent: float = 20.0,
+    collision_reward_percent: float = 100.0,
     failed_episode_penalty: float = 100.0,
     frontier_stagnation_s: float = 10.0,
     observation_profile: str = "official_sensors",

@@ -89,7 +89,7 @@ elif [[ "$mode" == "train" ]]; then
     --time-cost-per-simulated-second "${AICAR_TRAIN_TIME_COST:-5}"
     --frontier-stagnation-s "${AICAR_TRAIN_FRONTIER_STAGNATION_S:-10}"
     --collision-penalty-magnitude "${AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE:-100}"
-    --collision-reward-percent "${AICAR_TRAIN_COLLISION_REWARD_PERCENT:-20}"
+    --collision-reward-percent "${AICAR_TRAIN_COLLISION_REWARD_PERCENT:-100}"
     --failed-episode-penalty "${AICAR_TRAIN_FAILURE_PENALTY:-100}"
     --observation-profile "${AICAR_OBSERVATION_PROFILE:-official_sensors}"
     --steering-action-scale "${AICAR_STEERING_ACTION_SCALE:-1.0}"

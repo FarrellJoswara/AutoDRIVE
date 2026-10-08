@@ -46,7 +46,7 @@ class OfficialTrainSettings(BaseModel):
     warmup_laps: int = Field(default=0, ge=0, le=20)
     time_cost_per_simulated_second: float = Field(default=5.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
-    collision_reward_percent: float = Field(default=20.0, ge=0, le=1000)
+    collision_reward_percent: float = Field(default=100.0, ge=0, le=1000)
     failed_episode_penalty: float = Field(default=100.0, ge=0)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
@@ -120,7 +120,7 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
                 "warmup_laps": 0,
                 "time_cost_per_simulated_second": 5.0,
                 "collision_penalty_magnitude": 100.0,
-                "collision_reward_percent": 20.0,
+                "collision_reward_percent": 100.0,
                 "failed_episode_penalty": 100.0,
                 "frontier_stagnation_s": 10.0,
             })
