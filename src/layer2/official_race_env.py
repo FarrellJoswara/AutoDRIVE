@@ -7,6 +7,8 @@ the documented reset topic; neither capability is enabled for policy runtime.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import gymnasium as gym
@@ -27,6 +29,8 @@ from .spaces import (
     _normalize_lidar,
 )
 from .lidar_odometry import LidarOdometry, acceleration_consistent_lidar_speed
+from .route_progress import RouteProgressTracker
+from .rewards import RewardConfig, compute_reward_components
 
 
 class OfficialRaceEnv(gym.Env):
@@ -52,10 +56,12 @@ class OfficialRaceEnv(gym.Env):
         observation_profile: str = "official_sensors",
         training_mode: bool = False,
         training_timeout_s: float = 600.0,
-        training_lap_reward: float = 100.0,
-        training_failure_penalty: float = 1000.0,
-        training_time_cost_per_simulated_second: float = 1.0,
-        training_collision_penalty_base: float = 10.0,
+        training_time_cost_per_simulated_second: float = 5.0,
+        training_collision_penalty_magnitude: float = 100.0,
+        training_collision_reward_percent: float = 20.0,
+        training_failure_penalty: float = 100.0,
+        training_frontier_stagnation_s: float = 10.0,
+        frontier_path: Optional[Path] = None,
     ) -> None:
         super().__init__()
         if warmup_laps < 0 or race_laps < 1:
@@ -81,14 +87,37 @@ class OfficialRaceEnv(gym.Env):
         # simulator has stopped producing observations.
         self.frame_timeout_s = min(float(frame_timeout_s), float(timeout_s))
         self.training_timeout_s = max(0.0, float(training_timeout_s))
-        self.training_lap_reward = max(0.0, float(training_lap_reward))
         self.training_failure_penalty = max(0.0, float(training_failure_penalty))
         self.training_time_cost_per_simulated_second = max(
             0.0, float(training_time_cost_per_simulated_second)
         )
-        self.training_collision_penalty_base = max(
-            0.0, float(training_collision_penalty_base)
+        self.training_collision_penalty_magnitude = max(0.0, float(training_collision_penalty_magnitude))
+        self.training_collision_reward_percent = max(0.0, float(training_collision_reward_percent))
+        self.training_frontier_stagnation_s = max(0.0, float(training_frontier_stagnation_s))
+        self.frontier_path = Path(frontier_path) if frontier_path else None
+        self._frontier_spawn_xy: Optional[Tuple[float, float]] = None
+        if self.frontier_path is not None:
+            metadata_path = self.frontier_path.with_name("official_frontier.json")
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                spawn = metadata.get("spawn_xy") if isinstance(metadata, dict) else None
+                if isinstance(spawn, (list, tuple)) and len(spawn) == 2:
+                    self._frontier_spawn_xy = (float(spawn[0]), float(spawn[1]))
+            except (OSError, ValueError, TypeError) as exc:
+                if self.training_mode:
+                    raise ValueError(f"official training frontier metadata is unavailable: {metadata_path}") from exc
+            if self.training_mode and self._frontier_spawn_xy is None:
+                raise ValueError(f"official training frontier metadata has no valid spawn_xy: {metadata_path}")
+        self.route_progress: Optional[RouteProgressTracker] = (
+            RouteProgressTracker.from_csv(self.frontier_path)
+            if self.training_mode and self.frontier_path is not None else None
         )
+        if self.training_mode and self.route_progress is None:
+            raise ValueError("official training requires a validated frontier_path")
+        self._positive_episode_return = 0.0
+        self._episode_frontier_distance_m = 0.0
+        self._frontier_last_push_s = 0.0
+        self._last_training_steering = 0.0
         self.racer = racer or RacerRos2(
             vehicle_id=vehicle_id,
             timeout_s=timeout_s,
@@ -129,6 +158,10 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s: list[float] = []
         self._episode_steps = 0
         self._training_elapsed_s = 0.0
+        self._positive_episode_return = 0.0
+        self._episode_frontier_distance_m = 0.0
+        self._frontier_last_push_s = 0.0
+        self._last_training_steering = 0.0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
 
     def reset(
@@ -159,6 +192,25 @@ class OfficialRaceEnv(gym.Env):
         self._warmup_lap_times_s = []
         self._episode_steps = 0
         self._training_elapsed_s = 0.0
+        self._positive_episode_return = 0.0
+        self._episode_frontier_distance_m = 0.0
+        self._frontier_last_push_s = 0.0
+        self._last_training_steering = 0.0
+        if self.route_progress is not None:
+            position = metrics.position
+            if position is None:
+                raise RuntimeError("official training reset did not provide restricted IPS position")
+            if self._frontier_spawn_xy is not None:
+                spawn_error = float(np.linalg.norm(
+                    np.asarray(position[:2], dtype=np.float64)
+                    - np.asarray(self._frontier_spawn_xy, dtype=np.float64)
+                ))
+                if spawn_error > 0.75:
+                    raise RuntimeError(
+                        "official training reset position is not at the configured IPS spawn "
+                        f"({spawn_error:.2f} m away); refusing to anchor the route frontier"
+                    )
+            self.route_progress.reset(float(position[0]), float(position[1]), now=0.0)
         self._last_snap = snap
         initial_obs = self._observation_builder.reset(snap)
         info = self._build_info(snap, metrics, collision_event=False)
@@ -178,10 +230,6 @@ class OfficialRaceEnv(gym.Env):
             straight_throttle_steering_threshold=self.straight_throttle_steering_threshold,
         )
 
-        race_was_active = self._race_collision_baseline is not None
-        previous_race_laps = self._race_laps_count
-        previous_lap_count = self._last_lap_count
-        previous_race_collisions = self._race_collisions(self._last_collision_count)
         try:
             snap = self.racer.step(throttle, steering)
         except OfficialRosTransportError as exc:
@@ -278,60 +326,72 @@ class OfficialRaceEnv(gym.Env):
         reward = 0.0
         truncated = False
         if self.training_mode:
-            reward_components = {
-                "race_time_cost": -self.training_time_cost_per_simulated_second * step_duration_s,
-                "warmup_completion": 0.0,
-                "lap_completion": 0.0,
-                "collision_penalty": 0.0,
-                "failure_penalty": 0.0,
-            }
             self._training_elapsed_s += step_duration_s
-            warmup_laps_completed = max(
-                0,
-                min(
-                    self.warmup_laps,
-                    current_lap_count - self._initial_lap_count,
-                ),
-            )
-            warmup_laps_completed_previous = max(
-                0,
-                min(
-                    self.warmup_laps,
-                    previous_lap_count - self._initial_lap_count,
-                ),
-            )
-            reward_components["warmup_completion"] = self.training_lap_reward * max(
-                0, warmup_laps_completed - warmup_laps_completed_previous
-            )
-            if race_was_active:
-                new_collisions = max(0, race_collisions - previous_race_collisions)
-                reward_components["collision_penalty"] = -sum(
-                    self.training_collision_penalty_base * collision_index
-                    for collision_index in range(
-                        previous_race_collisions + 1,
-                        previous_race_collisions + new_collisions + 1,
-                    )
+            position = metrics.position
+            progress = None
+            if self.route_progress is not None and position is not None:
+                progress = self.route_progress.update(
+                    float(position[0]), float(position[1]), now=self._training_elapsed_s
                 )
-                new_laps = max(0, self._race_laps_count - previous_race_laps)
-                reward_components["lap_completion"] = self.training_lap_reward * new_laps
-                if race_disqualified:
-                    reward_components["failure_penalty"] = -self.training_failure_penalty
-            if (
-                not terminated
-                and self.training_timeout_s > 0
+            frontier_advanced = max(0.0, float((progress or {}).get("advanced_m", 0.0)))
+            self._episode_frontier_distance_m += frontier_advanced
+            if frontier_advanced > 0:
+                self._frontier_last_push_s = self._training_elapsed_s
+            average_frontier_speed = (
+                self._episode_frontier_distance_m / self._training_elapsed_s
+                if self._training_elapsed_s > 0 else 0.0
+            )
+            frontier_stalled = (
+                self.training_frontier_stagnation_s > 0
+                and self._training_elapsed_s - self._frontier_last_push_s >= self.training_frontier_stagnation_s
+            )
+            collision_termination = bool(collision_event)
+            terminated = collision_termination or frontier_stalled
+            truncated = bool(
+                not terminated and self.training_timeout_s > 0
                 and self._training_elapsed_s >= self.training_timeout_s
-            ):
-                truncated = True
-                reward_components["failure_penalty"] = -self.training_failure_penalty
-            reward = float(sum(reward_components.values()))
-            info["training_reward_components"] = reward_components
+            )
+            reason = "collision" if collision_termination else "frontier_stagnation" if frontier_stalled else None
+            episode_failure = bool(truncated)
+            components = compute_reward_components(
+                v_long=float(snap.v_long),
+                step_duration_s=step_duration_s,
+                frontier_advanced_m=frontier_advanced,
+                frontier_average_speed_mps=average_frontier_speed,
+                frontier_current_speed_mps=(frontier_advanced / step_duration_s if step_duration_s > 0 else 0.0),
+                positive_episode_return=self._positive_episode_return,
+                collision_event=collision_termination,
+                episode_failure=episode_failure,
+                slip_angle=float(snap.slip_angle),
+                prev_steering=self._last_training_steering,
+                steering=float(steering),
+                cfg=RewardConfig(
+                    time_penalty_per_second=self.training_time_cost_per_simulated_second,
+                    collision_penalty_magnitude=self.training_collision_penalty_magnitude,
+                    collision_reward_percent=self.training_collision_reward_percent,
+                    episode_failure_penalty_magnitude=self.training_failure_penalty,
+                    episode_failure_reward_percent=100.0,
+                ),
+            )
+            reward = float(components["total"])
+            self._positive_episode_return += max(0.0, float(components["route_progress"]))
+            self._last_training_steering = float(steering)
+            info["training_reward_components"] = components
+            info["frontier_progress_m"] = (progress or {}).get("progress_m")
+            info["frontier_advanced_m"] = frontier_advanced
+            info["frontier_speed_mps"] = average_frontier_speed
+            info["time_since_frontier_push_s"] = (
+                max(0.0, self._training_elapsed_s - self._frontier_last_push_s)
+                if progress is not None else None
+            )
+            info["training_positive_frontier_return"] = self._positive_episode_return
+            info["training_frontier_distance_m"] = self._episode_frontier_distance_m
+            info["training_frontier_projection_valid"] = (
+                bool(progress.get("current_projection_valid")) if progress is not None else False
+            )
+            info["training_frontier_stagnated"] = frontier_stalled
             info["training_elapsed_s"] = self._training_elapsed_s
-            if truncated:
-                info["termination_reason"] = "training_watchdog_timeout"
-            elif self._race_laps_count >= self.race_laps:
-                info["termination_reason"] = "race_complete"
-            elif race_disqualified:
-                info["termination_reason"] = "disqualified"
+            info["termination_reason"] = reason or ("training_watchdog_timeout" if truncated else None)
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
         return observation, reward, terminated, truncated, info

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from src.layer4.official_settings import OfficialTrainSettings
+from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
 
 
 class OfficialTrainSettingsTests(unittest.TestCase):
@@ -23,12 +26,35 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertEqual(env["AICAR_TRAIN_RESUME"], "/runs/champion.zip")
         self.assertEqual(env["AICAR_RUN_ID"], "abc123")
         self.assertEqual(env["AICAR_TRAIN_OUT"], "/runs/rl/official_run_abc123")
+        self.assertEqual(env["AICAR_TRAIN_TIME_COST"], "5.0")
+        self.assertEqual(env["AICAR_TRAIN_FRONTIER_STAGNATION_S"], "10.0")
+        self.assertEqual(env["AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE"], "100.0")
+        self.assertEqual(env["AICAR_TRAIN_COLLISION_REWARD_PERCENT"], "20.0")
+        self.assertNotIn("AICAR_TRAIN_LAP_REWARD", env)
         self.assertNotIn("PORT", env)
         self.assertNotIn("AICAR_MAP_ID", env)
 
     def test_competition_settings_reject_custom_runtime_fields(self):
         with self.assertRaises(ValueError):
             OfficialTrainSettings.model_validate({"n_envs": 4, "frame_skip": 4})
+
+    def test_legacy_reward_settings_migrate_to_frontier_objective(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({
+                "n_envs": 4,
+                "time_cost_per_simulated_second": 1.0,
+                "lap_completion_reward": 100.0,
+                "collision_penalty_base": 10.0,
+                "failed_episode_penalty": 1000.0,
+            }), encoding="utf-8")
+            settings = load_official_train_settings(path)
+        self.assertEqual(settings.n_envs, 4)
+        self.assertEqual(settings.time_cost_per_simulated_second, 5.0)
+        self.assertEqual(settings.collision_penalty_magnitude, 100.0)
+        self.assertEqual(settings.collision_reward_percent, 20.0)
+        self.assertEqual(settings.failed_episode_penalty, 100.0)
+        self.assertEqual(settings.warmup_laps, 0)
 
 
 if __name__ == "__main__":

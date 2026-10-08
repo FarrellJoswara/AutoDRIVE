@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -22,6 +23,7 @@ from src.layer2.official_race_env import (
     OfficialRaceEnv,
     OfficialObservationBuilder,
 )
+from src.layer2.route_progress import RouteProgressTracker
 from src.layer2.spaces import map_steering_action, map_throttle_action
 from src.layer3.official_evaluate import (
     action_observation_diagnostics,
@@ -191,6 +193,22 @@ def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
     assert "position" in racer._race_metrics_received
 
 
+def test_official_training_frontier_route_is_closed_and_spawn_aligned():
+    route_path = Path(__file__).resolve().parents[1] / "competition" / "iros2026" / "official_centerline.csv"
+    tracker = RouteProgressTracker.from_csv(route_path)
+    assert tracker.closed
+    assert 50.0 <= tracker.length_m <= 70.0
+    state = tracker.reset(0.8, 3.1583, now=0.0)
+    assert state["current_projection_valid"]
+    assert state["progress_m"] < 0.1
+    previous = state["progress_m"]
+    for index, point in enumerate(tracker.points[1:-1], start=1):
+        state = tracker.update(float(point[0]), float(point[1]), now=index * 0.05)
+        assert state["progress_m"] >= previous
+        previous = state["progress_m"]
+    assert previous > tracker.length_m * 0.9
+
+
 class FakeRacer:
     def __init__(self, snapshots):
         self.telemetry = snapshots[0]
@@ -217,8 +235,9 @@ class FakeRacer:
         pass
 
 
-def _snapshot(*, lap, last_lap, collisions):
+def _snapshot(*, lap, last_lap, collisions, position=(0.0, 0.0, 0.0)):
     snap = TelemetrySnapshot(lidar_ranges=np.full(1081, 10.0, dtype=np.float32))
+    snap.position = position
     snap.lap_count = lap
     snap.last_lap_time = last_lap
     snap.collision_count = collisions
@@ -455,15 +474,14 @@ def test_official_policy_and_race_env_share_identical_observation_transform():
                 np.testing.assert_array_equal(training_obs[key], deployment_obs[key])
 
 
-def test_official_training_reward_matches_race_time_collision_and_dq_rules():
+def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
     class TrainingRacer(FakeRacer):
         def __init__(self):
-            initial = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            initial = _snapshot(lap=0, last_lap=0.0, collisions=0, position=(0.0, 0.0, 0.0))
             events = [
-                _snapshot(lap=1, last_lap=7.0, collisions=2),
-                _snapshot(lap=2, last_lap=6.0, collisions=2),
-                _snapshot(lap=2, last_lap=6.0, collisions=3),
-                _snapshot(lap=2, last_lap=6.0, collisions=13),
+                _snapshot(lap=1, last_lap=7.0, collisions=0, position=(1.0, 0.0, 0.0)),
+                _snapshot(lap=2, last_lap=6.0, collisions=0, position=(1.0, 1.0, 0.0)),
+                _snapshot(lap=2, last_lap=6.0, collisions=1, position=(1.0, 1.0, 0.0)),
             ]
             super().__init__([initial, *events])
             self.last_step_duration_s = 1.0
@@ -473,33 +491,33 @@ def test_official_training_reward_matches_race_time_collision_and_dq_rules():
             return self.telemetry
 
     racer = TrainingRacer()
-    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=0.0)
+    route = tmp_path / "centerline.csv"
+    route.write_text("0,0,1.5,1.5\n1,0,1.5,1.5\n1,1,1.5,1.5\n0,1,1.5,1.5\n0,0,1.5,1.5\n")
+    (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [0.0, 0.0]}')
+    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=0.0, frontier_path=route)
     env.reset()
 
-    _, warmup_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
-    assert warmup_reward == 99.0
-    assert info["training_reward_components"]["warmup_completion"] == 100.0
+    _, progress_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["frontier_advanced_m"] == 1.0
+    assert info["training_reward_components"]["route_progress"] > 10.0
+    assert progress_reward == info["training_reward_components"]["total"]
     assert not terminated and not truncated
 
     _, lap_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
-    assert lap_reward == 99.0
+    assert info["frontier_advanced_m"] == 1.0
+    assert "lap_completion" not in info["training_reward_components"]
     assert not terminated and not truncated
     assert info["race_laps_completed"] == 1
 
     _, collision_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
-    assert collision_reward == -11.0
+    assert info["training_reward_components"]["collision"] < -100.0
+    assert collision_reward == info["training_reward_components"]["total"]
     assert info["race_collisions"] == 1
-    assert not terminated and not truncated
-
-    _, dq_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
-    assert dq_reward == -1651.0
     assert terminated and not truncated
-    assert info["race_disqualified"] is True
-    assert info["race_complete"] is False
-    assert info["termination_reason"] == "disqualified"
+    assert info["termination_reason"] == "collision"
 
 
-def test_official_training_watchdog_covers_warmup():
+def test_official_training_watchdog_charges_failure_penalty(tmp_path):
     class TrainingRacer(FakeRacer):
         def reset_simulation_for_training(self):
             self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
@@ -510,26 +528,29 @@ def test_official_training_watchdog_covers_warmup():
         _snapshot(lap=0, last_lap=0.0, collisions=0),
     ])
     racer.last_step_duration_s = 2.0
-    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=1.0)
+    route = tmp_path / "centerline.csv"
+    route.write_text("0,0,1.5,1.5\n1,0,1.5,1.5\n1,1,1.5,1.5\n0,1,1.5,1.5\n0,0,1.5,1.5\n")
+    (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [0.0, 0.0]}')
+    env = OfficialRaceEnv(racer=racer, training_mode=True, training_timeout_s=1.0, frontier_path=route)
     env.reset()
 
     _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
-    assert reward == -1002.0
+    assert reward == -110.0
     assert not terminated and truncated
     assert info["termination_reason"] == "training_watchdog_timeout"
     assert info["training_elapsed_s"] == 2.0
 
 
-def test_official_training_cost_uses_time_between_actions_not_only_last_scan():
+def test_official_training_time_cost_uses_elapsed_action_interval(tmp_path):
     class DelayedTrainingRacer(FakeRacer):
         last_control_interval_s = 3.0
 
         def __init__(self):
             super().__init__([
-                _snapshot(lap=0, last_lap=0.0, collisions=0),
-                _snapshot(lap=1, last_lap=6.0, collisions=0),
-                _snapshot(lap=2, last_lap=5.0, collisions=0),
+                _snapshot(lap=0, last_lap=0.0, collisions=0, position=(0.0, 0.0, 0.0)),
+                _snapshot(lap=1, last_lap=6.0, collisions=0, position=(1.0, 0.0, 0.0)),
+                _snapshot(lap=2, last_lap=5.0, collisions=0, position=(1.0, 1.0, 0.0)),
             ])
             self.last_step_duration_s = 0.05
 
@@ -537,15 +558,18 @@ def test_official_training_cost_uses_time_between_actions_not_only_last_scan():
             self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
             return self.telemetry
 
+    route = tmp_path / "centerline.csv"
+    route.write_text("0,0,1.5,1.5\n1,0,1.5,1.5\n1,1,1.5,1.5\n0,1,1.5,1.5\n0,0,1.5,1.5\n")
+    (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [0.0, 0.0]}')
     env = OfficialRaceEnv(
-        racer=DelayedTrainingRacer(), training_mode=True, training_timeout_s=0.0
+        racer=DelayedTrainingRacer(), training_mode=True, training_timeout_s=0.0, frontier_path=route
     )
     env.reset()
-    env.step(np.zeros(2, dtype=np.float32))  # warm-up lap
     _, reward, _, _, info = env.step(np.zeros(2, dtype=np.float32))
 
-    assert reward == 97.0  # +100 lap bonus, -3 full seconds between actions
-    assert info["training_reward_components"]["race_time_cost"] == -3.0
+    assert info["training_reward_components"]["time_cost"] == -15.0
+    assert "lap_completion" not in info["training_reward_components"]
+    assert reward == info["training_reward_components"]["total"]
 
 
 def test_official_policy_transport_cannot_reset_the_simulator():

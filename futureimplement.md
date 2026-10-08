@@ -1,26 +1,14 @@
-# Training and Evaluation Changes
+# Official training frontier and evaluation work
 
-Implementation status: completed in the current working tree. Training episodes now represent car lives; laps and lap times are diagnostics only.
+## Implemented
 
-## Episode and lap behavior
+- Official PPO lives start at the documented AutoDRIVE spawn and use restricted IPS x/y only for Layer 2 frontier reward and episode control. The coordinates are excluded from policy observations and actions.
+- `competition/iros2026/official_centerline.csv` is a bounded, closed route reference derived from a completed official simulator lap trace. It is documented as a demonstrated path, not surveyed track geometry, and each training reset validates the expected spawn before initializing the frontier.
+- Only new high-water frontier distance earns positive driving reward. Simulated time costs 5 reward units/second by default; lap crossings add no reward and do not end an episode. A new collision ends the life and costs 100 plus 20% of its positive frontier return. A stalled frontier resets after 10 simulated seconds with time cost only; other watchdog failures cost 100.
+- Layer 4 exposes the current objective, migrates old reward settings, and packages the frontier data with the official training image.
 
-- Training always disables lap-based termination. Cars continue through multiple laps until collision, frontier stall, or an explicitly configured safety cutoff.
-- Lap count and lap times remain telemetry. A 10-lap time is reported only when the evaluator observes ten consecutive completed laps in one life; it is not required to evaluate or rank a policy.
+## Still outstanding
 
-## Reward design
-
-- New high-water frontier distance is the only positive driving reward. Time costs 5 reward units per simulated second, so making the same frontier progress faster improves reward rate.
-- No lap-crossing or lap-completion bonus is paid.
-- Collision settings are backend-owned: fixed cost defaults to 100, plus 20% of positive frontier reward earned in that car's current life. Both settings accept positive values; Layer 2 applies the negative sign.
-- Non-collision early episode endings receive a separate default cost of 100. Collision termination remains configurable and enabled by default.
-
-## Deterministic evaluation and exploration
-
-- Layer 3 runs a deterministic evaluation on its own simulator for a fixed 30 simulated seconds every 50,000 training steps by default. It records frontier distance and pace, reward per simulated second, crashes, failed episodes, lap count and lap times when available.
-- Evaluation reward per simulated second is the checkpoint and plateau score. It includes frontier progress, the time cost, reversing, and failure penalties; raw frontier pace remains a separately reported metric.
-- The best evaluated checkpoint is preserved and selected as the final model when an evaluation has completed.
-- Action standard deviation is clamped to backend-configured bounds (default 0.2–0.8). It is scaled down by 0.9 after an improvement and raised by 1.1 after each three stale evaluations.
-- Plateau stopping uses consecutive deterministic evaluations and minimum training steps. It no longer waits for any lap count.
-- Docker allocates one extra simulator for evaluation, including at the maximum of 16 training environments.
-
-Validation: focused Python tests and the Train UI production build pass. A live PPO training/evaluation run has not been started as part of this implementation.
+- Layer 3 still stops on training episode-return plateau. The planned separate deterministic 30-second official evaluation every 50,000 steps, reward-rate checkpoint selection, and adaptive action-standard-deviation schedule are not implemented.
+- The frontier is based on a successful recorded vehicle path. Long-run official simulator training must confirm that its 2 m corridor projects consistently across collisions, resets, and parallel environments.
+- Parallel throughput, sustained timing stability, checkpoint recovery, and a valid ten-lap official result remain runtime acceptance checks; Python tests do not establish them.

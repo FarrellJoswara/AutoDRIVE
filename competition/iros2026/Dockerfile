@@ -21,6 +21,7 @@ RUN python3 -m pip install --no-cache-dir --index-url "${AICAR_TORCH_INDEX_URL}"
     && python3 -m pip install --no-cache-dir --no-deps stable-baselines3==2.3.2
 
 COPY src /opt/aicar/src
+COPY competition/iros2026/official_centerline.csv competition/iros2026/official_frontier.json /opt/aicar/competition/iros2026/
 COPY competition/iros2026/run_container.sh /opt/aicar/run_container.sh
 RUN sed -i 's/\r$//' /opt/aicar/run_container.sh && chmod 0755 /opt/aicar/run_container.sh
 

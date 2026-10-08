@@ -12,8 +12,10 @@ simulator and Devkit images. The four-layer boundaries remain explicit:
 2. **Layer 2** (`src/layer2/official_race_env.py`) builds policy observations
    from permitted Layer 1 data, estimates body motion by matching successive
    LiDAR scans with the IMU yaw change, and tracks the official race sequence.
-   It does not use centerlines, map files, simulator ground truth, or
-   non-ROS interfaces.
+   Policy observations never use centerlines, map files, simulator ground truth,
+   or non-ROS interfaces. Training alone may use restricted official IPS
+   position for the documented frontier reward and episode boundaries; that
+   position is kept out of the policy observation and action path.
 3. **Layer 3** (`src/layer3/official_policy.py`) runs the continuous
    competition controller. The separate local evaluator
    (`src/layer3/official_evaluate.py`) reads restricted lap/collision metrics

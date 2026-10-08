@@ -1,0 +1,6 @@
+{
+  "source": "restricted official AutoDRIVE IPS trace",
+  "recorded_spawn_xy": [0.8, 3.1583],
+  "spawn_xy": [0.8, 3.1583],
+  "frontier_corridor_half_width_m": 2.0
+}

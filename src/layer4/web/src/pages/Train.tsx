@@ -302,22 +302,19 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Maximum wall-clock duration (hours)" help="Optional overall run limit. Set to 0 to disable; the simulator's per-episode timeout is configured separately.">
                 <input type="number" min={0} step="any" value={form.max_duration_hours} onChange={(event) => setNumber("max_duration_hours", event.target.value)} />
               </Field>
-              <Field label="Race laps per episode" help="Number of official laps required for a successful training episode. Default is 10 laps.">
-                <input type="number" min={1} max={100} value={form.race_laps} onChange={(event) => setNumber("race_laps", event.target.value)} />
-              </Field>
-              <Field label="Warm-up laps (not scored)" help="Initial laps ignored for race timing and scored reward before the episode's race begins.">
-                <input type="number" min={0} max={20} value={form.warmup_laps} onChange={(event) => setNumber("warmup_laps", event.target.value)} />
-              </Field>
-              <Field label="Time cost per simulator-clock second" help="Reward cost uses advancing ROS LaserScan timestamps when available and falls back to the host receipt clock if they are unavailable. Higher values penalize longer episodes.">
+              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second, including while moving. Frontier progress is the only positive driving reward.">
                 <input type="number" min={0} step="any" value={form.time_cost_per_simulated_second} onChange={(event) => setNumber("time_cost_per_simulated_second", event.target.value)} />
               </Field>
-              <Field label="Reward per completed lap" help="Training-only reward for completing each warm-up or scored race lap. Competition scoring still uses official race results.">
-                <input type="number" min={0} step="any" value={form.lap_completion_reward} onChange={(event) => setNumber("lap_completion_reward", event.target.value)} />
+              <Field label="End a stalled life after (simulated seconds)" help="When the car stops advancing its high-water route frontier for this long, its simulator resets. The stall receives time cost without an extra failure deduction.">
+                <input type="number" min={0} step="any" value={form.frontier_stagnation_s} onChange={(event) => setNumber("frontier_stagnation_s", event.target.value)} />
               </Field>
-              <Field label="Collision penalty base" help="Each collision adds an increasing penalty: base × collision number in the episode.">
-                <input type="number" min={0} step="any" value={form.collision_penalty_base} onChange={(event) => setNumber("collision_penalty_base", event.target.value)} />
+              <Field label="Fixed cost per collision" help="A collision ends the current car life and applies this fixed cost plus the configured share of frontier reward earned during that life.">
+                <input type="number" min={0} step="any" value={form.collision_penalty_magnitude} onChange={(event) => setNumber("collision_penalty_magnitude", event.target.value)} />
               </Field>
-              <Field label="Failed episode penalty" help="Penalty charged when the episode is disqualified or reaches its training watchdog timeout.">
+              <Field label="Collision cost as share of earned frontier reward (%)" help="Claws back this percentage of the positive frontier reward earned in the current life when it collides.">
+                <input type="number" min={0} max={1000} step="any" value={form.collision_reward_percent} onChange={(event) => setNumber("collision_reward_percent", event.target.value)} />
+              </Field>
+              <Field label="Non-collision failure cost" help="Penalty charged once when the simulator-clock watchdog ends a life. Frontier stalls only pay the per-second time cost.">
                 <input type="number" min={0} step="any" value={form.failed_episode_penalty} onChange={(event) => setNumber("failed_episode_penalty", event.target.value)} />
               </Field>
             </div>

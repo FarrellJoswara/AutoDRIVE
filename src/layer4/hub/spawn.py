@@ -49,14 +49,26 @@ def ensure_spawn(
         isinstance(centerline_info, dict)
         and centerline_info.get("algorithm") == CENTERLINE_ALGORITHM
     )
+    centerline_generation_failed = False
 
     # Rebuild stale generated routes so activation cannot keep using a CSV
     # written by the disconnected greedy-pixel algorithm.
     if cl is not None and not centerline_is_current and generate_if_missing:
-        generate_centerline(map_id, maps_root)
-        meta = _read_meta(meta_path)
-        existing = meta.get("spawn")
-        cl = find_centerline(map_dir)
+        try:
+            generate_centerline(map_id, maps_root)
+            meta = _read_meta(meta_path)
+            existing = meta.get("spawn")
+            cl = find_centerline(map_dir)
+        except (RuntimeError, ValueError) as exc:
+            # Some valid free-space maps do not contain a closed drivable
+            # cycle. Keep activation usable by selecting a known-free spawn.
+            centerline_generation_failed = True
+            cl = None
+            meta["centerline"] = {
+                "status": "unavailable",
+                "free_space_semantics": "known_free_v1",
+                "reason": str(exc),
+            }
 
     if (
         isinstance(existing, dict)
@@ -65,10 +77,18 @@ def ensure_spawn(
     ):
         return dict(existing)
 
-    if cl is None and generate_if_missing:
-        generate_centerline(map_id, maps_root)
-        cl = find_centerline(map_dir)
-        meta = _read_meta(meta_path)
+    if cl is None and generate_if_missing and not centerline_generation_failed:
+        try:
+            generate_centerline(map_id, maps_root)
+            cl = find_centerline(map_dir)
+            meta = _read_meta(meta_path)
+        except (RuntimeError, ValueError) as exc:
+            centerline_generation_failed = True
+            meta["centerline"] = {
+                "status": "unavailable",
+                "free_space_semantics": "known_free_v1",
+                "reason": str(exc),
+            }
 
     spawn: Dict[str, Any]
     if cl is not None:
@@ -77,6 +97,11 @@ def ensure_spawn(
         spawn = _spawn_from_freespace(occ)
 
     spawn["built_at"] = datetime.now(timezone.utc).isoformat()
+    if centerline_generation_failed:
+        meta["centerline"] = {
+            **(meta.get("centerline") if isinstance(meta.get("centerline"), dict) else {}),
+            "free_space_semantics": "known_free_v1",
+        }
     meta["spawn"] = spawn
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return spawn

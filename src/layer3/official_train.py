@@ -179,11 +179,12 @@ def train_official(
     timeout_s: float = 180.0,
     training_timeout_s: float = 600.0,
     race_laps: int = 10,
-    warmup_laps: int = 1,
-    time_cost_per_simulated_second: float = 1.0,
-    lap_completion_reward: float = 100.0,
-    collision_penalty_base: float = 10.0,
-    failed_episode_penalty: float = 1000.0,
+    warmup_laps: int = 0,
+    time_cost_per_simulated_second: float = 5.0,
+    collision_penalty_magnitude: float = 100.0,
+    collision_reward_percent: float = 20.0,
+    failed_episode_penalty: float = 100.0,
+    frontier_stagnation_s: float = 10.0,
     observation_profile: str = "official_sensors",
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
@@ -280,10 +281,13 @@ def train_official(
             observation_profile=observation_profile,
             training_mode=True,
             training_timeout_s=training_timeout_s,
-            training_lap_reward=lap_completion_reward,
             training_failure_penalty=failed_episode_penalty,
             training_time_cost_per_simulated_second=time_cost_per_simulated_second,
-            training_collision_penalty_base=collision_penalty_base,
+            training_collision_penalty_magnitude=collision_penalty_magnitude,
+            training_collision_reward_percent=collision_reward_percent,
+            training_frontier_stagnation_s=frontier_stagnation_s,
+            frontier_path=Path(__file__).resolve().parents[2]
+            / "competition" / "iros2026" / "official_centerline.csv",
         )
         requested_ppo = {
             "n_steps": int(n_steps),
@@ -348,10 +352,11 @@ def train_official(
             "official_api_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
             "official_simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
             "episode": {
-                "warmup_laps_ignored": warmup_laps,
-                "race_laps": race_laps,
-                "collision_behavior": "official checkpoint reset; terminate only after >10 scored collisions",
+                "frontier_source": "restricted official IPS position; demonstrated route CSV",
+                "frontier_stagnation_s": frontier_stagnation_s,
+                "collision_behavior": "end this car life on each new collision",
                 "training_watchdog_s": training_timeout_s,
+                "laps": "diagnostics only; do not terminate or reward lap crossings",
             },
             "observation_profile": observation_profile,
             "actions": {
@@ -365,11 +370,11 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
-                "lap_completion_bonus": lap_completion_reward,
-                "warmup_lap_completion_bonus": lap_completion_reward,
-                "collision_penalty_seconds": f"{collision_penalty_base:g} * collision_number",
-                "disqualification_or_watchdog_penalty": failed_episode_penalty,
-                "watchdog_scope": "full episode including warm-up",
+                "positive_reward": "new high-water route frontier distance only",
+                "collision_cost": f"{collision_penalty_magnitude:g} + {collision_reward_percent:g}% of positive frontier return",
+                "non_collision_failure_cost": failed_episode_penalty,
+                "frontier_stall": "end and reset life; time cost only",
+                "lap_completion_bonus": 0,
                 "restricted_topics_used_only_for_reward_and_episode_control": True,
                 "restricted_topics_in_policy_observation": False,
             },
@@ -468,11 +473,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--training-timeout-s", type=float, default=600.0)
     parser.add_argument("--race-laps", type=int, default=10)
-    parser.add_argument("--warmup-laps", type=int, default=1)
-    parser.add_argument("--time-cost-per-simulated-second", type=float, default=1.0)
-    parser.add_argument("--lap-completion-reward", type=float, default=100.0)
-    parser.add_argument("--collision-penalty-base", type=float, default=10.0)
-    parser.add_argument("--failed-episode-penalty", type=float, default=1000.0)
+    parser.add_argument("--warmup-laps", type=int, default=0)
+    parser.add_argument("--time-cost-per-simulated-second", type=float, default=5.0)
+    parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
+    parser.add_argument("--collision-reward-percent", type=float, default=20.0)
+    parser.add_argument("--failed-episode-penalty", type=float, default=100.0)
+    parser.add_argument("--frontier-stagnation-s", type=float, default=10.0)
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
@@ -509,9 +515,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         race_laps=args.race_laps,
         warmup_laps=args.warmup_laps,
         time_cost_per_simulated_second=args.time_cost_per_simulated_second,
-        lap_completion_reward=args.lap_completion_reward,
-        collision_penalty_base=args.collision_penalty_base,
+        collision_penalty_magnitude=args.collision_penalty_magnitude,
+        collision_reward_percent=args.collision_reward_percent,
         failed_episode_penalty=args.failed_episode_penalty,
+        frontier_stagnation_s=args.frontier_stagnation_s,
         observation_profile=args.observation_profile,
         steering_action_scale=args.steering_action_scale,
         straight_throttle_gain=args.straight_throttle_gain,

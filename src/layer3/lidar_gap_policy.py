@@ -97,6 +97,10 @@ class LidarGapPolicy:
             target_idx = int(np.argmax(scores))
 
         target_angle = float(sector_angles[target_idx])
+        # Quantized beam centers can put a fully open, symmetric scene half a
+        # beam off-axis. Avoid steering oscillation for that measurement noise.
+        if abs(target_angle) < np.deg2rad(2.0):
+            target_angle = 0.0
         # Positive LiDAR angle points left; the official actuator's positive
         # steering turns right, so negate the angle to match measured convention.
         steering = float(np.clip(-target_angle / self.max_steer_angle_rad, -1.0, 1.0))

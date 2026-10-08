@@ -379,6 +379,18 @@ class TelemetrySnapshot:
         a_lat = -lin_acc[1]
         lat_g = a_lat / 9.80665
 
+        camera_image = None
+        raw_camera = data.get("V1 Front Camera Image")
+        if isinstance(raw_camera, (list, tuple, np.ndarray)):
+            try:
+                candidate = np.asarray(raw_camera, dtype=np.uint8)
+                if candidate.ndim == 3 and candidate.shape[2] == 3:
+                    camera_image = candidate
+            except (TypeError, ValueError):
+                # Bridge camera payloads may be encoded strings; camera decoding
+                # belongs to the transport layer and must not affect RL telemetry.
+                camera_image = None
+
         return cls(
             timestamp=time.time(),
             step_id=step_id,
@@ -402,10 +414,7 @@ class TelemetrySnapshot:
             lidar_range_max=float(
                 data.get("V1 LIDAR Range Max", data.get("V1 Lidar Range Max", 10.0))
             ),
-            camera_image_rgb=(
-                np.asarray(data["V1 Front Camera Image"], dtype=np.uint8)
-                if data.get("V1 Front Camera Image") is not None else None
-            ),
+            camera_image_rgb=camera_image,
             throttle=th,
             steering=st,
             lap_count=lap_c,

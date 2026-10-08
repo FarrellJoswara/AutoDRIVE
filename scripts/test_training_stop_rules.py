@@ -6,6 +6,7 @@ import time
 import threading
 import unittest
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -29,7 +30,7 @@ from src.layer4.settings import Settings
 class RunStopCallbackTests(unittest.TestCase):
     def test_requested_stop_is_honored_at_next_callback_boundary(self) -> None:
         requested = threading.Event()
-        callback = RequestedStopCallback(requested)
+        callback = RequestedStopCallback(requested, Path("unused-recovery.zip"))
 
         self.assertTrue(callback._on_step())
         requested.set()

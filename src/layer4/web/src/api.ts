@@ -252,11 +252,12 @@ export interface OfficialTrainSettings {
   gae_lambda: number;
   timeout_s: number;
   training_timeout_s: number;
+  frontier_stagnation_s: number;
   race_laps: number;
   warmup_laps: number;
   time_cost_per_simulated_second: number;
-  lap_completion_reward: number;
-  collision_penalty_base: number;
+  collision_penalty_magnitude: number;
+  collision_reward_percent: number;
   failed_episode_penalty: number;
   observation_profile: "official_sensors" | "official_sensors_history" | "official_sensors_camera";
   steering_action_scale: number;

@@ -72,7 +72,9 @@ class TemporalSensorObservationTests(unittest.TestCase):
             env._lidar_history[0], np.full(1081, 0.2, dtype=np.float32)
         ))
         self.assertEqual(float(obs["state"][1]), 0.0)
-        self.assertAlmostEqual(float(obs["state"][0]), 1.18 / 22.88, places=4)
+        # The RL observation intentionally uses LiDAR ego-motion, never wheel
+        # encoder speed (which can report spin while the car is stopped).
+        self.assertEqual(float(obs["state"][0]), 0.0)
 
     def test_temporal_extractor_consumes_history_and_produces_features(self) -> None:
         obs_space = make_observation_space(lidar_history_frames=4)

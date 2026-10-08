@@ -41,12 +41,13 @@ class OfficialTrainSettings(BaseModel):
     gae_lambda: float = Field(default=0.95, ge=0, le=1)
     timeout_s: float = Field(default=30.0, gt=0)
     training_timeout_s: float = Field(default=600.0, gt=0)
+    frontier_stagnation_s: float = Field(default=10.0, ge=0)
     race_laps: int = Field(default=10, ge=1, le=100)
-    warmup_laps: int = Field(default=1, ge=0, le=20)
-    time_cost_per_simulated_second: float = Field(default=1.0, ge=0)
-    lap_completion_reward: float = Field(default=100.0, ge=0)
-    collision_penalty_base: float = Field(default=10.0, ge=0)
-    failed_episode_penalty: float = Field(default=1000.0, ge=0)
+    warmup_laps: int = Field(default=0, ge=0, le=20)
+    time_cost_per_simulated_second: float = Field(default=5.0, ge=0)
+    collision_penalty_magnitude: float = Field(default=100.0, ge=0)
+    collision_reward_percent: float = Field(default=20.0, ge=0, le=1000)
+    failed_episode_penalty: float = Field(default=100.0, ge=0)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
     ] = "official_sensors"
@@ -82,11 +83,12 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_PPO_GAE_LAMBDA": str(self.gae_lambda),
             "AICAR_SENSOR_TIMEOUT_S": str(self.timeout_s),
             "AICAR_TRAIN_WATCHDOG_S": str(self.training_timeout_s),
+            "AICAR_TRAIN_FRONTIER_STAGNATION_S": str(self.frontier_stagnation_s),
             "AICAR_TRAIN_RACE_LAPS": str(self.race_laps),
             "AICAR_TRAIN_WARMUP_LAPS": str(self.warmup_laps),
             "AICAR_TRAIN_TIME_COST": str(self.time_cost_per_simulated_second),
-            "AICAR_TRAIN_LAP_REWARD": str(self.lap_completion_reward),
-            "AICAR_TRAIN_COLLISION_PENALTY_BASE": str(self.collision_penalty_base),
+            "AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE": str(self.collision_penalty_magnitude),
+            "AICAR_TRAIN_COLLISION_REWARD_PERCENT": str(self.collision_reward_percent),
             "AICAR_TRAIN_FAILURE_PENALTY": str(self.failed_episode_penalty),
             "AICAR_OBSERVATION_PROFILE": self.observation_profile,
             "AICAR_STEERING_ACTION_SCALE": str(self.steering_action_scale),
@@ -107,6 +109,21 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return OfficialTrainSettings()
+    if isinstance(raw, dict):
+        # Older UI settings used lap bonuses and escalating collision penalties.
+        # Drop those obsolete controls while retaining the user's unrelated PPO/run settings.
+        legacy_reward_schema = "lap_completion_reward" in raw or "collision_penalty_base" in raw
+        for legacy in ("lap_completion_reward", "collision_penalty_base", "lidar_brake_distance_m"):
+            raw.pop(legacy, None)
+        if legacy_reward_schema:
+            raw.update({
+                "warmup_laps": 0,
+                "time_cost_per_simulated_second": 5.0,
+                "collision_penalty_magnitude": 100.0,
+                "collision_reward_percent": 20.0,
+                "failed_episode_penalty": 100.0,
+                "frontier_stagnation_s": 10.0,
+            })
     return OfficialTrainSettings.model_validate(raw)
 
 
