@@ -103,7 +103,7 @@ class CenterlineExpertTests(unittest.TestCase):
                     output_path=Path(directory) / "demonstrations.npz",
                 )
 
-    def test_teacher_brakes_on_total_speed_even_when_forward_speed_is_low(self) -> None:
+    def test_teacher_coasts_on_total_speed_instead_of_commanding_reverse(self) -> None:
         point, _ = self.route.point_and_tangent_at(0.0)
         action = self.expert.action({
             "position": (float(point[0]), float(point[1]), 0.0),
@@ -112,7 +112,8 @@ class CenterlineExpertTests(unittest.TestCase):
             "true_speed": 4.0,
             "v_long": 0.1,
         })
-        self.assertLess(float(action[0]), 0.0)
+        self.assertEqual(float(action[0]), 0.0)
+        self.assertGreaterEqual(float(action[0]), 0.0)
 
 
 if __name__ == "__main__":

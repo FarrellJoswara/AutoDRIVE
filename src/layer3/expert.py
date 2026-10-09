@@ -89,7 +89,10 @@ class CenterlineExpert:
         # then looked slow and kept applying throttle while the car was already
         # moving dangerously fast.
         speed_error = target_speed - speed
-        throttle = float(np.clip(0.3 * speed_error, -0.55, 0.2))
+        # Negative AutoDRIVE throttle commands reverse, not braking. Let the
+        # car coast whenever it is at/above target speed; positive throttle
+        # closes the speed gap without teaching the policy to drive backward.
+        throttle = float(np.clip(0.3 * speed_error, 0.0, 0.2))
         return np.asarray([throttle, steering], dtype=np.float32)
 
     def action_batch(self, infos: Any) -> np.ndarray:
