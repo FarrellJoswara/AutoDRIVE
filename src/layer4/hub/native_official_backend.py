@@ -84,7 +84,12 @@ class NativeOfficialBackend:
             text=True, encoding="utf-8", timeout=10,
         ).stdout.split()[0]
         self._lock = threading.RLock()
+        # Native ROS bridges share the host network namespace. Serialize their
+        # startup so concurrent runs cannot pick the same free port/domain.
+        self._startup_lock = threading.Lock()
         self._groups: dict[str, dict[str, Any]] = {}
+        self._reserved_ros_domains: set[int] = set()
+        self._reserved_devkit_ports: set[int] = set()
         self._networks: dict[str, dict[str, Any]] = {}
         self._windows_launchers: dict[str, subprocess.Popen] = {}
         self._recover_groups()
@@ -120,6 +125,9 @@ class NativeOfficialBackend:
         run_dir = ROOT / "logs" / "rl" / f"official_run_{run_id}"
         manifest = run_dir / f"native_group_{role}.json"
         payload = {key: group[key] for key in ("Id", "Names", "Labels")}
+        for key in ("ros_domains", "devkit_ports"):
+            if key in group:
+                payload[key] = group[key]
         payload["records"] = [
             {"role": item["role"], "pid": item["process"].pid, "log": str(Path(item["log"].name))}
             for item in group["records"]
@@ -244,36 +252,49 @@ class NativeOfficialBackend:
         run_dir = Path(metadata_labels["aicar.output_dir"])
         run_dir.mkdir(parents=True, exist_ok=True)
         records: list[dict[str, Any]] = []
+        allocated_domain: int | None = None
+        allocated_port: int | None = None
         try:
-            if role == "api" or role.startswith("api-"):
-                index = 0 if role == "api" else int(role.rsplit("-", 1)[1])
-                relay_port = int((published_ports or {}).get("4568", 49152 + index))
-                self._start_bridge_pair(records, run_id, index, child_env, run_dir, relay_port=relay_port)
-                if role == "api":
-                    self._localize_runtime_paths(child_env)
-                    hub_url = child_env.get("HUB_URL", "")
-                    if "host.docker.internal" in hub_url:
-                        child_env["HUB_URL"] = os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091")
-                    train_log = (run_dir / "hub_train.log").open("ab", buffering=0)
-                    mode = child_env.get("AICAR_MODE", "train").strip().lower()
-                    command = (
-                        self._evaluation_command(child_env)
-                        if mode == "evaluate"
-                        else self._training_command(child_env)
+            with self._startup_lock:
+                if role == "api" or role.startswith("api-"):
+                    index = 0 if role == "api" else int(role.rsplit("-", 1)[1])
+                    relay_port = int((published_ports or {}).get("4568", 49152 + index))
+                    allocated_domain = self._allocate_ros_domain()
+                    allocated_port = self._allocate_devkit_port()
+                    self._start_bridge_pair(
+                        records, run_id, index, child_env, run_dir,
+                        relay_port=relay_port, ros_domain=allocated_domain,
+                        devkit_port=allocated_port,
                     )
-                    process = subprocess.Popen(
-                        command,
-                        cwd=ROOT,
-                        env=child_env,
-                        stdin=subprocess.DEVNULL,
-                        stdout=train_log,
-                        stderr=subprocess.STDOUT,
-                        start_new_session=True,
-                    )
-                    records.append({"role": "trainer", "process": process, "log": train_log})
-            else:
-                raise ValueError(f"unsupported native official role: {role}")
+                    if role == "api":
+                        self._localize_runtime_paths(child_env)
+                        hub_url = child_env.get("HUB_URL", "")
+                        if "host.docker.internal" in hub_url:
+                            child_env["HUB_URL"] = os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091")
+                        train_log = (run_dir / "hub_train.log").open("ab", buffering=0)
+                        mode = child_env.get("AICAR_MODE", "train").strip().lower()
+                        command = (
+                            self._evaluation_command(child_env)
+                            if mode == "evaluate"
+                            else self._training_command(child_env)
+                        )
+                        process = subprocess.Popen(
+                            command,
+                            cwd=ROOT,
+                            env=child_env,
+                            stdin=subprocess.DEVNULL,
+                            stdout=train_log,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                        )
+                        records.append({"role": "trainer", "process": process, "log": train_log})
+                else:
+                    raise ValueError(f"unsupported native official role: {role}")
         except Exception:
+            if allocated_domain is not None:
+                self._reserved_ros_domains.discard(allocated_domain)
+            if allocated_port is not None:
+                self._reserved_devkit_ports.discard(allocated_port)
             for record in records:
                 process = record["process"]
                 _signal_process_group(process, signal.SIGTERM)
@@ -291,10 +312,72 @@ class NativeOfficialBackend:
             "State": "running",
             "records": records,
         }
+        if allocated_domain is not None:
+            group["ros_domains"] = [allocated_domain]
+        if allocated_port is not None:
+            group["devkit_ports"] = [allocated_port]
         with self._lock:
             self._groups[identity] = group
+            if allocated_domain is not None:
+                self._reserved_ros_domains.discard(allocated_domain)
+            if allocated_port is not None:
+                self._reserved_devkit_ports.discard(allocated_port)
             self._persist_group(group)
         return identity
+
+    def _allocate_ros_domain(self) -> int:
+        with self._lock:
+            used = set()
+            for group in self._groups.values():
+                used.update(group.get("ros_domains", ()))
+                if "ros_domains" not in group:
+                    for record in group.get("records", ()):
+                        role = str(record.get("role", ""))
+                        if role.startswith("devkit-"):
+                            try:
+                                used.add(int(role.rsplit("-", 1)[1]))
+                            except ValueError:
+                                continue
+            used.update(self._reserved_ros_domains)
+            for domain in range(233):
+                if domain not in used:
+                    self._reserved_ros_domains.add(domain)
+                    return domain
+        raise RuntimeError("no free ROS domain IDs remain for native simulator bridges")
+
+    def _allocate_devkit_port(self) -> int:
+        with self._lock:
+            used = {port for group in self._groups.values() for port in group.get("devkit_ports", ())}
+            for group in self._groups.values():
+                if "devkit_ports" not in group:
+                    used.update(self._devkit_ports_from_records(group.get("records", ())))
+            used.update(self._reserved_devkit_ports)
+            for port in range(4567, 60000):
+                if port in used:
+                    continue
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                    try:
+                        probe.bind(("0.0.0.0", port))
+                    except OSError:
+                        continue
+                self._reserved_devkit_ports.add(port)
+                return port
+        raise RuntimeError("no free TCP ports remain for native Devkit bridges")
+
+    @staticmethod
+    def _devkit_ports_from_records(records: Any) -> set[int]:
+        ports: set[int] = set()
+        for record in records:
+            role = str(record.get("role", ""))
+            if not role.startswith("devkit-"):
+                continue
+            # Older manifests did not persist port assignments; reserve the
+            # legacy per-environment range while those processes are adopted.
+            try:
+                ports.add(4567 + int(role.rsplit("-", 1)[1]))
+            except ValueError:
+                pass
+        return ports
 
     @staticmethod
     def _local_logs_path(value: str) -> str:
@@ -318,9 +401,9 @@ class NativeOfficialBackend:
     def _start_bridge_pair(
         self, records: list[dict[str, Any]], run_id: str, index: int,
         env: dict[str, str], run_dir: Path, *, relay_port: int,
+        ros_domain: int, devkit_port: int,
     ) -> None:
-        domain = str(index)
-        devkit_port = 4567 + index
+        domain = str(ros_domain)
         bridge_env = env.copy()
         bridge_env.update({
             "ROS_DOMAIN_ID": domain,

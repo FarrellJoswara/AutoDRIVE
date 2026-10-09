@@ -101,6 +101,33 @@ def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
     )
 
 
+def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
+    import socket
+    import threading
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._lock = threading.RLock()
+    backend._groups = {}
+    backend._reserved_ros_domains = set()
+    backend._reserved_devkit_ports = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        occupied.bind(("0.0.0.0", 4567))
+        assert backend._allocate_ros_domain() == 0
+        assert backend._allocate_ros_domain() == 1
+        assert backend._allocate_devkit_port() == 4568
+        assert backend._allocate_devkit_port() == 4569
+
+    backend._reserved_ros_domains.clear()
+    backend._reserved_devkit_ports.clear()
+    backend._groups["active-training"] = {
+        "ros_domains": [0, 1, 2, 3],
+        "devkit_ports": [4567, 4568, 4569, 4570],
+    }
+    assert backend._allocate_ros_domain() == 4
+    assert backend._allocate_devkit_port() == 4571
+
+
 def test_reconcile_does_not_mark_a_stopping_run_orphaned(manager):
     run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 1})
     run_id = run["run_id"]
