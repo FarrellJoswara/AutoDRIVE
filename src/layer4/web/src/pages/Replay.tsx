@@ -10,6 +10,7 @@ export function ReplayPage() {
   const [status, setStatus] = useState<ReplayStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [best, setBest] = useState<OfficialChampion | null>(null);
   const [history, setHistory] = useState<OfficialEvaluationRecord[]>([]);
   async function refreshModels() {
@@ -29,8 +30,15 @@ export function ReplayPage() {
     let cancelled = false;
     let timer: number;
     async function poll() {
-      try { const next = await getReplayStatus(); if (!cancelled) setStatus(next); }
-      catch (reason) { if (!cancelled) setError(String(reason)); }
+      try {
+        const next = await getReplayStatus();
+        if (!cancelled) {
+          setStatus(next);
+          setPollError(null);
+        }
+      } catch (reason) {
+        if (!cancelled) setPollError(String(reason));
+      }
       if (!cancelled) timer = window.setTimeout(poll, 500);
     }
     void poll();
@@ -82,7 +90,7 @@ export function ReplayPage() {
       <p>Environment 0: <code>{status.simulator_connections[0].host}:{status.simulator_connections[0].port}</code></p>
       <p className="meta">Run <code>scripts/start_official_windows_simulators.ps1 -SimulatorExePath &lt;AutoDRIVE Simulator.exe&gt; -Ports {status.simulator_connections.map((connection) => connection.port).join(",")} -RunId {status.run_id} -HubUrl {window.location.origin}</code> in PowerShell.</p>
     </section> : null}
-    {(error || status?.error) && <p className="error" role="alert">{error || status?.error}</p>}
+    {(error || status?.error || pollError) && <p className="error" role="alert">{error || status?.error || pollError}</p>}
     {result && <div className="panel">
       <h3>Official attempt result</h3>
       <p>{result.valid ? `Median adjusted time: ${result.median_adjusted_race_time_s?.toFixed(2)} s.` : "This batch did not produce three valid attempts and cannot promote the best model."} Valid attempts: {result.completed_attempts}/{result.attempts_required ?? 3}.</p>

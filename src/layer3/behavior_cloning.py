@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -63,6 +64,7 @@ def collect_centerline_demonstrations(
     completed_episodes = 0
     termination_counts: Dict[str, int] = {}
     collision_count = 0
+    collision_trace_examples = []
     termination_examples = []
     n_envs = int(vec_env.num_envs)
     # Keep compact, non-identifying diagnostics so a saved BC run can prove
@@ -81,6 +83,7 @@ def collect_centerline_demonstrations(
     episode_reverse_motion_steps = [0] * n_envs
     episode_negative_throttle_steps = [0] * n_envs
     route_episode_diagnostics = []
+    recent_collision_context = [deque(maxlen=8) for _ in range(n_envs)]
 
     total_steps = max(0, int(steps))
     report_every = max(1, total_steps // 10)
@@ -101,6 +104,35 @@ def collect_centerline_demonstrations(
                 last_route_progress[env_index] = progress
         actions = expert.action_batch(current_infos)
         for env_index, action in enumerate(actions):
+            lidar = np.asarray(observations["lidar"][env_index], dtype=np.float32).reshape(-1)
+            lidar_range_min = float(current_infos[env_index].get("lidar_range_min", 0.06))
+            lidar_range_max = float(current_infos[env_index].get("lidar_range_max", 10.0))
+            # Layer 2 observations normalize LiDAR meters to [0, 1]. Preserve
+            # only a front-sector minimum in meters in collision diagnostics.
+            center = lidar.size // 2
+            sector_half_width = max(1, round(lidar.size * 15.0 / 270.0))
+            front_sector = lidar[max(0, center - sector_half_width):center + sector_half_width + 1]
+            front_min_m = lidar_range_min + float(np.min(front_sector)) * (
+                lidar_range_max - lidar_range_min
+            )
+            info = current_infos[env_index]
+            context = {
+                "step": step_index + 1,
+                "route_progress_m": (
+                    None if info.get("current_progress_m") is None
+                    else float(info["current_progress_m"])
+                ),
+                "position_xy_m": (
+                    None if info.get("position") is None
+                    else [float(value) for value in info["position"][:2]]
+                ),
+                "yaw_rad": None if info.get("yaw") is None else float(info["yaw"]),
+                "v_long_mps": float(info.get("v_long", 0.0) or 0.0),
+                "true_speed_mps": float(info.get("true_speed", 0.0) or 0.0),
+                "front_min_lidar_m": round(front_min_m, 4),
+                "teacher_action": [float(value) for value in action[:2]],
+            }
+            recent_collision_context[env_index].append(context)
             if float(action[0]) < -1e-6:
                 negative_throttle_steps[env_index] += 1
                 episode_negative_throttle_steps[env_index] += 1
@@ -114,6 +146,29 @@ def collect_centerline_demonstrations(
         for env_index, (done, info) in enumerate(zip(dones, infos)):
             if bool(info.get("collision_event", False)):
                 collision_count += 1
+                if len(collision_trace_examples) < max(3, n_envs * 3):
+                    collision_trace_examples.append({
+                        "env_id": env_index,
+                        "step": step_index + 1,
+                        "preceding_steps": list(recent_collision_context[env_index]),
+                        "collision_state": {
+                            "route_progress_m": (
+                                None if info.get("current_progress_m") is None
+                                else float(info["current_progress_m"])
+                            ),
+                            "position_xy_m": (
+                                None if info.get("position") is None
+                                else [float(value) for value in info["position"][:2]]
+                            ),
+                            "yaw_rad": None if info.get("yaw") is None else float(info["yaw"]),
+                            "v_long_mps": float(info.get("v_long", 0.0) or 0.0),
+                            "true_speed_mps": float(info.get("true_speed", 0.0) or 0.0),
+                            "throttle_command": info.get("throttle_command"),
+                            "steering_command": info.get("steering_command"),
+                            "collision_count": int(info.get("collision_count", 0) or 0),
+                        },
+                    })
+                recent_collision_context[env_index].clear()
             progress = info.get("current_progress_m")
             if progress is not None:
                 progress = float(progress)
@@ -132,6 +187,7 @@ def collect_centerline_demonstrations(
                 reverse_motion_steps[env_index] += 1
                 episode_reverse_motion_steps[env_index] += 1
             if done:
+                recent_collision_context[env_index].clear()
                 completed_episodes += 1
                 won = bool(info.get("episode_won", False))
                 if won:
@@ -246,6 +302,7 @@ def collect_centerline_demonstrations(
         "completed_episodes": completed_episodes,
         "successful_episodes": successful_episodes,
         "collision_count": collision_count,
+        "collision_trace_examples": collision_trace_examples,
         "termination_counts": termination_counts,
         "termination_examples": termination_examples,
         "route_direction_diagnostics": route_diagnostics,

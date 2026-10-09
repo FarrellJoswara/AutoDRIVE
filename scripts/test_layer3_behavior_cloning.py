@@ -346,6 +346,7 @@ class BehaviorCloningTests(unittest.TestCase):
                         "current_progress_m": 12.0,
                         "frontier_progress_m": 12.0,
                         "termination_reason": "collision",
+                        "collision_event": True,
                         "episode_won": False,
                         "position": [1.25, -0.5, 0.1],
                         "yaw": 0.75,
@@ -379,6 +380,12 @@ class BehaviorCloningTests(unittest.TestCase):
         self.assertEqual(episode["terminal_throttle_command"], 0.12)
         self.assertEqual(episode["terminal_steering_command"], -0.2)
         self.assertIsNone(summary["route_direction_diagnostics"][0]["net_progress_m"])
+        trace = summary["collision_trace_examples"][0]
+        self.assertEqual(trace["step"], 1)
+        self.assertEqual(trace["collision_state"]["position_xy_m"], [1.25, -0.5])
+        self.assertEqual(len(trace["preceding_steps"]), 1)
+        self.assertEqual(trace["preceding_steps"][0]["teacher_action"], [0.0, 0.0])
+        self.assertAlmostEqual(trace["preceding_steps"][0]["front_min_lidar_m"], 10.0)
 
 
 if __name__ == "__main__":
