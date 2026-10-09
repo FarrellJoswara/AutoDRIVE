@@ -790,7 +790,7 @@ class OfficialRunManager:
                 except Exception:
                     continue
             for rid, network in networks_by_run.items():
-                if rid in grouped or rid in self._creating:
+                if rid in grouped or rid in self._creating or rid in self._stopping:
                     continue
                 row = self._runs.get(rid)
                 if row is None:
@@ -823,7 +823,7 @@ class OfficialRunManager:
                     row["network_id"] = network.get("Id")
                     cleanup_rows.append(row)
             for rid, row in self._runs.items():
-                if (run_id is None or rid == run_id) and rid not in grouped and rid not in self._creating and row.get("state") in {
+                if (run_id is None or rid == run_id) and rid not in grouped and rid not in self._creating and rid not in self._stopping and row.get("state") in {
                     "starting", "running", "stopping"
                 }:
                     row["state"] = "stopped" if row.get("state") == "stopping" else "failed"

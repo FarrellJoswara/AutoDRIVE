@@ -250,9 +250,7 @@ class NativeOfficialBackend:
                 relay_port = int((published_ports or {}).get("4568", 49152 + index))
                 self._start_bridge_pair(records, run_id, index, child_env, run_dir, relay_port=relay_port)
                 if role == "api":
-                    for key in ("AICAR_TRAIN_OUT", "AICAR_EVALUATION_OUTPUT", "AICAR_TRAIN_RESUME"):
-                        if key in child_env:
-                            child_env[key] = self._local_logs_path(child_env[key])
+                    self._localize_runtime_paths(child_env)
                     hub_url = child_env.get("HUB_URL", "")
                     if "host.docker.internal" in hub_url:
                         child_env["HUB_URL"] = os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091")
@@ -306,6 +304,16 @@ class NativeOfficialBackend:
         if normalized.startswith("/app/logs/"):
             return str((ROOT / "logs" / normalized[len("/app/logs/"):]).resolve())
         return value
+
+    @classmethod
+    def _localize_runtime_paths(cls, env: dict[str, str]) -> None:
+        """Translate all container-style persistent file paths for WSL processes."""
+        for key in (
+            "AICAR_TRAIN_OUT", "AICAR_EVALUATION_OUTPUT", "AICAR_TRAIN_RESUME",
+            "AICAR_MODEL_PATH",
+        ):
+            if key in env:
+                env[key] = cls._local_logs_path(env[key])
 
     def _start_bridge_pair(
         self, records: list[dict[str, Any]], run_id: str, index: int,

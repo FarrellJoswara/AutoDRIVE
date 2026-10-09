@@ -88,6 +88,34 @@ def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
 
     value = NativeOfficialBackend._local_logs_path("/runs/rl/official_run_abcd/checkpoint.zip")
     assert value.replace("\\", "/").endswith("logs/rl/official_run_abcd/checkpoint.zip")
+    env = {
+        "AICAR_MODEL_PATH": "/runs/rl/official_run_abcd/checkpoints/automatic_evaluation_1.zip",
+        "AICAR_EVALUATION_OUTPUT": "/runs/rl/official_run_eval/evaluation.json",
+    }
+    NativeOfficialBackend._localize_runtime_paths(env)
+    assert env["AICAR_MODEL_PATH"].replace("\\", "/").endswith(
+        "logs/rl/official_run_abcd/checkpoints/automatic_evaluation_1.zip"
+    )
+    assert env["AICAR_EVALUATION_OUTPUT"].replace("\\", "/").endswith(
+        "logs/rl/official_run_eval/evaluation.json"
+    )
+
+
+def test_reconcile_does_not_mark_a_stopping_run_orphaned(manager):
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 1})
+    run_id = run["run_id"]
+    manager.backend.containers.clear()
+    manager._stopping.add(run_id)
+    try:
+        manager.reconcile(run_id)
+        assert manager.get_run(run_id)["state"] == "running"
+        assert manager.get_run(run_id)["error"] is None
+        assert manager.backend.networks
+    finally:
+        manager._stopping.discard(run_id)
+        manager.backend.networks.clear()
+        manager._runs[run_id]["state"] = "stopped"
+        manager._runs[run_id]["network_id"] = None
 
 
 def test_native_backend_translates_run_settings_to_native_trainer_arguments():
