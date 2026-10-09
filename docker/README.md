@@ -14,7 +14,8 @@ always requests a build.
 | **B — brain** | `brain` | `docker/Dockerfile.brain` | On by default (NVIDIA deploy reservation) |
 
 Network: compose bridge `aicar`. Sims dial out to `brain` with Unity flags
-`-batchmode -nographics -ip <BRAIN_HOST> -port <PORT>`. Brain listens on
+`-batchmode -ip <BRAIN_HOST> -port <PORT>`. The entrypoint runs Xvfb and leaves
+Unity graphics enabled so camera observations can be captured. Brain listens on
 `0.0.0.0:4567+` (Layer 1 Socket.IO). Host publishes a **wide** port range so
 you can scale many envs without editing one port at a time.
 
@@ -154,13 +155,13 @@ Or uncomment the `deploy.resources…` block under `sim` in `docker-compose.yml`
 Headless (what `entrypoint-sim.sh` runs):
 
 ```text
-AutoDRIVE Simulator.x86_64 -batchmode -nographics -ip <brain> -port <PORT>
+AutoDRIVE Simulator.x86_64 -batchmode -ip <brain> -port <PORT>
 ```
 
 | Flag | Meaning |
 | :--- | :--- |
 | `-batchmode` | Unity batch / no interactive editor loop |
-| `-nographics` | No visible window (headless) |
+| Xvfb | Virtual display for headless Linux rendering and camera capture |
 | `-ip <host>` | Brain hostname or IP (compose service name `brain`) |
 | `-port <N>` | Socket.IO port on the brain for this car |
 

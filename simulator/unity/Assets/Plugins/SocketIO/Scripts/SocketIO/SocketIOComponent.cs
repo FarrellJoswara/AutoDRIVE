@@ -170,7 +170,9 @@ namespace SocketIO
 			if(wsConnected != ws.IsConnected){
 				wsConnected = ws.IsConnected;
 				if(wsConnected){
-					EmitEvent("connect");
+					// This is only the Engine.IO transport connection. The Socket.IO
+					// namespace is not ready until the server accepts our CONNECT packet.
+					EmitEvent("open");
 				} else {
 					EmitEvent("disconnect");
 				}
@@ -350,6 +352,9 @@ namespace SocketIO
 
 		private void OnMessage(object sender, MessageEventArgs e)
 		{
+			// OnEnable can replace the websocket while an old connection is
+			// shutting down. Ignore packets from that stale socket instance.
+			if (!object.ReferenceEquals(sender, ws)) { return; }
 			#if SOCKET_IO_DEBUG
 			debugMethod.Invoke("[SocketIO] Raw message: " + e.Data);
 			#endif
@@ -370,6 +375,10 @@ namespace SocketIO
 			debugMethod.Invoke("[SocketIO] Socket.IO sid: " + packet.json["sid"].str);
 			#endif
 			sid = packet.json["sid"].str;
+			// Engine.IO v4 does not implicitly connect the default Socket.IO
+			// namespace. Without this packet, websocket PING/PONG works but no
+			// Socket.IO events (including Bridge telemetry) can ever be exchanged.
+			EmitPacket(new Packet(EnginePacketType.MESSAGE, SocketPacketType.CONNECT, 0, "/", -1, null));
 			EmitEvent("open");
 		}
 
@@ -386,6 +395,11 @@ namespace SocketIO
 
 		private void HandleMessage(Packet packet)
 		{
+			if(packet.socketPacketType == SocketPacketType.CONNECT){
+				lock(eventQueueLock){ eventQueue.Enqueue(new SocketIOEvent("connect")); }
+				return;
+			}
+
 			if(packet.json == null) { return; }
 
 			if(packet.socketPacketType == SocketPacketType.ACK){

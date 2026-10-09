@@ -139,10 +139,16 @@ connection at the trainer container's relay:
 
 ```powershell
 docker run --rm --name aicar-official-train-sim `
+  --gpus all `
   --network aicar-official-train `
   --entrypoint /bin/bash autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice `
-  -lc './AutoDRIVE\ Simulator.x86_64 -batchmode -nographics -ip api -port 4568'
+  -lc 'xvfb-run -a -s "-screen 0 1280x720x24" "./AutoDRIVE Simulator.x86_64" -ip api -port 4568'
 ```
+
+This uses AutoDRIVE's camera-capable Linux headless mode. The host Docker
+runtime must provide a supported graphics renderer to the simulator container;
+`-nographics` disables camera rendering and must not be used with the camera
+observation profile.
 
 `AICAR_MODE=train` is a development/training mode, not a submission mode. It
 enables restricted reward/reset handling only inside the trainer. `AICAR_MODE=policy`

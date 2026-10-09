@@ -122,8 +122,9 @@ class OfficialRunManagerTests(unittest.TestCase):
                    and item["Labels"].get("aicar.role") == "sim")
         self.assertEqual(
             sim["kwargs"]["command"],
-            ['"./AutoDRIVE Simulator.x86_64" -batchmode -nographics -ip api -port 4568'],
+            ['xvfb-run -a -s "-screen 0 1280x720x24" "./AutoDRIVE Simulator.x86_64" -ip api -port 4568'],
         )
+        self.assertTrue(sim["kwargs"]["gpu"])
 
         stopped = self.manager.stop_run(first["run_id"])
         self.assertEqual(stopped["state"], "stopped")

@@ -359,7 +359,7 @@ env.close()
 | Mode | Flags |
 | :--- | :--- |
 | **Headed** (local Windows) | `-ip 127.0.0.1 -port <PORT>` then click **Connect** |
-| **Headless** (Docker) | `-batchmode -nographics -ip <brain> -port <PORT>` |
+| **Camera-capable headless** | `xvfb-run -a "./AutoDRIVE Simulator.x86_64" -batchmode -ip <brain> -port <PORT>` (requires a graphics-capable host) |
 
 ---
 

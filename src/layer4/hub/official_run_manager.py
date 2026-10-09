@@ -80,6 +80,21 @@ def _safe_display_name(value: Optional[str]) -> str:
     return name
 
 
+def _official_simulator_command(api_alias: str) -> str:
+    """Launch the official player headlessly while keeping camera rendering on.
+
+    AutoDRIVE's camera-capable Linux headless mode uses Xvfb. ``-nographics``
+    explicitly disables all rendering, which leaves the required camera input
+    unavailable to the official camera observation profile.
+    """
+    if api_alias not in {"api", *(f"api-{index}" for index in range(1, 8))}:
+        raise ValueError("invalid official API network alias")
+    return (
+        'xvfb-run -a -s "-screen 0 1280x720x24" '
+        f'"./AutoDRIVE Simulator.x86_64" -ip {api_alias} -port 4568'
+    )
+
+
 class OfficialRunManager:
     """Manage independent official API+simulator container pairs.
 
@@ -316,9 +331,10 @@ class OfficialRunManager:
                         env=[f"ROS_DOMAIN_ID={index}", "AICAR_MODE=bridge"] if role.startswith("api") else [],
                         entrypoint=None if role.startswith("api") else ["/bin/bash", "-lc"],
                         command=None if role.startswith("api") else [
-                            f'"./AutoDRIVE Simulator.x86_64" -batchmode -nographics -ip api-{index} -port 4568'
+                            _official_simulator_command(f"api-{index}")
                         ],
                         metadata_labels=self._container_metadata(row),
+                        gpu=role.startswith("sim"),
                     )
                     with self._lock:
                         row.setdefault("worker_container_ids", {})[role] = worker_id
@@ -327,8 +343,9 @@ class OfficialRunManager:
                 run_id=run_id, role="sim", image=row["simulator_image"],
                 network_name=row["network_name"],
                 entrypoint=["/bin/bash", "-lc"],
-                command=['"./AutoDRIVE Simulator.x86_64" -batchmode -nographics -ip api -port 4568'],
+                command=[_official_simulator_command("api")],
                 metadata_labels=self._container_metadata(row),
+                gpu=True,
             )
             with self._lock:
                 row["sim_container_id"] = sim_id

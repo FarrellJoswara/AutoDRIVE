@@ -33,7 +33,7 @@ def _cmd_layer1(args: argparse.Namespace) -> int:
         print(f"ERROR: Simulator not found at {sim_path}")
         return 1
 
-    mode = "Headless (-batchmode -nographics)" if args.headless else "Headed Visual GUI"
+    mode = "Headless UI (-batchmode; camera rendering enabled)" if args.headless else "Headed Visual GUI"
     ports = ", ".join(str(args.base_port + i) for i in range(num_racers))
 
     print("\n" + "=" * 75)
@@ -292,7 +292,7 @@ def main() -> int:
         default=None,
         help="Fleet size (default: 1 if --headless else 2)",
     )
-    p1.add_argument("--headless", action="store_true", help="batchmode / nographics")
+    p1.add_argument("--headless", action="store_true", help="run without interactive UI; keep camera rendering enabled")
     p1.add_argument("--duration", type=float, default=15.0, help="Drive seconds")
     p1.add_argument("--base-port", type=int, default=4567)
     p1.set_defaults(func=_cmd_layer1)

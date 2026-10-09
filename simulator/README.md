@@ -34,7 +34,7 @@ python scripts/demo.py play --model logs/rl/.../final_model.zip --no-headless
 Flags the driver passes:
 
 - **Headed:** `-ip 127.0.0.1 -port <PORT>` (then click **Connect**)
-- **Headless:** `-batchmode -nographics -ip 127.0.0.1 -port <PORT>` (auto-connect)
+- **Headless UI:** `-batchmode -ip 127.0.0.1 -port <PORT>` (auto-connect; graphics and camera rendering stay enabled; Linux requires Xvfb)
 
 Docker A/B: mount this folder into sim + brain containers; compose sets
 `AICAR_SIMULATOR_PATH=/app/simulator/AutoDRIVE Simulator.x86_64`.

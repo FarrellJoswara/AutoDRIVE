@@ -24,14 +24,88 @@ def replace_once(path: Path, old: str, new: str) -> None:
         stream.write(text.replace(old, new, 1))
 
 
+def patch_frame_grabber(path: Path) -> None:
+    """Provide headless cameras a target and render it before CPU readback."""
+    existing = (
+        "        camera.Render(); // Force camera update before reading its RenderTexture\n"
+        "        RenderTexture targetTexture = camera.targetTexture;\n"
+    )
+    patched = (
+        "        RenderTexture targetTexture = camera.targetTexture;\n"
+        "        if (targetTexture == null && Application.isBatchMode)\n"
+        "        {\n"
+        "            targetTexture = new RenderTexture(1280, 720, 16, RenderTextureFormat.ARGB32);\n"
+        "            targetTexture.Create();\n"
+        "            camera.targetTexture = targetTexture;\n"
+        "        }\n"
+        "        if (targetTexture == null)\n"
+        "        {\n"
+        "            Debug.LogError(\"[AiCar.Camera] missing target texture; camera frame skipped\");\n"
+        "            return new byte[0];\n"
+        "        }\n"
+        "        camera.Render(); // Force camera update before reading its RenderTexture\n"
+    )
+    text = path.read_text(encoding="utf-8")
+    if patched in text:
+        return
+    replace_once(path, existing if existing in text else "        RenderTexture targetTexture = camera.targetTexture;\n", patched)
+
+
+def patch_socket_telemetry_dispatch(path: Path) -> None:
+    """Emit Bridge data directly from Unity's main-thread Socket.IO callbacks.
+
+    SocketIOComponent pumps callbacks in Update/FixedUpdate, so EmitTelemetry is
+    already on Unity's main thread. The vendor scene has no
+    UnityMainThreadDispatcher object; routing through it silently drops the
+    first telemetry packet because SocketIOComponent swallows callback errors.
+    """
+    text = path.read_text(encoding="utf-8")
+    wrapped = (
+        "    void EmitTelemetry(SocketIOEvent obj, int stepId = 0, int physicsTicks = 0, string stepError = null)\n"
+        "    {\n"
+        "        UnityMainThreadDispatcher.Instance().Enqueue(() =>\n"
+        "        {\n"
+    )
+    if wrapped not in text:
+        if "UnityMainThreadDispatcher.Instance().Enqueue" not in text and 'socket.Emit("Bridge", new JSONObject(data));' in text:
+            return
+        raise RuntimeError(f"expected telemetry-dispatch wrapper missing in {path}")
+
+    start = text.index(wrapped) + len(wrapped)
+    close = "        });\n    }\n"
+    end = text.find(close, start)
+    if end < 0:
+        raise RuntimeError(f"expected telemetry-dispatch closing anchor missing in {path}")
+    body = text[start:end]
+    replacement = (
+        "    void EmitTelemetry(SocketIOEvent obj, int stepId = 0, int physicsTicks = 0, string stepError = null)\n"
+        "    {\n" + body + "    }\n"
+    )
+    text = text[:text.index(wrapped)] + replacement + text[end + len(close):]
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        stream.write(text)
+
+
 def main() -> None:
     if not (PROJECT / "ProjectSettings" / "ProjectVersion.txt").is_file():
         raise SystemExit(f"Unity project not found: {PROJECT}")
+
+    # In batch/offscreen runs Unity does not necessarily render every camera
+    # automatically. The recorder already forces a render before ReadPixels;
+    # the Bridge's FrameGrabber must do the same or it can publish stale/black
+    # camera frames even while the RenderTexture is configured correctly.
+    frame_grabber = PROJECT / "Assets" / "Scripts" / "FrameGrabber.cs"
+    patch_frame_grabber(frame_grabber)
 
     gate_source = ROOT / "simulator" / "unity" / "Assets" / "Scripts" / "AiCar" / "AiCarSimulationGate.cs"
     gate_target = PROJECT / "Assets" / "Scripts" / "AiCar" / "AiCarSimulationGate.cs"
     shutil.copy2(gate_source, gate_target)
     shutil.copy2(gate_source.with_suffix(gate_source.suffix + ".meta"), gate_target.with_suffix(gate_target.suffix + ".meta"))
+
+    force_connect_source = ROOT / "simulator" / "unity" / "Assets" / "Scripts" / "AiCar" / "ForceConnect.cs"
+    force_connect_target = PROJECT / "Assets" / "Scripts" / "AiCar" / "ForceConnect.cs"
+    shutil.copy2(force_connect_source, force_connect_target)
+    shutil.copy2(force_connect_source.with_suffix(force_connect_source.suffix + ".meta"), force_connect_target.with_suffix(force_connect_target.suffix + ".meta"))
 
     build_source = ROOT / "simulator" / "unity" / "Assets" / "Scripts" / "AiCar" / "Editor" / "AiCarPlayerBuild.cs"
     build_target = PROJECT / "Assets" / "Scripts" / "AiCar" / "Editor" / "AiCarPlayerBuild.cs"
@@ -71,6 +145,19 @@ def main() -> None:
         "using System;\nusing SocketIO;",
         "using System;\nusing System.Globalization;\nusing SocketIO;",
     )
+    replace_once(
+        socket,
+        "    void OnConnect(SocketIOEvent obj)\n    {\n        //Debug.Log(\"Connected!\");\n        ConnectionButton.interactable = false;\n        ConnectionLabel.text = \"Connected\";\n        EmitTelemetry(obj);\n    }",
+        "    void OnConnect(SocketIOEvent obj)\n    {\n"
+        "        Debug.Log(\"[AiCar.Socket] Socket.IO namespace connected; sending initial Bridge telemetry\");\n"
+        "        if (ConnectionButton != null) ConnectionButton.interactable = false;\n"
+        "        if (ConnectionLabel != null) ConnectionLabel.text = \"Connected\";\n"
+        "        try { EmitTelemetry(obj); }\n"
+        "        catch (Exception ex) { Debug.LogError(\"[AiCar.Socket] initial Bridge telemetry failed: \" + ex); }\n"
+        "    }",
+    )
+    replace_once(socket, "        ConnectionButton.interactable = true;", "        if (ConnectionButton != null) ConnectionButton.interactable = true;")
+    replace_once(socket, "        ConnectionLabel.text = \"Disconnected\";", "        if (ConnectionLabel != null) ConnectionLabel.text = \"Disconnected\";")
     socket_text = socket.read_text(encoding="utf-8")
     if "private bool disableCameraStream;" not in socket_text:
         replace_once(socket, "    private SocketIOComponent socket; // Socket.IO instance\n",
@@ -162,6 +249,7 @@ def main() -> None:
         "                data[\"AICAR Step Error\"] = stepError ?? gate.ConfigurationError ?? \"\";\n"
         "            }\n",
     )
+    patch_socket_telemetry_dispatch(socket)
     print("Prepared opt-in fixed-tick action mode in", PROJECT)
 
 

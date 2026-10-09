@@ -36,6 +36,12 @@ def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
         if item["Labels"]["aicar.role"].startswith("sim")
     }
     assert simulator_images == {"autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"}
+    simulators = [item for item in containers if item["Labels"]["aicar.role"].startswith("sim")]
+    assert all(item["kwargs"]["gpu"] is True for item in simulators)
+    assert all("xvfb-run" in item["kwargs"]["command"][0] for item in simulators)
+    assert all("-nographics" not in item["kwargs"]["command"][0] for item in simulators)
+    assert {item["kwargs"]["command"][0].split("-ip ", 1)[1].split()[0]
+            for item in simulators} == {"api", "api-1", "api-2"}
     manager.stop_run(run["run_id"])
     assert not manager.backend.containers
     assert not manager.backend.networks

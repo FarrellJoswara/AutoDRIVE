@@ -79,7 +79,7 @@ echo "[sim] DISPLAY=$DISPLAY"
 echo "[sim] binary=$SIM_PATH"
 echo "[sim] connecting to brain=$BRAIN_HOST ($BRAIN_IP) port=$SIM_PORT"
 echo "[sim] AICAR_MAP_ID=${AICAR_MAP_ID:-"(builtin)"} (via env/file, not argv)"
-echo "[sim] flags: -batchmode -nographics -ip $BRAIN_IP -port $SIM_PORT"
+echo "[sim] flags: -batchmode -ip $BRAIN_IP -port $SIM_PORT (camera rendering enabled)"
 
 # Unity's Socket.IO client crashes in its native error logger when it repeatedly
 # receives connection-refused errors during bridge startup. Keep the player
@@ -102,4 +102,4 @@ fi
 echo "[sim] bridge listener ready; starting Unity"
 
 cd "$(dirname "$SIM_PATH")"
-exec "$SIM_PATH" -batchmode -nographics -ip "$BRAIN_IP" -port "$SIM_PORT"
+exec "$SIM_PATH" -batchmode -ip "$BRAIN_IP" -port "$SIM_PORT"

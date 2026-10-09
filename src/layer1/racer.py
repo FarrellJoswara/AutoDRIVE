@@ -590,7 +590,10 @@ class Racer:
 
         flags = []
         if self.headless:
-            flags.extend(["-batchmode", "-nographics"])
+            # Batch mode suppresses Unity's interactive UI, while leaving its
+            # graphics device available for camera capture.  -nographics also
+            # disables render textures and therefore breaks camera observations.
+            flags.append("-batchmode")
         elif not is_windows:
             flags.extend(["-force-vulkan"])
         if self.simulator_log_path is not None:
@@ -610,17 +613,24 @@ class Racer:
             sim_name = self.simulator_path.name
             target_ip = _get_wsl_host_ip()
             flags.extend(["-ip", target_ip, "-port", str(self.port)])
+            sim_argv = [f"./{sim_name}", *flags]
+            if self.headless:
+                sim_argv = [
+                    "xvfb-run", "-a", "-s", "-screen 0 1280x720x24", *sim_argv,
+                ]
             action_interval_env = (
                 f"export AICAR_ACTION_INTERVAL_SECONDS='{self.action_interval_s:.17g}' && "
                 if self._explicit_mode else ""
             )
             cmd_str = (
                 action_interval_env + f"cd {shlex.quote(wsl_dir)} && "
-                + shlex.join([f"./{sim_name}", *flags])
+                + shlex.join(sim_argv)
             )
             cmd = ["wsl", "bash", "-c", cmd_str]
         else:
             cmd = [str(self.simulator_path.resolve())]
+            if self.headless and is_linux_elf:
+                cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", *cmd]
             flags.extend(["-ip", "127.0.0.1", "-port", str(self.port)])
             cmd.extend(flags)
 

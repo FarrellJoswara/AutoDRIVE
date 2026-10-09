@@ -132,25 +132,31 @@ namespace AiCar
                 return false;
             }
 
-            // One connect path only: bounce so OnEnable rebuilds ws URL + autoConnect.
-            // Do NOT also InvokeConnect — that races WebSocketSharp ("already established").
+            // Activating the GameObjects already runs SocketIOComponent.OnEnable
+            // (and autoConnect) when the scene starts with them inactive. Bouncing
+            // after activation starts a second WebSocket and leaves stale callbacks
+            // attached to the first one. Only bounce components that were already
+            // active when we applied the command-line address.
             bool bounced = false;
-            foreach (var sio in socketIos)
+            if (!activated)
             {
-                if (sio == null) continue;
-                var go = sio.gameObject;
-                if (go == null) continue;
-                EnsureActiveHierarchy(go);
-                if (!go.activeInHierarchy) continue;
-                go.SetActive(false);
-                go.SetActive(true);
-                bounced = true;
-                Debug.Log($"[AiCar.ForceConnect] bounced SocketIO GameObject '{GetPath(go.transform)}'");
+                foreach (var sio in socketIos)
+                {
+                    if (sio == null) continue;
+                    var go = sio.gameObject;
+                    if (go == null) continue;
+                    EnsureActiveHierarchy(go);
+                    if (!go.activeInHierarchy) continue;
+                    go.SetActive(false);
+                    go.SetActive(true);
+                    bounced = true;
+                    Debug.Log($"[AiCar.ForceConnect] refreshed active SocketIO GameObject '{GetPath(go.transform)}'");
+                }
             }
 
             SuppressSocketErrorFormatting(socketIos);
 
-            if (!bounced)
+            if (!activated && !bounced)
             {
                 // Fallback when bounce isn't possible (already active / no GO).
                 InvokeConnect(socketIos);
