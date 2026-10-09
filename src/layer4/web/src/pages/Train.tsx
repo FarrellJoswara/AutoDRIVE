@@ -507,7 +507,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
 
       {message && <p className="msg ok" role="status">{message}</p>}
       {error && <p className="msg err" role="alert">{error}</p>}
-      {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", behavior_cloning_ready: "BC policy saved for official evaluation", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase} · step {formatCount(selectedPhase.step)}.</p>}
+      {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", behavior_cloning_ready: "BC policy saved for official evaluation", behavior_cloning_rejected: "BC rejected; PPO did not start", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase}{selectedPhase.reason ? ` · ${selectedPhase.reason}` : ""} · step {formatCount(selectedPhase.step)}.</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
       {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>

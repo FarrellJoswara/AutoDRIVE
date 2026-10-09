@@ -66,6 +66,7 @@ function phaseLabel(phase: OfficialRunTelemetry["training_phase"]): string | nul
     case "demonstration_collection": return "Collecting teacher demonstrations";
     case "behavior_cloning": return "Training the initial policy from demonstrations";
     case "behavior_cloning_ready": return "BC policy saved for official evaluation";
+    case "behavior_cloning_rejected": return "BC rejected: teacher did not complete a collision-free episode";
     case "rollout": return "Collecting PPO rollout";
     case "ppo_update": return "Updating the PPO policy";
     case "stopped": return "Training stopped";
@@ -168,7 +169,7 @@ function OverviewTile({
         </div>
         <span className="badge" data-state={run.state}>{run.state}</span>
       </div>
-      {stage && <p className="meta" style={{ margin: "0.35rem 0 0" }}>{stage}{snapshot?.training_phase?.phase === "demonstration_collection" ? " · PPO has not started" : ""}</p>}
+      {stage && <p className="meta" style={{ margin: "0.35rem 0 0" }}>{stage}{snapshot?.training_phase?.reason ? ` · ${snapshot.training_phase.reason}` : ""}{snapshot?.training_phase?.phase === "demonstration_collection" ? " · PPO has not started" : ""}</p>}
       {runIsActive && <div className="watch-overview-canvas" style={{ height: 132, minHeight: 0, marginTop: "0.6rem", overflow: "hidden", border: "1px solid var(--line, #263b34)" }}>
         {canvasVisible ? <>
         <FleetCanvas

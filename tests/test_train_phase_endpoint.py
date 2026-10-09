@@ -37,3 +37,27 @@ def test_unknown_training_phase_is_rejected():
 
     with pytest.raises(HTTPException, match="invalid training phase"):
         asyncio.run(hub_app.post_train_phase(SimpleNamespace(json=json_payload)))
+
+
+def test_behavior_cloning_rejection_phase_is_accepted_and_published(monkeypatch):
+    payload = {
+        "kind": "phase",
+        "phase": "behavior_cloning_rejected",
+        "run_id": "bc-rejected",
+        "step": 0,
+        "reason": "teacher_collection_collision_detected",
+        "readiness": {"ready": False, "collision_count": 1},
+    }
+    ingested = []
+    published = []
+    monkeypatch.setattr(hub_app.official_runs, "ingest_telemetry", ingested.append)
+    monkeypatch.setattr(hub_app.bus, "publish_train_phase", published.append)
+
+    async def json_payload():
+        return payload
+
+    response = asyncio.run(hub_app.post_train_phase(SimpleNamespace(json=json_payload)))
+
+    assert response == {"ok": "1"}
+    assert ingested == [payload]
+    assert published == [payload]

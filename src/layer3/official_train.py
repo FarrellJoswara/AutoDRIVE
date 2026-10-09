@@ -487,7 +487,8 @@ def train_official(
         if resume is None and behavior_cloning_enabled:
             from src.layer2.route_progress import RouteProgressTracker
             from src.layer3.behavior_cloning import (
-                behavior_clone_actor, collect_centerline_demonstrations,
+                assess_teacher_collection, behavior_clone_actor,
+                collect_centerline_demonstrations,
                 initialize_behavior_cloned_action_std,
                 save_behavior_cloned_checkpoint,
             )
@@ -543,6 +544,45 @@ def train_official(
                 return target
             if collection_summary["transitions"] < 2:
                 raise RuntimeError("official teacher did not produce enough demonstrations to initialize PPO")
+            collection_gate = assess_teacher_collection(collection_summary)
+            if not collection_gate["ready"]:
+                failure = {
+                    "status": "rejected",
+                    "usable": False,
+                    "reason": collection_gate["reason"],
+                    "readiness": collection_gate,
+                    "transitions": int(collection_summary["transitions"]),
+                    "collection": collection_summary,
+                    "checkpoint": None,
+                }
+                (out_dir / "behavior_cloning_summary.json").write_text(
+                    json.dumps(failure, indent=2), encoding="utf-8"
+                )
+                (out_dir / "stop_reason.json").write_text(
+                    json.dumps({
+                        "reason": f"behavior_cloning_rejected: {collection_gate['reason']}",
+                        "failure_code": "behavior_cloning_rejected",
+                        "detail": collection_gate["reason"],
+                        "usable_checkpoint": False,
+                        "num_timesteps": int(model.num_timesteps),
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+                publish_phase(
+                    "behavior_cloning_rejected",
+                    reason=collection_gate["reason"],
+                    readiness=collection_gate,
+                    transitions=int(collection_summary["transitions"]),
+                )
+                print(
+                    "Behavior cloning rejected; PPO will not start: "
+                    f"{collection_gate['reason']}. Demonstrations and diagnostics were preserved.",
+                    file=sys.stderr, flush=True,
+                )
+                raise RuntimeError(
+                    "behavior cloning safety gate rejected teacher collection: "
+                    f"{collection_gate['reason']}"
+                )
             publish_phase(
                 "behavior_cloning",
                 transitions=collection_summary["transitions"],
@@ -563,6 +603,9 @@ def train_official(
                     initialize_behavior_cloned_action_std(model)
                 )
             cloning_summary["collection"] = collection_summary
+            cloning_summary["status"] = "ready"
+            cloning_summary["usable"] = True
+            cloning_summary["readiness"] = collection_gate
             cloned_checkpoint = save_behavior_cloned_checkpoint(model, out_dir)
             cloning_summary["checkpoint"] = str(cloned_checkpoint)
             (out_dir / "behavior_cloning_summary.json").write_text(
@@ -594,6 +637,9 @@ def train_official(
                         "teacher": "route-aware pure pursuit on official Porto centerline",
                         "steps_per_environment": behavior_cloning_steps_per_env,
                         "checkpoint": cloned_checkpoint.name,
+                        "status": "ready",
+                        "usable": True,
+                        "readiness": collection_gate,
                         "summary": cloning_summary,
                         "policy_inputs": list(model.observation_space.spaces.keys()),
                         "privileged_teacher_state_saved": False,
@@ -614,6 +660,7 @@ def train_official(
                     "behavior_cloning_ready",
                     checkpoint=cloned_checkpoint.name,
                     transitions=collection_summary["transitions"],
+                    readiness=collection_gate,
                 )
                 print(
                     f"BC-only run complete; saved policy for official evaluation: {cloned_checkpoint}",

@@ -12,6 +12,7 @@ import torch
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from src.layer3.behavior_cloning import (
+    assess_teacher_collection,
     behavior_clone_actor,
     collect_policy_demonstrations,
     initialize_behavior_cloned_action_std,
@@ -40,6 +41,36 @@ class _SensorEnv(gym.Env):
 
 
 class BehaviorCloningTests(unittest.TestCase):
+    def test_teacher_collection_gate_accepts_only_clean_collision_free_episode(self) -> None:
+        clean = assess_teacher_collection({
+            "completed_episodes": 1,
+            "successful_episodes": 1,
+            "collision_count": 0,
+            "termination_counts": {"lap_complete": 1},
+        })
+        self.assertTrue(clean["ready"])
+        self.assertIsNone(clean["reason"])
+
+        collided = assess_teacher_collection({
+            "completed_episodes": 1,
+            "successful_episodes": 0,
+            "collision_count": 1,
+            "termination_counts": {"collision": 1},
+        })
+        self.assertFalse(collided["ready"])
+        self.assertIn("teacher_collection_no_clean_episode", collided["reason"])
+        self.assertIn("teacher_collection_collision_detected", collided["reason"])
+        self.assertIn("teacher_collection_failed_episode", collided["reason"])
+
+    def test_teacher_collection_gate_rejects_missing_clean_episode(self) -> None:
+        result = assess_teacher_collection({
+            "completed_episodes": 0,
+            "successful_episodes": 0,
+            "termination_counts": {},
+        })
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["reason"], "teacher_collection_no_clean_episode")
+
     def test_route_progress_publisher_uses_route_length_meters(self) -> None:
         phases = []
         route = type("Route", (), {"length_m": 31.1})()

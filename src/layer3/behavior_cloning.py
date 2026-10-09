@@ -62,6 +62,7 @@ def collect_centerline_demonstrations(
     successful_episodes = 0
     completed_episodes = 0
     termination_counts: Dict[str, int] = {}
+    collision_count = 0
     termination_examples = []
     n_envs = int(vec_env.num_envs)
     # Keep compact, non-identifying diagnostics so a saved BC run can prove
@@ -111,6 +112,8 @@ def collect_centerline_demonstrations(
             action_rows.append(actions[env_index])
         observations, _, dones, infos = vec_env.step(actions)
         for env_index, (done, info) in enumerate(zip(dones, infos)):
+            if bool(info.get("collision_event", False)):
+                collision_count += 1
             progress = info.get("current_progress_m")
             if progress is not None:
                 progress = float(progress)
@@ -242,10 +245,43 @@ def collect_centerline_demonstrations(
         "transitions": int(len(action_rows)),
         "completed_episodes": completed_episodes,
         "successful_episodes": successful_episodes,
+        "collision_count": collision_count,
         "termination_counts": termination_counts,
         "termination_examples": termination_examples,
         "route_direction_diagnostics": route_diagnostics,
         "route_episode_diagnostics": route_episode_diagnostics,
+    }
+
+
+def assess_teacher_collection(collection_summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Fail closed unless demonstrations include a clean episode and no collisions."""
+    successful_episodes = int(collection_summary.get("successful_episodes", 0) or 0)
+    completed_episodes = int(collection_summary.get("completed_episodes", 0) or 0)
+    termination_counts = collection_summary.get("termination_counts") or {}
+    # Older summaries may lack the explicit event counter; retain a conservative
+    # fallback based on episode termination reasons.
+    event_collisions = int(collection_summary.get("collision_count", 0) or 0)
+    terminated_by_collision = sum(
+        int(count or 0)
+        for reason, count in termination_counts.items()
+        if "collision" in str(reason).lower()
+    )
+    collisions = max(event_collisions, terminated_by_collision)
+    reasons = []
+    if successful_episodes < 1:
+        reasons.append("teacher_collection_no_clean_episode")
+    if collisions > 0:
+        reasons.append("teacher_collection_collision_detected")
+    failed_episodes = max(0, completed_episodes - successful_episodes)
+    if failed_episodes > 0:
+        reasons.append("teacher_collection_failed_episode")
+    return {
+        "ready": not reasons,
+        "reason": None if not reasons else ";".join(reasons),
+        "successful_episodes": successful_episodes,
+        "completed_episodes": completed_episodes,
+        "failed_episodes": failed_episodes,
+        "collision_count": collisions,
     }
 
 
