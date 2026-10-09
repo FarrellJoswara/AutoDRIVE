@@ -31,7 +31,7 @@ class _ObservationEnv(gym.Env):
         self.observation_space = gym.spaces.Dict({
             "lidar": gym.spaces.Box(0.0, 1.0, shape=(1081,), dtype=np.float32),
             "camera": gym.spaces.Box(0, 255, shape=(90, 160, 3), dtype=np.uint8),
-            "state": gym.spaces.Box(-10.0, 10.0, shape=(9,), dtype=np.float32),
+            "state": gym.spaces.Box(-5.0, 5.0, shape=(9,), dtype=np.float32),
         })
         self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
 
