@@ -109,6 +109,7 @@ class RewardConfig:
     # Subtracted as: steer_jerk_penalty * abs(steering - prev_steering).
     # Default 0.0 = allow twitchy steering without score cost.
     steer_jerk_penalty: float = 0.0
+    centerline_shaping_delta: float = 0.0
 
 
 def compute_reward_components(
@@ -182,6 +183,7 @@ def compute_reward_components(
         "episode_failure": 0.0,
         "slip": 0.0,
         "steering_change": 0.0,
+        "centerline_shaping": float(cfg.centerline_shaping_delta),
     }
 
     # Penalize reverse travel by distance, not by action sign: negative throttle

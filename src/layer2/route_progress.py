@@ -216,7 +216,9 @@ class RouteProgressTracker:
         tangent = self._seg[i] / max(length, 1e-8)
         return point.copy(), tangent.copy()
 
-    def _project(self, x: float, z: float, frontier: Optional[float]):
+    def _project(
+        self, x: float, z: float, frontier: Optional[float], *, enforce_corridor: bool = True
+    ):
         pos = np.asarray([x, z], dtype=np.float64)
         laps = (0,)
         if self.closed and frontier is not None:
@@ -246,11 +248,13 @@ class RouteProgressTracker:
         best = None
         for lap in laps:
             route_s = base_s + (lap * self.length_m if self.closed else 0.0)
-            acceptable = lateral <= self.max_lateral_m
-            # Widths are map-derived half-corridor estimates, so keep a small
-            # tolerance for rasterization while rejecting off-corridor poses.
-            acceptable &= signed_lateral <= left_width + 0.15
-            acceptable &= signed_lateral >= -(right_width + 0.15)
+            acceptable = np.ones_like(lateral, dtype=bool)
+            if enforce_corridor:
+                acceptable &= lateral <= self.max_lateral_m
+                # Widths are map-derived half-corridor estimates, so keep a small
+                # tolerance for rasterization while rejecting off-corridor poses.
+                acceptable &= signed_lateral <= left_width + 0.15
+                acceptable &= signed_lateral >= -(right_width + 0.15)
             if frontier is not None:
                 acceptable &= route_s >= frontier - self.backward_tolerance_m
                 acceptable &= route_s <= frontier + self.max_forward_m
@@ -274,6 +278,19 @@ class RouteProgressTracker:
             return None
         lateral_distance, route_s = best
         return route_s, lateral_distance
+
+    def lateral_distance(self, x: float, z: float) -> Optional[float]:
+        """Measure distance from the pose to the locally ordered route center.
+
+        This diagnostic is deliberately allowed outside the drivable corridor:
+        training can learn to steer back before the progress projection rejects
+        an off-track pose. Route ordering remains constrained around current_s.
+        """
+        reference = self.current_s if self.current_s is not None else self.frontier_s
+        candidate = self._project(
+            float(x), float(z), reference, enforce_corridor=False
+        )
+        return None if candidate is None else float(candidate[1])
 
     def _line_at(self, route_s: float) -> Tuple[np.ndarray, np.ndarray]:
         local_s = route_s % self.length_m if self.closed else min(route_s, self.length_m)

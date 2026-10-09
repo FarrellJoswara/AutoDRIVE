@@ -137,6 +137,7 @@ class OfficialRaceEnv(gym.Env):
         self._episode_frontier_distance_m = 0.0
         self._frontier_last_push_s = 0.0
         self._last_training_steering = 0.0
+        self._centerline_potential = 0.0
         self.racer = racer or RacerRos2(
             vehicle_id=vehicle_id,
             timeout_s=timeout_s,
@@ -231,6 +232,7 @@ class OfficialRaceEnv(gym.Env):
         self._episode_frontier_distance_m = 0.0
         self._frontier_last_push_s = 0.0
         self._last_training_steering = 0.0
+        self._centerline_potential = 0.0
         if self.route_progress is not None:
             position = metrics.position
             if position is None:
@@ -246,6 +248,14 @@ class OfficialRaceEnv(gym.Env):
                         f"({spawn_error:.2f} m away); refusing to anchor the route frontier"
                     )
             self.route_progress.reset(float(position[0]), float(position[1]), now=0.0)
+            initial_lateral = self.route_progress.lateral_distance(
+                float(position[0]), float(position[1])
+            )
+            if initial_lateral is not None:
+                lateral_ratio = min(
+                    1.0, initial_lateral / self.route_progress.max_lateral_m
+                )
+                self._centerline_potential = -5.0 * lateral_ratio * lateral_ratio
         self._last_snap = snap
         initial_obs = self._observation_builder.reset(snap)
         info = self._build_info(snap, metrics, collision_event=False)
@@ -383,6 +393,19 @@ class OfficialRaceEnv(gym.Env):
                 progress = self.route_progress.update(
                     float(position[0]), float(position[1]), now=self._training_elapsed_s
                 )
+            centerline_shaping = 0.0
+            lateral_distance = getattr(self.route_progress, "lateral_distance", None)
+            if callable(lateral_distance) and position is not None:
+                lateral = lateral_distance(
+                    float(position[0]), float(position[1])
+                )
+                if lateral is not None:
+                    lateral_ratio = min(
+                        1.0, lateral / self.route_progress.max_lateral_m
+                    )
+                    next_potential = -5.0 * lateral_ratio * lateral_ratio
+                    centerline_shaping = next_potential - self._centerline_potential
+                    self._centerline_potential = next_potential
             frontier_advanced = max(0.0, float((progress or {}).get("advanced_m", 0.0)))
             rewardable_frontier_advanced = min(
                 frontier_advanced,
@@ -452,6 +475,7 @@ class OfficialRaceEnv(gym.Env):
                     episode_failure_reward_percent=self.training_failure_reward_percent,
                     slip_penalty=0.0,
                     steer_jerk_penalty=0.0,
+                    centerline_shaping_delta=centerline_shaping,
                 ),
                 lap_completion_count=completed_since_last,
             )
@@ -487,6 +511,7 @@ class OfficialRaceEnv(gym.Env):
             info["training_frontier_distance_m"] = self._episode_frontier_distance_m
             info["training_frontier_reward_per_m"] = reward_per_m
             info["training_frontier_reward_cap"] = reward_cap
+            info["training_centerline_shaping"] = centerline_shaping
             info["training_success"] = training_goal_reached
             info["training_frontier_projection_valid"] = (
                 bool(progress.get("current_projection_valid")) if progress is not None else False

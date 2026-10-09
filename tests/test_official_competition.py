@@ -444,6 +444,23 @@ def test_official_training_frontier_route_is_closed_and_spawn_aligned():
     assert previous > motion.length_m * 0.9
 
 
+def test_route_lateral_diagnostic_remains_available_outside_corridor():
+    tracker = RouteProgressTracker(
+        np.asarray([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]),
+        widths_right=np.full(4, 0.4),
+        widths_left=np.full(4, 0.4),
+        max_lateral_m=1.0,
+    )
+    tracker.reset(1.0, 0.0, now=0.0)
+
+    # Progress projection correctly rejects this pose as outside the road, but
+    # steering recovery still needs to know which side of the center it is on.
+    state = tracker.update(2.0, 0.8, now=0.1)
+    assert not state["current_projection_valid"]
+    assert np.isclose(tracker.lateral_distance(2.0, 0.8), 0.8)
+    assert np.isclose(tracker.lateral_distance(2.0, 0.1), 0.1)
+
+
 class FakeRacer:
     def __init__(self, snapshots):
         self.telemetry = snapshots[0]
@@ -828,6 +845,53 @@ def test_official_training_rewards_frontier_and_completed_laps(tmp_path):
     assert info["race_collisions"] == 1
     assert terminated and not truncated
     assert info["termination_reason"] == "collision"
+
+
+def test_official_training_centerline_shaping_teaches_recovery_without_speed_reward(tmp_path):
+    class TrainingRacer(FakeRacer):
+        def __init__(self):
+            start = _snapshot(lap=0, last_lap=0.0, collisions=0, position=(1.0, 0.6, 0.0))
+            super().__init__([
+                start,
+                _snapshot(lap=0, last_lap=0.0, collisions=0, position=(1.0, 0.6, 0.0)),
+                _snapshot(lap=0, last_lap=0.0, collisions=0, position=(1.0, 0.3, 0.0)),
+                _snapshot(lap=0, last_lap=0.0, collisions=1, position=(1.0, 0.8, 0.0)),
+            ])
+            self.last_step_duration_s = 1.0
+
+        def reset_simulation_for_training(self, **kwargs):
+            self.telemetry = _snapshot(
+                lap=0, last_lap=0.0, collisions=0, position=(1.0, 0.6, 0.0)
+            )
+            return self.telemetry
+
+    route = tmp_path / "centerline.csv"
+    route.write_text(
+        "0,0,2,2\n10,0,2,2\n10,10,2,2\n0,10,2,2\n0,0,2,2\n"
+    )
+    (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [1.0, 0.6]}')
+    env = OfficialRaceEnv(
+        racer=TrainingRacer(), training_mode=True, training_timeout_s=0.0,
+        frontier_path=route,
+    )
+    env.reset()
+
+    _, stationary_reward, _, _, stationary_info = env.step(np.zeros(2, dtype=np.float32))
+    assert stationary_info["training_centerline_shaping"] == 0.0
+    assert stationary_info["frontier_advanced_m"] == 0.0
+    assert stationary_reward == 0.0
+
+    _, recovery_reward, _, _, recovery_info = env.step(np.zeros(2, dtype=np.float32))
+    assert recovery_info["training_centerline_shaping"] > 0.0
+    assert recovery_reward == recovery_info["training_centerline_shaping"]
+
+    _, collision_reward, terminated, _, collision_info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+    assert collision_info["training_centerline_shaping"] < 0.0
+    assert collision_info["training_reward_components"]["collision"] == -200.0
+    assert collision_reward < 0.0
+    assert terminated
 
 
 def test_official_training_watchdog_charges_failure_penalty(tmp_path):
