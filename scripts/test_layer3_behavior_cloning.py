@@ -18,6 +18,7 @@ from src.layer3.behavior_cloning import (
     save_behavior_cloned_checkpoint,
 )
 from src.layer3.train import make_model
+from src.layer3.official_train import _demonstration_progress_publisher
 from src.layer2.spaces import LIDAR_BEAMS, STATE_DIM
 
 
@@ -39,6 +40,25 @@ class _SensorEnv(gym.Env):
 
 
 class BehaviorCloningTests(unittest.TestCase):
+    def test_route_progress_publisher_uses_route_length_meters(self) -> None:
+        phases = []
+        route = type("Route", (), {"length_m": 31.1})()
+        publish = _demonstration_progress_publisher(
+            route, lambda phase, **details: phases.append((phase, details))
+        )
+
+        publish(4, 10, [2.5])
+
+        self.assertEqual(phases, [(
+            "demonstration_collection",
+            {
+                "completed_steps_per_env": 4,
+                "target_steps_per_env": 10,
+                "route_progress_m": [2.5],
+                "route_length_m": 31.1,
+            },
+        )])
+
     def test_cloned_policy_uses_safe_action_noise(self) -> None:
         policy = type("Policy", (), {})()
         policy.log_std = torch.nn.Parameter(torch.zeros(2))

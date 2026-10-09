@@ -13,7 +13,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 _OFFICIAL_FIXED_PPO = {
@@ -33,6 +33,24 @@ def _official_simulator_image() -> str:
     """Return the simulator provenance recorded with an official checkpoint."""
     value = os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE", "").strip()
     return value or _DEFAULT_OFFICIAL_SIMULATOR_IMAGE
+
+
+def _demonstration_progress_publisher(route: Any, publish_phase: Any) -> Any:
+    """Adapt collector progress into the public BC phase telemetry payload."""
+    def publish(
+        completed_steps: int,
+        target_steps: int,
+        route_progress_m: list[Optional[float]],
+    ) -> None:
+        publish_phase(
+            "demonstration_collection",
+            completed_steps_per_env=completed_steps,
+            target_steps_per_env=target_steps,
+            route_progress_m=route_progress_m,
+            route_length_m=route.length_m,
+        )
+
+    return publish
 
 
 class AutomaticEvaluationSchedule:
@@ -506,25 +524,12 @@ def train_official(
             expert = CenterlineExpert(route, max_speed_mps=behavior_teacher_max_speed_mps)
             publish_phase("demonstration_collection")
 
-            def publish_demonstration_progress(
-                completed_steps: int,
-                target_steps: int,
-                route_progress_m: list[Optional[float]],
-            ) -> None:
-                publish_phase(
-                    "demonstration_collection",
-                    completed_steps_per_env=completed_steps,
-                    target_steps_per_env=target_steps,
-                    route_progress_m=route_progress_m,
-                    route_length_m=route.length,
-                )
-
             demonstrations, collection_summary = collect_centerline_demonstrations(
                 vec_env, expert,
                 steps=behavior_cloning_steps_per_env,
                 output_path=out_dir / "behavior_cloning_demonstrations.npz",
                 should_stop=stop_requested.is_set,
-                progress_callback=publish_demonstration_progress,
+                progress_callback=_demonstration_progress_publisher(route, publish_phase),
             )
             if stop_requested.is_set():
                 target = out_dir / "official_policy_latest.zip"
