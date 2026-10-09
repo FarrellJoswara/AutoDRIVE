@@ -275,9 +275,21 @@ def train_official(
                 automatic_evaluation_trigger, automatic_evaluation_interval, starting_steps
             )
             self.index = 0
+            self.exploration = None
+
+        def _on_training_start(self) -> None:
+            from src.layer3.official_exploration import OfficialExplorationSchedule
+
+            self.exploration = OfficialExplorationSchedule(self.model, out_dir)
+
+        def _on_rollout_start(self) -> None:
+            if self.exploration is not None:
+                self.exploration.on_rollout_start()
 
         def _on_step(self) -> bool:
             nonlocal out_dir
+            if self.exploration is not None:
+                self.exploration.observe(int(self.model.num_timesteps))
             infos = self.locals.get("infos") or []
             due, step, completed_episodes = self.schedule.observe(int(self.model.num_timesteps), infos)
             if not automatic_evaluation_enabled or not due:
@@ -512,6 +524,13 @@ def train_official(
                 "interval_scope": "run_relative",
                 "attempts_per_snapshot": 3,
                 "protocol": "one warmup lap followed by ten scored race laps",
+            },
+            "exploration_schedule": {
+                "minimum_action_std": 0.2,
+                "maximum_action_std": 0.8,
+                "after_better_valid_ten_lap_score": 0.9,
+                "after_three_stale_official_evaluations": 1.1,
+                "evaluation_metric": "official_valid_ten_lap_time",
             },
             "resume": str(Path(resume).resolve()) if resume else None,
         }
