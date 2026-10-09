@@ -195,6 +195,104 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
     assert reward < -112.5
 
 
+def test_official_training_collision_ends_life_penalizes_and_resets_to_spawn():
+    snap = TelemetrySnapshot(
+        lidar_ranges=np.full(1081, 10.0, dtype=np.float32),
+        lidar_valid=True,
+    )
+    snap.position = (0.0, 0.0, 0.0)
+
+    class FakeRacer:
+        def __init__(self):
+            self.race_metrics = SimpleNamespace(
+                collision_count=1, lap_count=0, last_lap_time=0.0,
+                position=(0.0, 0.0, 0.0),
+            )
+            self.last_step_duration_s = 0.1
+            self.last_control_interval_s = 0.1
+            self.last_control_wall_interval_s = 0.1
+            self.control_interval_source = "test"
+            self.scan_interval_source = "test"
+            self.reset_calls = []
+
+        def step(self, throttle, steering):
+            return snap
+
+        def reset_simulation_for_training(self, **kwargs):
+            self.reset_calls.append(kwargs)
+            return snap
+
+        def wait_for_race_metrics(self):
+            return self.race_metrics
+
+    class FakeObservationBuilder:
+        last_forward_speed_mps = 0.0
+
+        def observe(self, *args, **kwargs):
+            return {"test": np.zeros(1, dtype=np.float32)}
+
+        def reset(self, _snap):
+            return {"test": np.zeros(1, dtype=np.float32)}
+
+    racer = FakeRacer()
+    env = OfficialRaceEnv.__new__(OfficialRaceEnv)
+    env.throttle_mode = "bidirectional"
+    env.negative_throttle_mode = "allow"
+    env.steering_mode = "normal"
+    env.steering_action_scale = 1.0
+    env.straight_throttle_gain = 1.0
+    env.straight_throttle_steering_threshold = 0.15
+    env.racer = racer
+    env._episode_steps = 0
+    env._last_collision_count = 0
+    env._last_lap_count = 0
+    env._initial_lap_count = 0
+    env._initial_collision_count = 0
+    env._race_collision_baseline = 0
+    env._warmup_collision_count = 0
+    env._race_laps_count = 0
+    env._race_lap_times_s = []
+    env._warmup_lap_times_s = []
+    env._training_elapsed_s = 0.0
+    env._positive_episode_return = 20.0
+    env._episode_frontier_distance_m = 0.0
+    env._frontier_last_push_s = 0.0
+    env._last_training_steering = 0.0
+    env.training_mode = True
+    env._frontier_spawn_xy = (1.0, 2.0)
+    env.route_progress = None
+    env.race_laps = 10
+    env.warmup_laps = 0
+    env.training_frontier_stagnation_s = 5.0
+    env.training_timeout_s = 600.0
+    env.training_time_cost_per_simulated_second = 5.0
+    env.training_collision_penalty_magnitude = 100.0
+    env.training_collision_reward_percent = 50.0
+    env.training_lap_completion_reward = 0.0
+    env.training_failure_penalty = 100.0
+    env.training_failure_reward_percent = 50.0
+    env.training_backward_speed_penalty_scale = 10.0
+    env._last_snap = snap
+    env._observation_builder = FakeObservationBuilder()
+    env._build_info = lambda *args, **kwargs: {}
+
+    _, reward, terminated, truncated, info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+
+    assert terminated and not truncated
+    assert info["termination_reason"] == "collision"
+    assert info["training_reward_components"]["collision"] == -110.0
+    assert reward < -110.0
+
+    env.reset()
+    assert racer.reset_calls == [{
+        "expected_position": (1.0, 2.0),
+        "position_tolerance_m": 0.75,
+        "reset_attempts": 3,
+    }]
+
+
 def test_camera_policy_extractor_accepts_layer2_observation():
     torch = pytest.importorskip("torch")
     gym = pytest.importorskip("gymnasium")

@@ -245,8 +245,8 @@ def compute_reward_components(
         percent = max(0.0, float(cfg.collision_reward_percent))
         components["collision"] = -(magnitude + positive_frontier_return * percent / 100.0)
 
-    # Collision already receives its event penalty above. Other charged failed
-    # endings (idle timeout or step cap) receive one terminal cost.
+    # Collision already receives its event penalty above. Charged non-collision
+    # endings (frontier stall or watchdog timeout) receive one terminal cost.
     if episode_failure and not collision_event:
         magnitude = max(0.0, float(cfg.episode_failure_penalty_magnitude))
         percent = max(0.0, float(cfg.episode_failure_reward_percent))
