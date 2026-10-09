@@ -270,12 +270,17 @@ def evaluate_attempt(
     motion_check_after_s: float = 3.0,
     motion_minimum_displacement_m: float = 0.25,
     motion_stall_after_s: float = 30.0,
+    lap_progress_timeout_s: float = 90.0,
+    lap_progress_wall_timeout_s: float = 90.0,
     disqualification_limit: int = 10,
     on_step: Any = None,
 ) -> Dict[str, Any]:
     obs, info = env.reset()
     started = time.monotonic()
     laps_reported = 0
+    lap_progress_count = len(info.get("warmup_lap_times_s", [])) + len(info.get("race_lap_times_s", []))
+    last_lap_progress_elapsed_s = 0.0
+    last_lap_progress_wall_s = started
     collisions_reported = 0
     steps = 0
     control_intervals_s: List[float] = []
@@ -381,6 +386,11 @@ def evaluate_attempt(
                 f"{float(lap_times[laps_reported - 1]):.3f}s",
                 flush=True,
             )
+        current_lap_progress_count = len(info.get("warmup_lap_times_s", [])) + len(lap_times)
+        if current_lap_progress_count > lap_progress_count:
+            lap_progress_count = current_lap_progress_count
+            last_lap_progress_elapsed_s = control_elapsed_s
+            last_lap_progress_wall_s = time.monotonic()
         collisions = int(info.get("race_collisions", 0))
         while collisions_reported < collisions:
             collisions_reported += 1
@@ -397,6 +407,21 @@ def evaluate_attempt(
             break
         if motion_status["verified"] is False:
             stop_reason = "vehicle_motion_not_verified"
+            break
+        seconds_since_lap_progress_wall = time.monotonic() - last_lap_progress_wall_s
+        if (
+            control_elapsed_s - last_lap_progress_elapsed_s >= lap_progress_timeout_s
+            or seconds_since_lap_progress_wall >= lap_progress_wall_timeout_s
+        ):
+            stop_reason = "lap_progress_stalled"
+            motion_status = {
+                **motion_status,
+                "lap_progress_stalled": True,
+                "lap_progress_timeout_s": float(lap_progress_timeout_s),
+                "seconds_since_lap_progress": control_elapsed_s - last_lap_progress_elapsed_s,
+                "seconds_since_lap_progress_wall": seconds_since_lap_progress_wall,
+                "completed_laps_since_start": lap_progress_count,
+            }
             break
         if (
             motion_ever_verified
