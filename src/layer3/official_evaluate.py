@@ -399,11 +399,18 @@ def evaluate_attempt(
                 f"penalty now {collision_penalty_seconds(collisions_reported):.0f}s",
                 flush=True,
             )
+        if bool(info.get("collision_event")):
+            stop_reason = "collision_detected"
+            break
         if collisions > int(disqualification_limit):
             stop_reason = "collision_disqualification_limit"
             break
         if terminated:
-            stop_reason = "race_complete"
+            stop_reason = (
+                "race_complete"
+                if bool(info.get("race_complete", False))
+                else "terminated"
+            )
             break
         if motion_status["verified"] is False:
             stop_reason = "vehicle_motion_not_verified"
@@ -442,7 +449,9 @@ def evaluate_attempt(
         lap_times_s=list(info.get("race_lap_times_s", [])),
         race_collisions=int(info.get("race_collisions", 0)),
     )
-    if motion_status["verified"] is not True:
+    if stop_reason == "collision_detected":
+        score_status = "collision_detected"
+    elif motion_status["verified"] is not True:
         score_status = "vehicle_motion_not_verified"
     elif result["disqualified"]:
         score_status = "disqualified"
@@ -541,6 +550,7 @@ def evaluate(
         negative_throttle_mode=negative_throttle_mode,
         steering_mode=steering_mode,
         observation_profile=observation_profile,
+        stop_on_collision=True,
     )
     runs: List[Dict[str, Any]] = []
     publisher = None

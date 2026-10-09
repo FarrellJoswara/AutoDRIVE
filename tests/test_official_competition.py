@@ -559,6 +559,75 @@ def test_race_env_counts_only_collisions_after_warmup():
     assert after_lap["race_lap_times_s"] == [5.0]
 
 
+def test_race_env_can_end_evaluation_on_first_collision_in_warmup():
+    racer = FakeRacer([
+        _snapshot(lap=0, last_lap=0.0, collisions=0),
+        _snapshot(lap=0, last_lap=0.0, collisions=1),
+    ])
+    env = OfficialRaceEnv(racer=racer, stop_on_collision=True)
+    env.reset()
+
+    _, _, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+
+    assert terminated and not truncated
+    assert info["collision_event"] is True
+    assert info["collision_terminated"] is True
+    assert info["race_collisions"] == 0
+    assert info["warmup_collisions"] == 0
+
+
+def test_evaluator_stops_on_first_collision_and_never_scores_that_time():
+    class Model:
+        def predict(self, obs, deterministic=True):
+            return np.zeros(2, dtype=np.float32), None
+
+    class Env:
+        def __init__(self):
+            self.steps = 0
+
+        def reset(self):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                {"race_position": (0.0, 0.0, 0.0), "race_complete": False},
+            )
+
+        def step(self, action):
+            self.steps += 1
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                0.0,
+                True,
+                False,
+                {
+                    "race_position": (0.3, 0.0, 0.0),
+                    "race_complete": False,
+                    "collision_event": True,
+                    "race_collisions": 0,
+                    "warmup_collisions": 1,
+                    "raw_collision_count": 1,
+                    "race_lap_times_s": [],
+                    "warmup_lap_times_s": [],
+                    "control_interval_s": 0.05,
+                    "lidar_scan_rate_hz": 40.0,
+                    "throttle_command": 0.5,
+                    "steering_command": 0.0,
+                },
+            )
+
+    env = Env()
+    result = evaluate_attempt(
+        Model(), env, wall_timeout_s=2.0, max_steps=100,
+        attempt_index=1, motion_check_after_s=10.0,
+    )
+
+    assert env.steps == 1
+    assert result["stop_reason"] == "collision_detected"
+    assert result["score_status"] == "collision_detected"
+    assert result["race_time_s"] is None
+    assert result["adjusted_race_time_s"] is None
+    assert result["valid_for_comparison"] is False
+
+
 def test_ros_control_waits_for_scan_after_command_and_declared_period():
     racer = RacerRos2(node=object(), timeout_s=0.5, frame_timeout_s=0.5)
     racer._telemetry = object()

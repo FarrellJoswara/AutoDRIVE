@@ -64,6 +64,7 @@ class OfficialRaceEnv(gym.Env):
         training_backward_speed_penalty_scale: float = 10.0,
         training_failure_reward_percent: float = 50.0,
         training_frontier_stagnation_s: float = 5.0,
+        stop_on_collision: bool = False,
         frontier_path: Optional[Path] = None,
     ) -> None:
         super().__init__()
@@ -100,6 +101,7 @@ class OfficialRaceEnv(gym.Env):
         self.training_collision_reward_percent = max(0.0, float(training_collision_reward_percent))
         self.training_lap_completion_reward = max(0.0, float(training_lap_completion_reward))
         self.training_frontier_stagnation_s = max(0.0, float(training_frontier_stagnation_s))
+        self.stop_on_collision = bool(stop_on_collision)
         self.frontier_path = Path(frontier_path) if frontier_path else None
         self._frontier_spawn_xy: Optional[Tuple[float, float]] = None
         if self.frontier_path is not None:
@@ -283,7 +285,12 @@ class OfficialRaceEnv(gym.Env):
 
         race_collisions = self._race_collisions(collision_count)
         race_disqualified = race_collisions > 10
-        terminated = self._race_laps_count >= self.race_laps or race_disqualified
+        collision_terminated = self.stop_on_collision and collision_event
+        terminated = (
+            self._race_laps_count >= self.race_laps
+            or race_disqualified
+            or collision_terminated
+        )
         self._last_collision_count = collision_count
         self._last_snap = snap
         info = self._build_info(snap, metrics, collision_event=collision_event)
@@ -311,6 +318,7 @@ class OfficialRaceEnv(gym.Env):
             "race_time_s": sum(self._race_lap_times_s),
             "race_complete": self._race_laps_count >= self.race_laps,
             "race_disqualified": race_disqualified,
+            "collision_terminated": collision_terminated,
             "lidar_scan_rate_hz": float(snap.lidar_scan_rate),
             "control_interval_s": float(
                 getattr(self.racer, "last_control_interval_s", 0.0)
