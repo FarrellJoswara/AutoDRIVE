@@ -243,6 +243,10 @@ export function WatchPage() {
 
   useEffect(() => {
     setCameraReady(false);
+    // A run can finish before its first camera request succeeds. Refresh once
+    // on every selected-run state change (especially active → completed) so
+    // the saved final frame is fetched after the simulator has stopped writing it.
+    setCameraRefresh(Date.now());
     if (viewMode !== "focus" || !selectedRun || !hasCamera || !ACTIVE.has(selectedRun.state)) return;
     const timer = window.setInterval(() => setCameraRefresh(Date.now()), 1000);
     return () => window.clearInterval(timer);

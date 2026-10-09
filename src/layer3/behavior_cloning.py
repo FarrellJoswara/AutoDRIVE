@@ -73,6 +73,11 @@ def collect_centerline_demonstrations(
     }
     if camera_rows:
         dataset["camera"] = np.asarray(camera_rows, dtype=np.uint8)
+        if not np.any(dataset["camera"]):
+            raise RuntimeError(
+                "all collected camera frames are black; refusing to train a camera policy "
+                "from a graphics-disabled or unrendered simulator stream"
+            )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **dataset)
     return dataset, {

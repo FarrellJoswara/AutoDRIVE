@@ -42,10 +42,13 @@ class CenterlineExpert:
         position = info.get("position")
         if position is None or len(position) < 2:
             return np.asarray([0.0, 0.0], dtype=np.float32)
-        # Official RoboRacer exposes planar [x, z] position; the custom
-        # simulator historically supplied Unity-style [x, y, z].
-        x, z = float(position[0]), float(position[2] if len(position) >= 3 else position[1])
-        yaw = float(info.get("yaw", 0.0))
+        # The official IPS topic is ROS XYZ and its track plane is XY. The
+        # centerline is in that same XY frame, so ignore the vertical Z value.
+        x, z = float(position[0]), float(position[1])
+        # Layer 1 yaw is Unity Y-up yaw (zero points Unity +Z). The official
+        # map transform is ROS (x, y) = (Unity z, -Unity x + offset), so the
+        # route-bearing convention atan2(dx, dy) is yaw + pi/2.
+        yaw = self._wrap_angle(float(info.get("yaw", 0.0)) + math.pi / 2.0)
         route_s = info.get("current_progress_m")
         if route_s is None:
             route_s = self.route.project_pose(x, z)
