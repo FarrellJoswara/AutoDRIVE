@@ -15,6 +15,7 @@ from src.layer3.behavior_cloning import (
     behavior_clone_actor,
     collect_policy_demonstrations,
     initialize_behavior_cloned_action_std,
+    save_behavior_cloned_checkpoint,
 )
 from src.layer3.train import make_model
 from src.layer2.spaces import LIDAR_BEAMS, STATE_DIM
@@ -49,6 +50,16 @@ class BehaviorCloningTests(unittest.TestCase):
         self.assertTrue(torch.allclose(
             policy.log_std.exp(), torch.full((2,), 0.2), atol=1e-6
         ))
+
+    def test_cloned_checkpoint_is_saved_with_replay_catalog_filename(self) -> None:
+        class FakeModel:
+            def save(self, path: str) -> None:
+                Path(path + ".zip").write_bytes(b"policy")
+
+        with TemporaryDirectory() as directory:
+            checkpoint = save_behavior_cloned_checkpoint(FakeModel(), Path(directory))
+            self.assertEqual(checkpoint.name, "behavior_cloned_policy.zip")
+            self.assertEqual(checkpoint.read_bytes(), b"policy")
 
     def test_cloning_fits_sensor_observation_to_continuous_action_labels(self) -> None:
         env = DummyVecEnv([_SensorEnv])

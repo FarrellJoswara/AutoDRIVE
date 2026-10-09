@@ -41,6 +41,7 @@ class OfficialTrainSettings(BaseModel):
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
     behavior_cloning_enabled: bool = True
+    behavior_cloning_only: bool = False
     behavior_cloning_steps_per_env: int = Field(default=4000, ge=2, le=100_000)
     behavior_cloning_epochs: int = Field(default=8, ge=1, le=100)
     behavior_cloning_batch_size: int = Field(default=256, ge=8, le=4096)
@@ -96,6 +97,7 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_AUTO_EVALUATION_TRIGGER": self.automatic_evaluation_trigger,
             "AICAR_AUTO_EVALUATION_INTERVAL": str(self.automatic_evaluation_interval),
             "AICAR_BEHAVIOR_CLONING_ENABLED": "1" if self.behavior_cloning_enabled else "0",
+            "AICAR_BEHAVIOR_CLONING_ONLY": "1" if self.behavior_cloning_only else "0",
             "AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV": str(self.behavior_cloning_steps_per_env),
             "AICAR_BEHAVIOR_CLONING_EPOCHS": str(self.behavior_cloning_epochs),
             "AICAR_BEHAVIOR_CLONING_BATCH_SIZE": str(self.behavior_cloning_batch_size),

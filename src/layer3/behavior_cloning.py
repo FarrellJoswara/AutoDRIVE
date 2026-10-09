@@ -34,6 +34,16 @@ def initialize_behavior_cloned_action_std(model: Any, std: float = BC_INITIAL_AC
     return float(log_std.detach().exp().mean().cpu())
 
 
+def save_behavior_cloned_checkpoint(model: Any, output_dir: Path) -> Path:
+    """Save the cloned policy as a standalone, official-runtime checkpoint."""
+    target = Path(output_dir) / "behavior_cloned_policy.zip"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    model.save(str(target.with_suffix("")))
+    if not target.is_file():
+        raise RuntimeError("behavior cloning did not produce its checkpoint")
+    return target
+
+
 def collect_centerline_demonstrations(
     vec_env: Any,
     expert: Any,

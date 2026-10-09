@@ -33,6 +33,7 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertEqual(env["AICAR_RUN_ID"], "abc123")
         self.assertEqual(env["AICAR_TRAIN_OUT"], "/runs/rl/official_run_abc123")
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ENABLED"], "1")
+        self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ONLY"], "0")
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV"], "4000")
         self.assertEqual(env["AICAR_BEHAVIOR_TEACHER_MAX_SPEED_MPS"], "1.2")
         self.assertEqual(env["AICAR_TRAIN_TIME_COST"], "0.0")
@@ -45,6 +46,13 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertNotIn("AICAR_TRAIN_LAP_REWARD", env)
         self.assertNotIn("PORT", env)
         self.assertNotIn("AICAR_MAP_ID", env)
+
+    def test_bc_only_mode_is_forwarded_to_native_run_environment(self):
+        env = OfficialTrainSettings(
+            behavior_cloning_only=True,
+            automatic_evaluation_enabled=False,
+        ).to_container_env(hub_url="http://brain:8090", run_id="bc123")
+        self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ONLY"], "1")
 
     def test_competition_settings_reject_custom_runtime_fields(self):
         with self.assertRaises(ValueError):

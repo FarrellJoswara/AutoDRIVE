@@ -285,6 +285,22 @@ class OfficialRunManagerTests(unittest.TestCase):
         self.assertEqual(config["total_timesteps"], 5000)
         self.assertEqual(config["observation_profile"], "official_sensors_camera")
         self.assertEqual(config["throttle_mode"], "bidirectional")
+        self.assertFalse(config["behavior_cloning_only"])
+
+    def test_bc_only_requires_new_cloning_run_without_automatic_ppo_evaluation(self) -> None:
+        config = normalize_official_config({
+            "behavior_cloning_only": True,
+            "automatic_evaluation_enabled": False,
+        })
+        self.assertTrue(config["behavior_cloning_only"])
+        with self.assertRaisesRegex(ValueError, "behavior cloning"):
+            normalize_official_config({
+                "behavior_cloning_only": True,
+                "behavior_cloning_enabled": False,
+                "automatic_evaluation_enabled": False,
+            })
+        with self.assertRaisesRegex(ValueError, "disable automatic PPO evaluation"):
+            normalize_official_config({"behavior_cloning_only": True})
 
     def test_resume_checkpoint_is_mapped_to_persistent_container_mount(self) -> None:
         source = self.root / "logs" / "rl" / "source.zip"

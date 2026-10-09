@@ -56,6 +56,7 @@ export function ReplayPage() {
   return <section className="panel fleet-panel">
     <h2>Official evaluation / replay</h2>
     <p className="lede">Evaluate a saved policy on the official simulator: one warm-up lap followed by ten scored laps, repeated in three fresh simulator processes. Automatic training evaluations use the same protocol.</p>
+    <p className="meta">To test behavior cloning on its own, choose <code>behavior_cloned_policy.zip</code> from a BC-only run. This evaluation uses the saved policy without teacher control or PPO updates.</p>
     <section className="panel" aria-label="Best official model">
       <h3 style={{ marginTop: 0 }}>Best official model across runs</h3>
       {best ? <p>{best.model_path} · median adjusted time <strong>{best.median_adjusted_race_time_s.toFixed(2)} s</strong> over {best.attempts} valid races.</p>

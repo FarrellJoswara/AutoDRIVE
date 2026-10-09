@@ -31,6 +31,20 @@ def test_official_training_requires_camera_fused_observations(tmp_path):
         )
 
 
+def test_bc_only_trainer_rejects_disabled_cloning_and_resume(tmp_path):
+    with pytest.raises(ValueError, match="requires a new run with behavior cloning enabled"):
+        train_official(
+            out_dir=tmp_path / "disabled", total_timesteps=0,
+            behavior_cloning_only=True, behavior_cloning_enabled=False,
+        )
+    with pytest.raises(ValueError, match="requires a new run with behavior cloning enabled"):
+        train_official(
+            out_dir=tmp_path / "resume", total_timesteps=0,
+            behavior_cloning_only=True, behavior_cloning_enabled=True,
+            resume=tmp_path / "checkpoint.zip",
+        )
+
+
 def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
     run = manager.create_run({"n_envs": 3})
     assert run["simulator_image"].endswith(":2026-iros-practice")
@@ -316,6 +330,7 @@ def test_native_backend_translates_run_settings_to_native_trainer_arguments():
         "AICAR_PPO_N_EPOCHS": "1",
         "AICAR_OBSERVATION_PROFILE": "official_sensors_camera",
         "AICAR_TRAIN_STOP_ON_PLATEAU": "0",
+        "AICAR_BEHAVIOR_CLONING_ONLY": "1",
     })
     args = dict(zip(command[3::2], command[4::2]))
     assert args["--out"] == "/tmp/run-output"
@@ -326,6 +341,7 @@ def test_native_backend_translates_run_settings_to_native_trainer_arguments():
     assert args["--n-epochs"] == "1"
     assert args["--observation-profile"] == "official_sensors_camera"
     assert args["--stop-on-plateau"] == "0"
+    assert args["--behavior-cloning-only"] == "1"
 
 
 def test_official_relay_accepts_bridge_event_before_socketio_namespace_connect():
@@ -499,6 +515,15 @@ def test_catalog_finds_official_checkpoint_subdirectory_and_filters_custom(tmp_p
     models = list_official_models(tmp_path / "logs/rl")
     assert [item["id"] for item in models] == ["official-example/checkpoints/official_ppo_128_steps.zip"]
     assert checkpoint_settings(path)["throttle_mode"] == "forward_only"
+
+
+def test_catalog_exposes_bc_only_checkpoint_for_official_replay(tmp_path):
+    path = official_checkpoint(tmp_path, nested=False)
+    bc_checkpoint = path.parent / "behavior_cloned_policy.zip"
+    path.rename(bc_checkpoint)
+    models = list_official_models(tmp_path / "logs" / "rl")
+    assert any(item["id"].endswith("/behavior_cloned_policy.zip") for item in models)
+    assert checkpoint_settings(bc_checkpoint)["observation_profile"] == "official_sensors_history"
 
 
 def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, tmp_path):

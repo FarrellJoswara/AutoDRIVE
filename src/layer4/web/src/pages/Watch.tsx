@@ -65,6 +65,7 @@ function phaseLabel(phase: OfficialRunTelemetry["training_phase"]): string | nul
   switch (phase?.phase) {
     case "demonstration_collection": return "Collecting teacher demonstrations";
     case "behavior_cloning": return "Training the initial policy from demonstrations";
+    case "behavior_cloning_ready": return "BC policy saved for official evaluation";
     case "rollout": return "Collecting PPO rollout";
     case "ppo_update": return "Updating the PPO policy";
     case "stopped": return "Training stopped";

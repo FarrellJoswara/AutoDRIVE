@@ -375,8 +375,18 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>PPO and checkpoint settings</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
               <Field label="Official route-aware behavior cloning" help="New runs first collect sensor/action examples from a cautious route-following teacher in these same official simulator environments, then initialize PPO's actor from those examples. Resume runs skip this stage.">
-                <select value={form.behavior_cloning_enabled ? "yes" : "no"} disabled={Boolean(form.resume)} onChange={(event) => setForm((current) => current ? { ...current, behavior_cloning_enabled: event.target.value === "yes" } : current)}>
+                <select value={form.behavior_cloning_enabled ? "yes" : "no"} disabled={Boolean(form.resume) || form.behavior_cloning_only} onChange={(event) => setForm((current) => current ? { ...current, behavior_cloning_enabled: event.target.value === "yes", behavior_cloning_only: event.target.value === "yes" && current.behavior_cloning_only } : current)}>
                   <option value="yes">Enabled for new runs</option><option value="no">Start PPO directly</option>
+                </select>
+              </Field>
+              <Field label="BC-only checkpoint test" help="Collect official teacher examples, clone the policy, save behavior_cloned_policy.zip, then stop before PPO. Select that checkpoint on Replay to test the learned policy without teacher control.">
+                <select value={form.behavior_cloning_only ? "yes" : "no"} disabled={Boolean(form.resume)} onChange={(event) => setForm((current) => current ? {
+                  ...current,
+                  behavior_cloning_only: event.target.value === "yes",
+                  behavior_cloning_enabled: event.target.value === "yes" || current.behavior_cloning_enabled,
+                  automatic_evaluation_enabled: event.target.value === "yes" ? false : current.automatic_evaluation_enabled,
+                } : current)}>
+                  <option value="no">Continue into PPO</option><option value="yes">Save BC policy and stop</option>
                 </select>
               </Field>
               <Field label="Teacher steps per environment" help="Number of official sensor/action examples collected from each simulator before PPO starts.">
@@ -395,7 +405,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
                 <input type="number" min={0.000001} max={0.1} step="any" value={form.behavior_cloning_learning_rate} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_learning_rate", event.target.value)} />
               </Field>
               <Field label="Automatic official evaluation" help="Runs a frozen checkpoint through one warm-up lap and ten scored laps on the official simulator. Three fresh simulator attempts are required before a result can promote the shared best model.">
-                <select value={form.automatic_evaluation_enabled ? "yes" : "no"} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_enabled: event.target.value === "yes" } : current)}>
+                <select value={form.automatic_evaluation_enabled ? "yes" : "no"} disabled={form.behavior_cloning_only} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_enabled: event.target.value === "yes" } : current)}>
                   <option value="yes">Enabled</option><option value="no">Disabled</option>
                 </select>
               </Field>
@@ -497,7 +507,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
 
       {message && <p className="msg ok" role="status">{message}</p>}
       {error && <p className="msg err" role="alert">{error}</p>}
-      {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase} · step {formatCount(selectedPhase.step)}.</p>}
+      {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", behavior_cloning_ready: "BC policy saved for official evaluation", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase} · step {formatCount(selectedPhase.step)}.</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
       {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>

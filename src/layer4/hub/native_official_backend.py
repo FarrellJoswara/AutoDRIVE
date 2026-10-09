@@ -198,6 +198,7 @@ class NativeOfficialBackend:
             "--automatic-evaluation-trigger", value("AICAR_AUTO_EVALUATION_TRIGGER", "steps"),
             "--automatic-evaluation-interval", value("AICAR_AUTO_EVALUATION_INTERVAL", "50000"),
             "--behavior-cloning-enabled", value("AICAR_BEHAVIOR_CLONING_ENABLED", "1"),
+            "--behavior-cloning-only", value("AICAR_BEHAVIOR_CLONING_ONLY", "0"),
             "--behavior-cloning-steps-per-env", value("AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV", "4000"),
             "--behavior-cloning-epochs", value("AICAR_BEHAVIOR_CLONING_EPOCHS", "8"),
             "--behavior-cloning-batch-size", value("AICAR_BEHAVIOR_CLONING_BATCH_SIZE", "256"),

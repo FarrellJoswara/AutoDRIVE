@@ -112,6 +112,8 @@ Playback skips 3–4: load zip → only look → act (single car).
 
 The Mission Control **Train** page exposes the route-teacher stage and PPO as one official workflow. A new run collects the configured number of teacher steps from each official simulator environment, fits the shared PPO actor to those actions, then starts PPO on the same environment pool. The saved demonstration archive contains only `lidar`, `camera` (when enabled), `state`, and `actions`; route pose stays runtime-only. `behavior_cloning_summary.json` records the held-out imitation loss and collection counts. Resumed checkpoints skip cloning.
 
+To assess cloning before PPO changes the policy, select **Save BC policy and stop** on Train. Mission Control collects the official examples, fits the actor, saves `behavior_cloned_policy.zip` with the run's observation/action metadata, and exits before PPO rollout. On Replay, select that checkpoint and start the official evaluation. It runs the same policy deterministically, without teacher actions or learning updates, through one warm-up lap and ten scored laps in three fresh official simulator attempts. Evaluation results are diagnostic; only a valid official race result can promote the shared best model.
+
 Camera pixels are `uint8` RGB and are divided by 255 once inside the custom vision extractor. Stable-Baselines3 image normalization is disabled for these custom policies to prevent a second division. The official checkpoint loader also repairs that setting when it loads older camera checkpoints. This corrects inference input scaling; it does not establish that legacy model weights learned from the corrected scale.
 
 ### Privileged PPO to sensor-only transfer experiment

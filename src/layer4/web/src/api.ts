@@ -126,7 +126,7 @@ export interface EvaluatorLiveTelemetry extends EvaluatorCarTelemetry {
 
 export interface TrainingPhaseTelemetry {
   kind: "phase";
-  phase: "demonstration_collection" | "behavior_cloning" | "rollout" | "ppo_update" | "stopped";
+  phase: "demonstration_collection" | "behavior_cloning" | "behavior_cloning_ready" | "rollout" | "ppo_update" | "stopped";
   step: number;
   run_id: string;
   runtime?: "custom" | "official";
@@ -277,6 +277,7 @@ export interface OfficialTrainSettings {
   automatic_evaluation_trigger: "steps" | "episodes";
   automatic_evaluation_interval: number;
   behavior_cloning_enabled: boolean;
+  behavior_cloning_only: boolean;
   behavior_cloning_steps_per_env: number;
   behavior_cloning_epochs: number;
   behavior_cloning_batch_size: number;

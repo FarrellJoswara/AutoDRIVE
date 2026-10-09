@@ -222,6 +222,7 @@ def train_official(
     automatic_evaluation_trigger: str = "steps",
     automatic_evaluation_interval: int = 50_000,
     behavior_cloning_enabled: bool = True,
+    behavior_cloning_only: bool = False,
     behavior_cloning_steps_per_env: int = 4000,
     behavior_cloning_epochs: int = 8,
     behavior_cloning_batch_size: int = 256,
@@ -265,6 +266,8 @@ def train_official(
         raise ValueError("automatic_evaluation_trigger must be steps or episodes")
     if behavior_cloning_enabled and behavior_cloning_steps_per_env < 2:
         raise ValueError("behavior_cloning_steps_per_env must be >= 2 when cloning is enabled")
+    if behavior_cloning_only and (not behavior_cloning_enabled or resume is not None):
+        raise ValueError("behavior_cloning_only requires a new run with behavior cloning enabled")
     if behavior_cloning_enabled and (
         behavior_cloning_epochs < 1 or behavior_cloning_batch_size < 1
         or behavior_cloning_learning_rate <= 0 or behavior_teacher_max_speed_mps < 0.5
@@ -468,6 +471,7 @@ def train_official(
             from src.layer3.behavior_cloning import (
                 behavior_clone_actor, collect_centerline_demonstrations,
                 initialize_behavior_cloned_action_std,
+                save_behavior_cloned_checkpoint,
             )
             from src.layer3.expert import CenterlineExpert
 
@@ -554,6 +558,8 @@ def train_official(
                     initialize_behavior_cloned_action_std(model)
                 )
             cloning_summary["collection"] = collection_summary
+            cloned_checkpoint = save_behavior_cloned_checkpoint(model, out_dir)
+            cloning_summary["checkpoint"] = str(cloned_checkpoint)
             (out_dir / "behavior_cloning_summary.json").write_text(
                 json.dumps(cloning_summary, indent=2), encoding="utf-8"
             )
@@ -563,6 +569,52 @@ def train_official(
                 f"validation loss {cloning_summary['initial_validation_loss']:.5f} -> "
                 f"{cloning_summary['final_validation_loss']:.5f}", flush=True,
             )
+            if behavior_cloning_only and not stop_requested.is_set():
+                bc_only_config = {
+                    "runtime": "official IROS 2026 API and simulator images",
+                    "simulator_backend": os.environ.get("AICAR_SIMULATOR_BACKEND", "docker"),
+                    "observation_profile": observation_profile,
+                    "policy_image_normalization": "custom extractor divides uint8 RGB by 255 exactly once; SB3 image normalization disabled",
+                    "actions": {
+                        "throttle_mode": throttle_mode,
+                        "negative_throttle_mode": negative_throttle_mode,
+                        "steering_mode": steering_mode,
+                        "steering_action_scale": steering_action_scale,
+                        "straight_throttle_gain": straight_throttle_gain,
+                        "straight_throttle_steering_threshold": straight_throttle_steering_threshold,
+                    },
+                    "behavior_cloning": {
+                        "enabled": True,
+                        "only": True,
+                        "teacher": "route-aware pure pursuit on official Porto centerline",
+                        "steps_per_environment": behavior_cloning_steps_per_env,
+                        "checkpoint": cloned_checkpoint.name,
+                        "summary": cloning_summary,
+                        "policy_inputs": list(model.observation_space.spaces.keys()),
+                        "privileged_teacher_state_saved": False,
+                    },
+                }
+                (out_dir / "config.json").write_text(
+                    json.dumps(bc_only_config, indent=2), encoding="utf-8"
+                )
+                (out_dir / "stop_reason.json").write_text(
+                    json.dumps({
+                        "reason": "behavior_cloning_only_complete",
+                        "num_timesteps": 0,
+                        "checkpoint": cloned_checkpoint.name,
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+                publish_phase(
+                    "behavior_cloning_ready",
+                    checkpoint=cloned_checkpoint.name,
+                    transitions=collection_summary["transitions"],
+                )
+                print(
+                    f"BC-only run complete; saved policy for official evaluation: {cloned_checkpoint}",
+                    flush=True,
+                )
+                return cloned_checkpoint
             if stop_requested.is_set():
                 target = out_dir / "official_policy_latest.zip"
                 model.save(str(target.with_suffix("")))
@@ -777,6 +829,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--automatic-evaluation-trigger", choices=("steps", "episodes"), default="steps")
     parser.add_argument("--automatic-evaluation-interval", type=int, default=50_000)
     parser.add_argument("--behavior-cloning-enabled", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--behavior-cloning-only", type=int, choices=(0, 1), default=0)
     parser.add_argument("--behavior-cloning-steps-per-env", type=int, default=4000)
     parser.add_argument("--behavior-cloning-epochs", type=int, default=8)
     parser.add_argument("--behavior-cloning-batch-size", type=int, default=256)
@@ -829,6 +882,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         automatic_evaluation_trigger=args.automatic_evaluation_trigger,
         automatic_evaluation_interval=args.automatic_evaluation_interval,
         behavior_cloning_enabled=bool(args.behavior_cloning_enabled),
+        behavior_cloning_only=bool(args.behavior_cloning_only),
         behavior_cloning_steps_per_env=args.behavior_cloning_steps_per_env,
         behavior_cloning_epochs=args.behavior_cloning_epochs,
         behavior_cloning_batch_size=args.behavior_cloning_batch_size,

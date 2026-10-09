@@ -46,6 +46,12 @@ def normalize_official_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     if unknown:
         raise ValueError(f"unsupported official training settings: {sorted(unknown)}")
     result = OfficialTrainSettings.model_validate(raw).model_dump(mode="python")
+    if result["behavior_cloning_only"] and not result["behavior_cloning_enabled"]:
+        raise ValueError("BC-only runs require official behavior cloning to be enabled")
+    if result["behavior_cloning_only"] and result["resume"] is not None:
+        raise ValueError("BC-only runs must start from a new policy, not a resumed checkpoint")
+    if result["behavior_cloning_only"] and result["automatic_evaluation_enabled"]:
+        raise ValueError("disable automatic PPO evaluation for a BC-only run; evaluate its saved checkpoint from Replay")
     resume = result["resume"]
     if resume is not None and (not isinstance(resume, str) or not resume.strip()):
         raise ValueError("resume must be a non-empty checkpoint path or null")
