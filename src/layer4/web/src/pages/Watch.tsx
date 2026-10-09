@@ -24,6 +24,12 @@ const REFRESH_RUNS_MS = 2500;
 const REFRESH_TELEMETRY_MS = 100;
 const TELEMETRY_CONCURRENCY = 8;
 
+function preferredRunId(currentId: string | null, runs: RunSummary[]): string | null {
+  const current = runs.find((run) => run.run_id === currentId);
+  if (current && ACTIVE.has(current.state)) return current.run_id;
+  return runs.find((run) => ACTIVE.has(run.state))?.run_id ?? current?.run_id ?? null;
+}
+
 type ViewMode = "overview" | "focus";
 interface RunFrame {
   data: OfficialRunTelemetry | null;
@@ -249,9 +255,7 @@ export function WatchPage() {
         if (cancelled) return;
         setRunList(runs);
         setMaps(mapEntries);
-        setSelectedRunId((current) => current && runs.runs.some((run) => run.run_id === current)
-          ? current
-          : runs.runs.find((run) => ACTIVE.has(run.state))?.run_id ?? runs.runs[0]?.run_id ?? null);
+        setSelectedRunId((current) => preferredRunId(current, runs.runs));
         setLoadError(null);
       })
       .catch((error: unknown) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error)); });
@@ -265,9 +269,7 @@ export function WatchPage() {
         const list = await getOfficialRuns();
         if (cancelled) return;
         setRunList(list);
-        setSelectedRunId((current) => current && list.runs.some((run) => run.run_id === current)
-          ? current
-          : list.runs.find((run) => ACTIVE.has(run.state))?.run_id ?? list.runs[0]?.run_id ?? null);
+        setSelectedRunId((current) => preferredRunId(current, list.runs));
       } catch (error) {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
       }
