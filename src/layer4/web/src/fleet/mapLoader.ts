@@ -20,6 +20,35 @@ export interface LoadedMap {
   contentBounds: { minX: number; maxX: number; minY: number; maxY: number } | null;
 }
 
+export interface LoadedCenterline {
+  points: Array<[number, number]>;
+  cumulative_m: number[];
+  length_m: number;
+}
+
+/** Fetch a map-local centerline CSV and precompute station values for markers. */
+export async function loadCenterlineCsv(url: string): Promise<LoadedCenterline> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`centerline fetch ${response.status}`);
+  const points: Array<[number, number]> = [];
+  for (const raw of (await response.text()).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [x, z] = line.split(",", 2).map(Number);
+    if (Number.isFinite(x) && Number.isFinite(z)) points.push([x, z]);
+  }
+  if (points.length < 3) throw new Error("centerline has fewer than three points");
+  const cumulative_m = [0];
+  for (let index = 1; index < points.length; index++) {
+    const previous = points[index - 1];
+    const point = points[index];
+    cumulative_m.push(cumulative_m[index - 1] + Math.hypot(point[0] - previous[0], point[1] - previous[1]));
+  }
+  const length_m = cumulative_m[cumulative_m.length - 1];
+  if (!(length_m > 0)) throw new Error("centerline has no route length");
+  return { points, cumulative_m, length_m };
+}
+
 export interface MapWorldAlignment {
   rotation_rad: number;
   translation_x_m: number;

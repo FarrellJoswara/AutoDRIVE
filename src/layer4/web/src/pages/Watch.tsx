@@ -61,6 +61,17 @@ function latestPpo(snapshot: OfficialRunTelemetry | null): Partial<PpoDiagnostic
   return updates[updates.length - 1]?.values ?? snapshot?.metrics?.ppo ?? null;
 }
 
+function phaseLabel(phase: OfficialRunTelemetry["training_phase"]): string | null {
+  switch (phase?.phase) {
+    case "demonstration_collection": return "Collecting teacher demonstrations";
+    case "behavior_cloning": return "Training the initial policy from demonstrations";
+    case "rollout": return "Collecting PPO rollout";
+    case "ppo_update": return "Updating the PPO policy";
+    case "stopped": return "Training stopped";
+    default: return null;
+  }
+}
+
 function sourceTimestamp(data: OfficialRunTelemetry | null): number | null {
   const value = data?.fleet?.ts ?? data?.metrics?.ts ?? data?.updated_at ?? "";
   const timestamp = Date.parse(value);
@@ -107,6 +118,7 @@ function OverviewTile({
   const snapshot = frame?.data ?? null;
   const fleet = latestFleet(snapshot, run);
   const metrics = snapshot?.metrics ?? run.latest_metrics ?? null;
+  const stage = phaseLabel(snapshot?.training_phase);
   const age = ageLabel(frame, fleet);
   const cars = fleet?.cars ?? [];
   const speeds = cars.map((car) => car.speed).filter((speed): speed is number => speed != null && Number.isFinite(speed));
@@ -119,6 +131,7 @@ function OverviewTile({
   const step = Math.max(metrics?.step ?? 0, fleet?.step ?? 0);
   const mapId = mapIdForWatch(snapshot?.map_id, run.map_id, maps);
   const map = maps.find((entry) => entry.id === mapId);
+  const showTeacherRoute = Boolean(run.config.behavior_cloning_enabled && map?.centerline_url);
   const canvasAge = age.stale ? STALE_AFTER_MS + 1 : 0;
 
   useEffect(() => {
@@ -154,6 +167,7 @@ function OverviewTile({
         </div>
         <span className="badge" data-state={run.state}>{run.state}</span>
       </div>
+      {stage && <p className="meta" style={{ margin: "0.35rem 0 0" }}>{stage}{snapshot?.training_phase?.phase === "demonstration_collection" ? " · PPO has not started" : ""}</p>}
       {runIsActive && <div className="watch-overview-canvas" style={{ height: 132, minHeight: 0, marginTop: "0.6rem", overflow: "hidden", border: "1px solid var(--line, #263b34)" }}>
         {canvasVisible ? <>
         <FleetCanvas
@@ -173,6 +187,9 @@ function OverviewTile({
           phaseOverride={snapshot?.training_phase ?? null}
           trainingStep={step}
           rolloutSize={Math.max(1, fleet?.rollout_size ?? metrics?.rollout_size ?? 1)}
+          showTeacherRoute={showTeacherRoute}
+          teacherRouteUrl={map?.centerline_url ?? null}
+          teacherProgressMeters={snapshot?.training_phase?.route_progress_m}
         />
         </> : <div className="meta" style={{ display: "grid", height: "100%", placeItems: "center" }}>Map preview loads as this card comes into view</div>}
       </div>}
@@ -218,9 +235,12 @@ export function WatchPage() {
   const fleet = latestFleet(snapshot, selectedRun);
   const metrics = snapshot?.metrics ?? selectedRun?.latest_metrics ?? null;
   const phase = snapshot?.training_phase ?? null;
+  const stage = phaseLabel(phase);
+  const teacherPhase = phase?.phase === "demonstration_collection" || phase?.phase === "behavior_cloning";
   const cars = fleet?.cars ?? [];
   const mapId = mapIdForWatch(snapshot?.map_id, selectedRun?.map_id, maps);
   const selectedMap = maps.find((map) => map.id === mapId) ?? null;
+  const showTeacherRoute = Boolean(selectedRun?.config.behavior_cloning_enabled && selectedMap?.centerline_url);
   const age = ageLabel(selectedFrame, fleet);
   const active = selectedRun != null && ACTIVE.has(selectedRun.state);
   const ppo = latestPpo(snapshot);
@@ -372,6 +392,7 @@ export function WatchPage() {
           <span className="badge" data-state={selectedRun.state}>{selectedRun.state}</span>
           <strong>{selectedRun.display_name || selectedRun.run_id}</strong>
           <span>Run ID <code>{selectedRun.run_id}</code></span>
+          {stage && <span aria-label="Training stage">{stage}</span>}
           <span>Step {currentStep.toLocaleString()}</span>
           <span>{age.text}</span>
         </div>
@@ -385,7 +406,13 @@ export function WatchPage() {
         </div>
         <div className="fleet-layout">
           <div className="fleet-canvas-stack">
-            <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} officialWorldAlignment={selectedMap?.official_world_alignment ?? null} fleetPanel={fleet} runState={selectedRun.state} phaseOverride={phase} trainingStep={currentStep} rolloutSize={rolloutSize} />
+            {showTeacherRoute && <p className="meta" style={{ margin: "0 0 0.35rem" }}>
+              Cyan line: target centerline used for behavior-cloning examples. Yellow E# markers: current route station when available; no driving trace is recorded here.
+              {phase?.completed_steps_per_env != null && phase.target_steps_per_env != null
+                ? ` · ${phase.completed_steps_per_env.toLocaleString()} / ${phase.target_steps_per_env.toLocaleString()} steps per environment`
+                : teacherPhase ? " · waiting for the first teacher progress update" : ""}
+            </p>}
+            <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} officialWorldAlignment={selectedMap?.official_world_alignment ?? null} fleetPanel={fleet} runState={selectedRun.state} phaseOverride={phase} trainingStep={currentStep} rolloutSize={rolloutSize} showTeacherRoute={showTeacherRoute} teacherRouteUrl={selectedMap?.centerline_url ?? null} teacherProgressMeters={phase?.route_progress_m} />
           </div>
           <aside className="fleet-side">
             <section aria-label="Front camera" style={{ marginBottom: 16 }}>
@@ -399,7 +426,11 @@ export function WatchPage() {
                     onError={() => setCameraReady(false)}
                     style={{ width: "100%", height: "100%", objectFit: "contain", display: cameraReady ? "block" : "none" }}
                   />
-                  {!cameraReady && <span className="meta">{active ? "Waiting for camera frame…" : "No saved camera frame for this environment."}</span>}
+                  {!cameraReady && <span className="meta">{active && phase?.phase === "demonstration_collection"
+                    ? "Camera frames are feeding teacher collection; the Watch preview is saved when PPO telemetry starts."
+                    : active && phase?.phase === "behavior_cloning"
+                      ? "Teacher samples are collected; the Watch preview will appear when PPO telemetry starts."
+                      : active ? "Waiting for the first saved camera frame…" : "No saved camera frame for this environment."}</span>}
                 </div>
                 <small className="meta">{active ? "Live frame · refreshes every second" : "Last saved frame"}</small>
               </> : <p className="meta">This run was created without camera observations.</p>}
@@ -428,7 +459,14 @@ export function WatchPage() {
               <div><span>Loss</span><strong>{formatNumber(metrics.loss, 5)}</strong></div>
               <div><span>PPO phase</span><strong>{phase?.phase ?? "—"}</strong></div>
               <div><span>Next update</span><strong>{active ? nextUpdate.toLocaleString() : "—"}</strong></div>
-            </div> : <p className="meta">Waiting for this run’s training metrics.</p>}
+            </div> : <>
+              {stage && <p><strong>{stage}</strong></p>}
+              <p className="meta">{phase?.phase === "demonstration_collection"
+                ? "The route-aware teacher is collecting official camera, LiDAR, and vehicle-state examples. PPO step count stays at zero until this finishes."
+                : phase?.phase === "behavior_cloning"
+                  ? "The PPO policy is learning from the collected teacher examples before reinforcement-learning rollouts begin."
+                  : "Waiting for this run’s training metrics."}</p>
+            </>}
           </article>
           <article className="training-progress-panel"><h3>Evaluation</h3>
             {evaluation ? <>

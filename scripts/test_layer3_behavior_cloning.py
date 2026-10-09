@@ -8,11 +8,13 @@ from tempfile import TemporaryDirectory
 
 import gymnasium as gym
 import numpy as np
+import torch
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from src.layer3.behavior_cloning import (
     behavior_clone_actor,
     collect_policy_demonstrations,
+    initialize_behavior_cloned_action_std,
 )
 from src.layer3.train import make_model
 from src.layer2.spaces import LIDAR_BEAMS, STATE_DIM
@@ -36,6 +38,18 @@ class _SensorEnv(gym.Env):
 
 
 class BehaviorCloningTests(unittest.TestCase):
+    def test_cloned_policy_uses_safe_action_noise(self) -> None:
+        policy = type("Policy", (), {})()
+        policy.log_std = torch.nn.Parameter(torch.zeros(2))
+        model = type("Model", (), {"policy": policy})()
+
+        applied_std = initialize_behavior_cloned_action_std(model)
+
+        self.assertAlmostEqual(applied_std, 0.2, places=6)
+        self.assertTrue(torch.allclose(
+            policy.log_std.exp(), torch.full((2,), 0.2), atol=1e-6
+        ))
+
     def test_cloning_fits_sensor_observation_to_continuous_action_labels(self) -> None:
         env = DummyVecEnv([_SensorEnv])
         try:
@@ -215,8 +229,12 @@ class BehaviorCloningTests(unittest.TestCase):
 
         with TemporaryDirectory() as directory:
             path = Path(directory) / "official-demo.npz"
+            progress_updates = []
             dataset, summary = collect_centerline_demonstrations(
-                FakeVecEnv(), Expert(), steps=2, output_path=path
+                FakeVecEnv(), Expert(), steps=2, output_path=path,
+                progress_callback=lambda completed, target, stations: progress_updates.append(
+                    (completed, target, stations)
+                ),
             )
             self.assertEqual(summary["transitions"], 2)
             self.assertEqual(
@@ -233,6 +251,7 @@ class BehaviorCloningTests(unittest.TestCase):
                 }],
             )
             self.assertEqual(set(dataset), {"lidar", "state", "camera", "actions"})
+            self.assertEqual(progress_updates[-1], (2, 2, [3.0]))
             with np.load(path) as saved:
                 self.assertEqual(set(saved.files), {"lidar", "state", "camera", "actions"})
                 self.assertEqual(saved["camera"].dtype, np.uint8)

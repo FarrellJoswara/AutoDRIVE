@@ -5,7 +5,7 @@ import {
   beamWorldAngleRad,
   lidarNormToMetres,
 } from "./lidarCalibration";
-import type { LoadedMap } from "./mapLoader";
+import type { LoadedCenterline, LoadedMap } from "./mapLoader";
 import { mapWorldBounds } from "./mapLoader";
 
 /**
@@ -38,6 +38,8 @@ export interface DrawFrameOpts {
   evaluatorCar?: EvaluatorCarTelemetry | null;
   staleLabel: string | null;
   ppoProgress?: { label: string; progress: number; detail: string } | null;
+  teacherRoute?: LoadedCenterline | null;
+  teacherProgressMeters?: Array<number | null>;
   view: ViewState;
   cssW: number;
   cssH: number;
@@ -174,11 +176,11 @@ export function drawTelemetryOverlay(
   /** Must match the bounds passed to drawStaticMap in the same frame. */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
 ): void {
-  const { fleet, evaluatorCar, staleLabel, ppoProgress, view, cssW, cssH, dpr } = opts;
+  const { fleet, evaluatorCar, staleLabel, ppoProgress, teacherRoute, teacherProgressMeters, view, cssW, cssH, dpr } = opts;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  if ((!fleet || !fleet.cars.length) && !evaluatorCar) {
+  if ((!fleet || !fleet.cars.length) && !evaluatorCar && !teacherRoute?.points.length) {
     ctx.fillStyle = "rgba(138, 163, 150, 0.8)";
     ctx.font = "13px Segoe UI, sans-serif";
     ctx.fillText("Waiting for fleet telemetry…", 16, 28);
@@ -186,6 +188,46 @@ export function drawTelemetryOverlay(
   }
 
   const { scale, ox, oy } = worldToScreenTransform(bounds, cssW, cssH);
+  if (teacherRoute?.points.length) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = "rgba(91, 211, 255, 0.95)";
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    teacherRoute.points.forEach(([x, z], index) => {
+      const sx = ox + x * scale;
+      const sy = oy - z * scale;
+      if (index === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    for (const [envIndex, rawProgress] of (teacherProgressMeters ?? []).entries()) {
+      if (rawProgress == null || !Number.isFinite(rawProgress)) continue;
+      const station = ((rawProgress % teacherRoute.length_m) + teacherRoute.length_m) % teacherRoute.length_m;
+      let segment = 1;
+      while (segment < teacherRoute.cumulative_m.length - 1 && teacherRoute.cumulative_m[segment] < station) segment++;
+      const start = teacherRoute.points[segment - 1];
+      const end = teacherRoute.points[segment];
+      const span = teacherRoute.cumulative_m[segment] - teacherRoute.cumulative_m[segment - 1];
+      const ratio = span > 0 ? (station - teacherRoute.cumulative_m[segment - 1]) / span : 0;
+      const x = start[0] + (end[0] - start[0]) * ratio;
+      const z = start[1] + (end[1] - start[1]) * ratio;
+      const sx = ox + x * scale;
+      const sy = oy - z * scale;
+      ctx.fillStyle = "#ffd36a";
+      ctx.strokeStyle = "#102018";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#f7f1dc";
+      ctx.font = "10px Segoe UI, sans-serif";
+      ctx.fillText(`E${envIndex}`, sx + 7, sy - 5);
+    }
+  }
   const rMin = fleet?.lidar_range_min ?? LIDAR_RANGE_MIN_M;
   const rMax = fleet?.lidar_range_max ?? LIDAR_RANGE_MAX_M;
   const gate = fleet?.lap_gate;

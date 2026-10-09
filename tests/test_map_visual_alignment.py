@@ -41,9 +41,16 @@ def test_porto_display_alignment_registers_official_route_to_occupancy() -> None
 
     assert len(map_points) == len(official_points)
     errors = []
+    map_station = official_station = 0.0
     for (x, z), (expected_x, expected_z) in zip(map_points, official_points):
         actual_x = c * x - s * z + alignment["translation_x_m"]
         actual_z = s * x + c * z + alignment["translation_z_m"]
         errors.append(math.hypot(actual_x - expected_x, actual_z - expected_z))
+    for map_a, map_b, official_a, official_b in zip(
+        map_points, map_points[1:], official_points, official_points[1:]
+    ):
+        map_station += math.dist(map_a, map_b)
+        official_station += math.dist(official_a, official_b)
+        assert abs(map_station - official_station) < 1e-5
 
     assert max(errors) < 1e-5

@@ -131,6 +131,10 @@ export interface TrainingPhaseTelemetry {
   run_id: string;
   runtime?: "custom" | "official";
   rollout_size?: number;
+  completed_steps_per_env?: number;
+  target_steps_per_env?: number;
+  route_progress_m?: Array<number | null>;
+  route_length_m?: number;
   ts: string;
 }
 

@@ -11,8 +11,8 @@ import {
   resolveBounds,
   worldToScreenTransform,
 } from "./draw";
-import type { LoadedMap, MapId, MapWorldAlignment } from "./mapLoader";
-import { loadMap, transformWorldPointToMap } from "./mapLoader";
+import type { LoadedCenterline, LoadedMap, MapId, MapWorldAlignment } from "./mapLoader";
+import { loadCenterlineCsv, loadMap, transformWorldPointToMap } from "./mapLoader";
 import {
   getFleetHot,
   getFleetHotAgeMs,
@@ -49,6 +49,9 @@ export interface FleetCanvasProps {
   telemetryAgeMs?: number;
   runState?: string;
   phaseOverride?: TrainingPhaseTelemetry | null;
+  showTeacherRoute?: boolean;
+  teacherRouteUrl?: string | null;
+  teacherProgressMeters?: Array<number | null>;
 }
 
 type MapLine = [[number, number], [number, number]] | null | undefined;
@@ -91,6 +94,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
   const fleetCarsRef = useRef<HTMLCanvasElement>(null);
   const evaluatorRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<LoadedMap | null>(null);
+  const teacherRouteRef = useRef<LoadedCenterline | null>(null);
   const viewRef = useRef<ViewState>(initialViewState());
   const mapDirty = useRef(true);
   const propsRef = useRef(props);
@@ -112,7 +116,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
 
   useEffect(() => {
     scheduleFrameRef.current();
-  }, [props.fleetSource, props.evaluatorActive, props.evaluatorCar, props.evaluatorSnapshotTimesteps, props.trainingStep, props.rolloutSize, props.telemetryOverride, props.telemetryAgeMs, props.runState, props.phaseOverride]);
+  }, [props.fleetSource, props.evaluatorActive, props.evaluatorCar, props.evaluatorSnapshotTimesteps, props.trainingStep, props.rolloutSize, props.telemetryOverride, props.telemetryAgeMs, props.runState, props.phaseOverride, props.showTeacherRoute, props.teacherProgressMeters]);
 
   // Load occupancy map
   useEffect(() => {
@@ -147,6 +151,25 @@ export function FleetCanvas(props: FleetCanvasProps) {
       cancelled = true;
     };
   }, [props.mapId, props.mapYamlUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    teacherRouteRef.current = null;
+    if (!props.showTeacherRoute || !props.teacherRouteUrl) {
+      scheduleFrameRef.current();
+      return () => { cancelled = true; };
+    }
+    void loadCenterlineCsv(props.teacherRouteUrl)
+      .then((route) => {
+        if (cancelled) return;
+        teacherRouteRef.current = route;
+        scheduleFrameRef.current();
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) console.warn("teacher centerline could not be loaded", error);
+      });
+    return () => { cancelled = true; };
+  }, [props.showTeacherRoute, props.teacherRouteUrl]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -314,6 +337,7 @@ export function FleetCanvas(props: FleetCanvasProps) {
         view.showLidar +
         view.selectedEnvId +
         (map?.id ?? "none") +
+        (p.showTeacherRoute ? `:teacher-route:${p.teacherRouteUrl ?? "none"}:${teacherRouteRef.current?.length_m ?? "loading"}:${(p.teacherProgressMeters ?? []).join(",")}` : ":no-teacher-route") +
         boundsKey +
         staleLabel;
 
@@ -335,6 +359,8 @@ export function FleetCanvas(props: FleetCanvasProps) {
         evaluatorCar,
         staleLabel,
         ppoProgress,
+        teacherRoute: p.showTeacherRoute ? teacherRouteRef.current : null,
+        teacherProgressMeters: p.teacherProgressMeters,
         view,
         cssW,
         cssH,

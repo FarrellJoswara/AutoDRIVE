@@ -9,6 +9,31 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 
 
+BC_INITIAL_ACTION_STD = 0.2
+
+
+def initialize_behavior_cloned_action_std(model: Any, std: float = BC_INITIAL_ACTION_STD) -> float:
+    """Set PPO sampling noise to the teacher-compatible range after cloning.
+
+    Behavior cloning fits the policy mean. Leaving SB3's default unit Gaussian
+    deviation intact makes PPO sample actions far outside the teacher's narrow
+    steering/throttle range before its first update, which can immediately
+    destroy the cloned driving behavior.
+    """
+    import math
+    import torch
+
+    value = float(std)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("behavior-cloned action standard deviation must be finite and positive")
+    log_std = getattr(model.policy, "log_std", None)
+    if log_std is None or not torch.is_tensor(log_std):
+        raise ValueError("behavior-cloned policy must expose a tensor log_std")
+    with torch.no_grad():
+        log_std.fill_(math.log(value))
+    return float(log_std.detach().exp().mean().cpu())
+
+
 def collect_centerline_demonstrations(
     vec_env: Any,
     expert: Any,
@@ -16,6 +41,7 @@ def collect_centerline_demonstrations(
     steps: int,
     output_path: Path,
     should_stop: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[int, int, list[Optional[float]]], None]] = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, int]]:
     """Collect observations/actions; map pose is used for labels only."""
     observations = vec_env.reset()
@@ -97,6 +123,8 @@ def collect_centerline_demonstrations(
                 f"clean laps={successful_episodes}",
                 flush=True,
             )
+            if progress_callback is not None:
+                progress_callback(step_index + 1, total_steps, list(last_route_progress))
 
     dataset = {
         "lidar": np.asarray(lidar_rows, dtype=np.float32),

@@ -467,6 +467,7 @@ def train_official(
             from src.layer2.route_progress import RouteProgressTracker
             from src.layer3.behavior_cloning import (
                 behavior_clone_actor, collect_centerline_demonstrations,
+                initialize_behavior_cloned_action_std,
             )
             from src.layer3.expert import CenterlineExpert
 
@@ -500,11 +501,26 @@ def train_official(
             )
             expert = CenterlineExpert(route, max_speed_mps=behavior_teacher_max_speed_mps)
             publish_phase("demonstration_collection")
+
+            def publish_demonstration_progress(
+                completed_steps: int,
+                target_steps: int,
+                route_progress_m: list[Optional[float]],
+            ) -> None:
+                publish_phase(
+                    "demonstration_collection",
+                    completed_steps_per_env=completed_steps,
+                    target_steps_per_env=target_steps,
+                    route_progress_m=route_progress_m,
+                    route_length_m=route.length,
+                )
+
             demonstrations, collection_summary = collect_centerline_demonstrations(
                 vec_env, expert,
                 steps=behavior_cloning_steps_per_env,
                 output_path=out_dir / "behavior_cloning_demonstrations.npz",
                 should_stop=stop_requested.is_set,
+                progress_callback=publish_demonstration_progress,
             )
             if stop_requested.is_set():
                 target = out_dir / "official_policy_latest.zip"
@@ -518,13 +534,25 @@ def train_official(
                 return target
             if collection_summary["transitions"] < 2:
                 raise RuntimeError("official teacher did not produce enough demonstrations to initialize PPO")
-            publish_phase("behavior_cloning", transitions=collection_summary["transitions"])
+            publish_phase(
+                "behavior_cloning",
+                transitions=collection_summary["transitions"],
+                route_progress_m=[
+                    item.get("end_progress_m")
+                    for item in collection_summary.get("route_direction_diagnostics", [])
+                ],
+                route_length_m=route.length_m,
+            )
             cloning_summary = behavior_clone_actor(
                 model, demonstrations, epochs=behavior_cloning_epochs,
                 batch_size=behavior_cloning_batch_size,
                 learning_rate=behavior_cloning_learning_rate, seed=seed,
                 should_stop=stop_requested.is_set,
             )
+            if not stop_requested.is_set():
+                cloning_summary["initial_action_std"] = (
+                    initialize_behavior_cloned_action_std(model)
+                )
             cloning_summary["collection"] = collection_summary
             (out_dir / "behavior_cloning_summary.json").write_text(
                 json.dumps(cloning_summary, indent=2), encoding="utf-8"
