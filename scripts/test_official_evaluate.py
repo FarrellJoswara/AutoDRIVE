@@ -16,8 +16,9 @@ class _FixedPolicy:
 
 
 class _CollisionSequenceEnv:
-    def __init__(self, collisions: int):
+    def __init__(self, collisions: int, collision_event_at: int | None = None):
         self.target_collisions = collisions
+        self.collision_event_at = collision_event_at
         self.steps = 0
 
     def reset(self):
@@ -33,6 +34,7 @@ class _CollisionSequenceEnv:
             "race_lap_times_s": [],
             "race_collisions": min(self.steps, self.target_collisions),
             "raw_collision_count": min(self.steps, self.target_collisions),
+            "collision_event": self.steps == self.collision_event_at,
             "race_collision_baseline": 0,
             "warmup_lap_times_s": [],
             "warmup_collisions": 0,
@@ -68,6 +70,20 @@ class OfficialEvaluationTests(unittest.TestCase):
         self.assertEqual(result["race_collisions"], 11)
         self.assertEqual(result["stop_reason"], "collision_disqualification_limit")
         self.assertEqual(result["score_status"], "disqualified")
+        self.assertFalse(result["valid_for_comparison"])
+
+    def test_attempt_stops_on_first_collision_event(self):
+        env = _CollisionSequenceEnv(collisions=20, collision_event_at=1)
+
+        result = evaluate_attempt(
+            _FixedPolicy(), env, wall_timeout_s=30.0, max_steps=100,
+            attempt_index=1,
+        )
+
+        self.assertEqual(env.steps, 1)
+        self.assertEqual(result["stop_reason"], "collision_detected")
+        self.assertEqual(result["score_status"], "collision_detected")
+        self.assertEqual(result["raw_collision_count_at_finish"], 1)
         self.assertFalse(result["valid_for_comparison"])
 
 

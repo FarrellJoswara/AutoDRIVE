@@ -75,6 +75,27 @@ class CenterlineExpertTests(unittest.TestCase):
         # Target lies to the positive ROS-y side; steering must turn left.
         self.assertGreater(float(action[1]), 0.0)
 
+    def test_official_porto_teacher_previews_tight_bend_before_entrance(self) -> None:
+        frontier = Path(__file__).resolve().parents[1] / "competition" / "iros2026" / "official_centerline.csv"
+        route = RouteProgressTracker.from_csv(frontier)
+        teacher = CenterlineExpert(route, max_speed_mps=0.5)
+        station = 24.0
+        point, tangent = route.point_and_tangent_at(station)
+        # Convert the ROS route tangent to the Unity-yaw convention consumed by
+        # Layer 1/2, so this test exercises the production coordinate mapping.
+        route_bearing = np.arctan2(tangent[0], tangent[1])
+        unity_yaw = float(route_bearing - np.pi / 2.0)
+        action = teacher.action({
+            "position": (float(point[0]), float(point[1]), 0.0),
+            "yaw": unity_yaw,
+            "current_progress_m": station,
+            "true_speed": 0.5,
+        })
+        # This is the right-hand bend leading into station 24.25. The previous
+        # short preview produced only about -0.04 steering here; a useful
+        # anticipatory command should already be visible before the entrance.
+        self.assertLess(float(action[1]), -0.08)
+
     def test_missing_pose_returns_safe_neutral_action(self) -> None:
         np.testing.assert_allclose(self.expert.action({}), [0.0, 0.0])
 

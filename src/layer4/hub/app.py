@@ -1043,7 +1043,8 @@ async def post_train_phase(request: Request) -> Dict[str, str]:
     if not isinstance(payload, dict) or payload.get("kind") != "phase":
         raise HTTPException(status_code=400, detail="invalid training phase payload")
     if payload.get("phase") not in {
-        "demonstration_collection", "behavior_cloning", "rollout", "ppo_update", "stopped"
+        "demonstration_collection", "behavior_cloning", "behavior_cloning_ready",
+        "rollout", "ppo_update", "stopped"
     }:
         raise HTTPException(status_code=400, detail="invalid training phase")
     official_runs.ingest_telemetry(payload)

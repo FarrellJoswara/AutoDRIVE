@@ -287,6 +287,58 @@ class BehaviorCloningTests(unittest.TestCase):
                 self.assertEqual(set(saved.files), {"lidar", "state", "camera", "actions"})
                 self.assertEqual(saved["camera"].dtype, np.uint8)
 
+    def test_official_route_diagnostics_do_not_join_progress_across_auto_reset(self) -> None:
+        from src.layer3.behavior_cloning import collect_centerline_demonstrations
+
+        class FakeVecEnv:
+            num_envs = 1
+
+            def __init__(self):
+                self.progress = 10.0
+                self.steps = 0
+
+            def reset(self):
+                return {
+                    "lidar": np.ones((1, LIDAR_BEAMS), np.float32),
+                    "state": np.zeros((1, STATE_DIM), np.float32),
+                }
+
+            def env_method(self, method):
+                return [{"position": [0.0, 0.0], "yaw": 0.0,
+                         "current_progress_m": self.progress}]
+
+            def step(self, actions):
+                self.steps += 1
+                if self.steps == 1:
+                    self.progress = 3.0  # auto-reset state for the next call
+                    return self.reset(), np.zeros(1), np.ones(1, dtype=bool), [{
+                        "current_progress_m": 12.0,
+                        "frontier_progress_m": 12.0,
+                        "termination_reason": "collision",
+                        "episode_won": False,
+                    }]
+                self.progress = 3.2
+                return self.reset(), np.zeros(1), np.zeros(1, dtype=bool), [{
+                    "current_progress_m": 3.2,
+                }]
+
+        class Expert:
+            def action_batch(self, infos):
+                return np.zeros((1, 2), dtype=np.float32)
+
+        with TemporaryDirectory() as directory:
+            _, summary = collect_centerline_demonstrations(
+                FakeVecEnv(), Expert(), steps=2,
+                output_path=Path(directory) / "episodes.npz",
+            )
+
+        episode = summary["route_episode_diagnostics"][0]
+        self.assertEqual(episode["reason"], "collision")
+        self.assertEqual(episode["start_progress_m"], 10.0)
+        self.assertEqual(episode["end_progress_m"], 12.0)
+        self.assertEqual(episode["net_progress_m"], 2.0)
+        self.assertIsNone(summary["route_direction_diagnostics"][0]["net_progress_m"])
+
 
 if __name__ == "__main__":
     unittest.main()

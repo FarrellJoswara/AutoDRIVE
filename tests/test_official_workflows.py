@@ -8,7 +8,7 @@ from scripts.test_official_run_manager import FakeDocker
 from src.layer4.hub.official_run_manager import OfficialRunManager
 from src.layer4.hub.official_models import checkpoint_settings, list_official_models
 from src.layer4.hub.official_replay_job import OfficialReplayJob
-from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
+from src.layer4.hub.official_evaluation_service import OfficialEvaluationService, _attempt_collision_count
 from src.layer4.hub.native_official_backend import _windows_simulator_mode_args
 from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
 from src.layer3.official_train import train_official
@@ -524,6 +524,20 @@ def test_catalog_exposes_bc_only_checkpoint_for_official_replay(tmp_path):
     models = list_official_models(tmp_path / "logs" / "rl")
     assert any(item["id"].endswith("/behavior_cloned_policy.zip") for item in models)
     assert checkpoint_settings(bc_checkpoint)["observation_profile"] == "official_sensors_history"
+
+
+def test_evaluation_batch_counts_warmup_collision_when_race_counter_is_zero():
+    # An immediate first-impact stop may occur before the evaluator establishes
+    # a scored-race collision baseline. Preserve it in Mission Control totals.
+    attempt = {
+        "race_collisions": 0,
+        "race_collision_baseline": None,
+        "raw_collision_count_at_finish": 1,
+        "warmup_collisions": 0,
+        "stop_reason": "collision_detected",
+    }
+    assert _attempt_collision_count(attempt) == 1
+    assert _attempt_collision_count({"race_collisions": 2, "raw_collision_count_at_finish": 1}) == 2
 
 
 def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, tmp_path):

@@ -26,12 +26,14 @@ class CenterlineExpert:
         wheelbase_m: float = 0.26,
         max_steer_angle_rad: float = 0.45,
         max_lateral_accel_mps2: float = 0.8,
+        lookahead_base_m: float = 1.5,
     ) -> None:
         self.route = route
         self.max_speed_mps = max(0.5, float(max_speed_mps))
         self.wheelbase_m = max(0.05, float(wheelbase_m))
         self.max_steer_angle_rad = max(0.05, float(max_steer_angle_rad))
         self.max_lateral_accel_mps2 = max(0.1, float(max_lateral_accel_mps2))
+        self.lookahead_base_m = max(0.5, float(lookahead_base_m))
 
     @staticmethod
     def _wrap_angle(angle: float) -> float:
@@ -56,7 +58,10 @@ class CenterlineExpert:
             return np.asarray([0.0, 0.0], dtype=np.float32)
 
         speed = max(0.0, float(info.get("true_speed", abs(info.get("v_long", 0.0))) or 0.0))
-        lookahead = float(np.clip(0.9 + 0.35 * speed, 0.9, 2.0))
+        # Preview far enough to begin turning before Porto's tight bend near
+        # station 24 m; the shorter 0.9 m preview stayed nearly straight until
+        # the vehicle reached the bend entrance.
+        lookahead = float(np.clip(self.lookahead_base_m + 0.35 * speed, 0.9, 2.0))
         target, _ = self.route.point_and_tangent_at(float(route_s) + lookahead)
         target_bearing = math.atan2(float(target[0]) - x, float(target[1]) - z)
         alpha = self._wrap_angle(target_bearing - yaw)

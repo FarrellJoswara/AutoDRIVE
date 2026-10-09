@@ -69,10 +69,17 @@ def collect_centerline_demonstrations(
     # for reverse. Do not persist privileged pose/yaw samples in the dataset.
     initial_route_progress = [None] * n_envs
     last_route_progress = [None] * n_envs
+    previous_route_progress = [None] * n_envs
     route_forward_steps = [0] * n_envs
     route_backward_steps = [0] * n_envs
     reverse_motion_steps = [0] * n_envs
     negative_throttle_steps = [0] * n_envs
+    episode_start_progress = [None] * n_envs
+    episode_forward_steps = [0] * n_envs
+    episode_backward_steps = [0] * n_envs
+    episode_reverse_motion_steps = [0] * n_envs
+    episode_negative_throttle_steps = [0] * n_envs
+    route_episode_diagnostics = []
 
     total_steps = max(0, int(steps))
     report_every = max(1, total_steps // 10)
@@ -84,13 +91,18 @@ def collect_centerline_demonstrations(
             progress = info.get("current_progress_m")
             if progress is not None:
                 progress = float(progress)
+                if episode_start_progress[env_index] is None:
+                    episode_start_progress[env_index] = progress
                 if initial_route_progress[env_index] is None:
                     initial_route_progress[env_index] = progress
+                if previous_route_progress[env_index] is None:
+                    previous_route_progress[env_index] = progress
                 last_route_progress[env_index] = progress
         actions = expert.action_batch(current_infos)
         for env_index, action in enumerate(actions):
             if float(action[0]) < -1e-6:
                 negative_throttle_steps[env_index] += 1
+                episode_negative_throttle_steps[env_index] += 1
         for env_index in range(n_envs):
             lidar_rows.append(np.asarray(observations["lidar"][env_index], dtype=np.float32))
             state_rows.append(np.asarray(observations["state"][env_index], dtype=np.float32))
@@ -102,24 +114,59 @@ def collect_centerline_demonstrations(
             progress = info.get("current_progress_m")
             if progress is not None:
                 progress = float(progress)
-                previous = last_route_progress[env_index]
+                previous = previous_route_progress[env_index]
                 if previous is None:
                     initial_route_progress[env_index] = progress
                 elif progress - previous > 0.02:
                     route_forward_steps[env_index] += 1
+                    episode_forward_steps[env_index] += 1
                 elif progress - previous < -0.02:
                     route_backward_steps[env_index] += 1
+                    episode_backward_steps[env_index] += 1
+                previous_route_progress[env_index] = progress
                 last_route_progress[env_index] = progress
             if float(info.get("v_long", 0.0) or 0.0) < -0.15:
                 reverse_motion_steps[env_index] += 1
+                episode_reverse_motion_steps[env_index] += 1
             if done:
                 completed_episodes += 1
-                if bool(info.get("episode_won", False)):
+                won = bool(info.get("episode_won", False))
+                if won:
                     successful_episodes += 1
                 reason = str(
                     info.get("termination_reason") or info.get("truncate_reason") or "unknown"
                 )
                 termination_counts[reason] = termination_counts.get(reason, 0) + 1
+                end_progress = info.get("frontier_progress_m")
+                if end_progress is None:
+                    end_progress = progress
+                start_progress = episode_start_progress[env_index]
+                route_episode_diagnostics.append({
+                    "env_id": env_index,
+                    "episode": completed_episodes,
+                    "reason": reason,
+                    "episode_won": won,
+                    "start_progress_m": start_progress,
+                    "end_progress_m": (
+                        None if end_progress is None else float(end_progress)
+                    ),
+                    "net_progress_m": (
+                        None if start_progress is None or end_progress is None
+                        else round(float(end_progress) - start_progress, 4)
+                    ),
+                    "forward_progress_steps": episode_forward_steps[env_index],
+                    "backward_progress_steps": episode_backward_steps[env_index],
+                    "reverse_motion_steps": episode_reverse_motion_steps[env_index],
+                    "negative_throttle_steps": episode_negative_throttle_steps[env_index],
+                    "lap_count": int(info.get("lap_count", 0) or 0),
+                    "frontier_progress_m": info.get("frontier_progress_m"),
+                })
+                episode_start_progress[env_index] = None
+                episode_forward_steps[env_index] = 0
+                episode_backward_steps[env_index] = 0
+                episode_reverse_motion_steps[env_index] = 0
+                episode_negative_throttle_steps[env_index] = 0
+                previous_route_progress[env_index] = None
                 if len(termination_examples) < 8:
                     termination_examples.append({
                         "env_id": env_index,
@@ -159,6 +206,7 @@ def collect_centerline_demonstrations(
                 None
                 if initial_route_progress[env_index] is None
                 or last_route_progress[env_index] is None
+                or any(item["env_id"] == env_index for item in route_episode_diagnostics)
                 else round(
                     last_route_progress[env_index] - initial_route_progress[env_index],
                     4,
@@ -178,6 +226,7 @@ def collect_centerline_demonstrations(
         "termination_counts": termination_counts,
         "termination_examples": termination_examples,
         "route_direction_diagnostics": route_diagnostics,
+        "route_episode_diagnostics": route_episode_diagnostics,
     }
 
 

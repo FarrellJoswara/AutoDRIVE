@@ -30,6 +30,19 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _attempt_collision_count(attempt: dict[str, Any]) -> int:
+    """Count impacts even when the official race counter has not started.
+
+    The evaluator stops immediately on a collision, including during the
+    ignored warm-up lap. In that case ``race_collisions`` is legitimately zero
+    while ``raw_collision_count_at_finish`` records the impact. Mission
+    Control's batch total should still report the collision that ended the run.
+    """
+    race_count = int(attempt.get("race_collisions") or 0)
+    raw_count = int(attempt.get("raw_collision_count_at_finish") or 0)
+    return max(race_count, raw_count)
+
+
 class OfficialEvaluationService:
     """Runs automatic and manual full-race evaluations through one queue."""
 
@@ -408,6 +421,7 @@ class OfficialEvaluationService:
                 "race_time_s": attempt.get("race_time_s"),
                 "race_lap_times_s": attempt.get("race_lap_times_s", []),
                 "race_collisions": attempt.get("race_collisions"),
+                "collision_count": _attempt_collision_count(attempt),
                 "stop_reason": attempt.get("stop_reason"),
                 "evaluation_report": str(output_dir / "evaluation.json") if report else None,
             }
@@ -430,7 +444,7 @@ class OfficialEvaluationService:
             "best_adjusted_race_time_s": min(scores) if scores else None,
             "best_10_lap_time_s": median(raw_times) if len(raw_times) == self.ATTEMPTS else None,
             "laps_observed": min((len(item.get("race_lap_times_s", [])) for item in job["attempts"]), default=0),
-            "collisions": sum(int(item.get("race_collisions") or 0) for item in job["attempts"]),
+            "collisions": sum(int(item.get("collision_count") or 0) for item in job["attempts"]),
             "failed_episodes": 0, "evaluation_runs": len(job["attempts"]),
             "runs": job["attempts"], "model_sha256": job["model_sha256"],
             "source": job["source"], "parent_run_id": job.get("parent_run_id"),
