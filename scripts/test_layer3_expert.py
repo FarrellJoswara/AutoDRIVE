@@ -37,6 +37,16 @@ class CenterlineExpertTests(unittest.TestCase):
         self.assertGreater(float(action[0]), 0.0)
         self.assertAlmostEqual(float(action[1]), 0.0, places=5)
 
+    def test_teacher_accepts_official_planar_pose(self) -> None:
+        action = self.expert.action({
+            "position": (0.0, 0.0),
+            "yaw": 0.0,
+            "current_progress_m": 0.0,
+            "true_speed": 0.0,
+        })
+        self.assertGreater(float(action[0]), 0.0)
+        self.assertAlmostEqual(float(action[1]), 0.0, places=5)
+
     def test_teacher_steers_toward_inside_of_next_turn(self) -> None:
         s = 4.5
         point, _ = self.route.point_and_tangent_at(s)

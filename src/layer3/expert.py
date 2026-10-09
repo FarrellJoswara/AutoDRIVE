@@ -40,9 +40,11 @@ class CenterlineExpert:
     def action(self, info: Dict[str, Any]) -> np.ndarray:
         """Return [throttle, steering] in [-1, 1] for an environment info row."""
         position = info.get("position")
-        if position is None or len(position) < 3:
+        if position is None or len(position) < 2:
             return np.asarray([0.0, 0.0], dtype=np.float32)
-        x, z = float(position[0]), float(position[2])
+        # Official RoboRacer exposes planar [x, z] position; the custom
+        # simulator historically supplied Unity-style [x, y, z].
+        x, z = float(position[0]), float(position[2] if len(position) >= 3 else position[1])
         yaw = float(info.get("yaw", 0.0))
         route_s = info.get("current_progress_m")
         if route_s is None:

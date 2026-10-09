@@ -10,6 +10,7 @@ from src.layer4.hub.official_models import checkpoint_settings, list_official_mo
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
 from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
+from src.layer3.official_train import train_official
 
 
 @pytest.fixture
@@ -19,6 +20,14 @@ def manager(tmp_path):
                                runs_root=tmp_path / "logs" / "rl", start_monitor=False)
     yield result
     result.close()
+
+
+def test_official_training_requires_camera_fused_observations(tmp_path):
+    with pytest.raises(ValueError, match="requires camera, LiDAR, and state"):
+        train_official(
+            out_dir=tmp_path / "run", total_timesteps=1,
+            observation_profile="official_sensors",
+        )
 
 
 def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):

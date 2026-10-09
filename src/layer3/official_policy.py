@@ -95,9 +95,20 @@ def load_ppo_checkpoint(
         "clip_range": lambda _: constant_clip,
         "lr_schedule": lambda _: constant_lr,
     }
-    return PPO.load(
+    if observation_profile == "official_sensors_camera":
+        # Legacy camera checkpoints serialized SB3's uint8 normalization as
+        # enabled, then the custom extractor divided by 255 a second time.
+        # The extractor now owns the single normalization step.
+        custom_objects["normalize_images"] = False
+    model = PPO.load(
         str(checkpoint), env=env, device=device, custom_objects=custom_objects
     )
+    if observation_profile == "official_sensors_camera":
+        # SB3 stores this option inside the serialized policy_kwargs mapping,
+        # so a top-level custom_objects override is ignored by some versions.
+        # Set the active policy flag after deserialization as well.
+        model.policy.normalize_images = False
+    return model
 
 
 def resume_ppo_checkpoint(

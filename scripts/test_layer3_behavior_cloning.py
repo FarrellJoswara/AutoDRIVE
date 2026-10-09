@@ -39,7 +39,10 @@ class BehaviorCloningTests(unittest.TestCase):
     def test_cloning_fits_sensor_observation_to_continuous_action_labels(self) -> None:
         env = DummyVecEnv([_SensorEnv])
         try:
-            model = make_model(env, device="cpu", seed=12, tensorboard_log=None)
+            model = make_model(
+                env, device="cpu", seed=12, tensorboard_log=None,
+                policy_architecture="lidar_cnn",
+            )
             rng = np.random.default_rng(12)
             count = 256
             states = rng.normal(size=(count, STATE_DIM)).astype(np.float32)
@@ -57,6 +60,49 @@ class BehaviorCloningTests(unittest.TestCase):
             )
             self.assertEqual(summary["transitions"], count)
             self.assertLess(summary["final_validation_loss"], summary["initial_validation_loss"])
+        finally:
+            env.close()
+
+    def test_camera_enabled_policy_accepts_uint8_demonstrations_during_cloning(self) -> None:
+        class CameraEnv(_SensorEnv):
+            def __init__(self):
+                super().__init__()
+                self.observation_space = gym.spaces.Dict({
+                    "lidar": gym.spaces.Box(0.0, 1.0, shape=(LIDAR_BEAMS,), dtype=np.float32),
+                    "state": gym.spaces.Box(-5.0, 5.0, shape=(STATE_DIM,), dtype=np.float32),
+                    "camera": gym.spaces.Box(0, 255, shape=(90, 160, 3), dtype=np.uint8),
+                })
+
+            def reset(self, *, seed=None, options=None):
+                super().reset(seed=seed)
+                return {
+                    "lidar": np.ones(LIDAR_BEAMS, np.float32),
+                    "state": np.zeros(STATE_DIM, np.float32),
+                    "camera": np.full((90, 160, 3), 128, np.uint8),
+                }, {}
+
+        env = DummyVecEnv([CameraEnv])
+        try:
+            model = make_model(
+                env, device="cpu", seed=13, tensorboard_log=None,
+                policy_architecture="lidar_camera_cnn",
+            )
+            rng = np.random.default_rng(13)
+            count = 64
+            state = rng.normal(size=(count, STATE_DIM)).astype(np.float32)
+            summary = behavior_clone_actor(
+                model,
+                {
+                    "lidar": rng.uniform(0.2, 1.0, size=(count, LIDAR_BEAMS)).astype(np.float32),
+                    "state": state,
+                    "camera": rng.integers(0, 256, size=(count, 90, 160, 3), dtype=np.uint8),
+                    "actions": np.tanh(state[:, :2]).astype(np.float32),
+                },
+                epochs=1, batch_size=16, seed=13,
+            )
+            self.assertEqual(summary["transitions"], count)
+            self.assertTrue(np.isfinite(summary["final_validation_loss"]))
+            self.assertFalse(model.policy.normalize_images)
         finally:
             env.close()
 
@@ -140,6 +186,43 @@ class BehaviorCloningTests(unittest.TestCase):
             )
         self.assertTrue(np.allclose(env.executed_actions[0], [0.7, 0.6]))
         self.assertTrue(np.allclose(dataset["actions"][0], [0.1, -0.2]))
+
+    def test_official_route_teacher_collection_keeps_camera_and_excludes_privileged_state(self) -> None:
+        from src.layer3.behavior_cloning import collect_centerline_demonstrations
+
+        class FakeVecEnv:
+            num_envs = 1
+
+            def reset(self):
+                return {
+                    "lidar": np.ones((1, LIDAR_BEAMS), np.float32),
+                    "state": np.zeros((1, STATE_DIM), np.float32),
+                    "camera": np.full((1, 90, 160, 3), 128, np.uint8),
+                }
+
+            def env_method(self, method):
+                assert method == "get_current_info"
+                return [{"position": [1.0, 2.0], "yaw": 0.25, "current_progress_m": 3.0}]
+
+            def step(self, actions):
+                assert actions.shape == (1, 2)
+                return self.reset(), np.zeros(1), np.zeros(1, dtype=bool), [{}]
+
+        class Expert:
+            def action_batch(self, infos):
+                assert infos[0]["position"] == [1.0, 2.0]
+                return np.asarray([[0.2, -0.1]], dtype=np.float32)
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "official-demo.npz"
+            dataset, summary = collect_centerline_demonstrations(
+                FakeVecEnv(), Expert(), steps=2, output_path=path
+            )
+            self.assertEqual(summary["transitions"], 2)
+            self.assertEqual(set(dataset), {"lidar", "state", "camera", "actions"})
+            with np.load(path) as saved:
+                self.assertEqual(set(saved.files), {"lidar", "state", "camera", "actions"})
+                self.assertEqual(saved["camera"].dtype, np.uint8)
 
 
 if __name__ == "__main__":

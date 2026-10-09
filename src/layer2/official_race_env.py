@@ -196,6 +196,7 @@ class OfficialRaceEnv(gym.Env):
         self._frontier_last_push_s = 0.0
         self._last_training_steering = 0.0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
+        self._teacher_info: Dict[str, Any] = {}
 
     def reset(
         self,
@@ -266,7 +267,16 @@ class OfficialRaceEnv(gym.Env):
         info["watch_speed_mps"] = abs(
             float(self._observation_builder.last_forward_speed_mps)
         )
+        if self.route_progress is not None:
+            info["current_progress_m"] = float(self.route_progress.current_s or 0.0)
+        self._teacher_info = dict(info)
         return initial_obs, info
+
+    def get_current_info(self) -> Dict[str, Any]:
+        """Return cached privileged pose for the training-only route teacher."""
+        if not self.training_mode:
+            raise RuntimeError("privileged teacher state is available only during training")
+        return dict(self._teacher_info)
 
     def step(self, action: np.ndarray):
         throttle, steering = transform_policy_action(
@@ -531,6 +541,7 @@ class OfficialRaceEnv(gym.Env):
             info["termination_reason"] = reason or ("training_watchdog_timeout" if truncated else None)
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
+        self._teacher_info = dict(info)
         return observation, reward, terminated, truncated, info
 
     def _race_collisions(self, current_count: int) -> int:

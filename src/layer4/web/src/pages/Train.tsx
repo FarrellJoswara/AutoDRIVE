@@ -3,12 +3,14 @@ import {
   createOfficialRun,
   getBestOfficialEvaluation,
   getOfficialRuns,
+  getOfficialRunLiveTelemetry,
   getOfficialSettings,
   stopOfficialRun,
   type OfficialRunList,
   type OfficialChampion,
   type OfficialTrainSettings,
   type RunSummary,
+  type TrainingPhaseTelemetry,
 } from "../api";
 import { setOfficialRunSelection } from "../store";
 
@@ -79,6 +81,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   const [filter, setFilter] = useState<RunFilter>("all");
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [bestOfficialModel, setBestOfficialModel] = useState<OfficialChampion | null>(null);
+  const [selectedPhase, setSelectedPhase] = useState<TrainingPhaseTelemetry | null>(null);
 
   const activeRuns = useMemo(() => runs.filter(isActive), [runs]);
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
@@ -106,6 +109,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
         const configuredSettings = settingsResult.settings;
         setForm({
           ...configuredSettings,
+          observation_profile: "official_sensors_camera",
           timeout_s: configuredSettings.simulator_backend === "windows_external"
             ? Math.max(180, configuredSettings.timeout_s)
             : configuredSettings.timeout_s,
@@ -122,6 +126,20 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedPhase(null);
+    if (!selectedRunId) return () => { cancelled = true; };
+    const refreshPhase = () => {
+      void getOfficialRunLiveTelemetry(selectedRunId)
+        .then((telemetry) => { if (!cancelled) setSelectedPhase(telemetry.training_phase ?? null); })
+        .catch(() => undefined);
+    };
+    refreshPhase();
+    const timer = window.setInterval(refreshPhase, 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selectedRunId]);
 
   useEffect(() => {
     onReadyChange?.(!loading && form != null);
@@ -300,6 +318,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <input value={form.resume ?? ""} onChange={(event) => setText("resume", event.target.value)} placeholder="Blank starts a new policy" />
             </Field>
           </div>
+          {form.resume && <p className="meta">This run will resume the selected checkpoint and skip behavior cloning. Clear the resume field to start a fresh teacher-to-PPO run.</p>}
 
           <details style={{ marginTop: 12 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>Stopping rules and training objective</summary>
@@ -355,6 +374,26 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           <details style={{ marginTop: 12 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>PPO and checkpoint settings</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
+              <Field label="Official route-aware behavior cloning" help="New runs first collect sensor/action examples from a cautious route-following teacher in these same official simulator environments, then initialize PPO's actor from those examples. Resume runs skip this stage.">
+                <select value={form.behavior_cloning_enabled ? "yes" : "no"} disabled={Boolean(form.resume)} onChange={(event) => setForm((current) => current ? { ...current, behavior_cloning_enabled: event.target.value === "yes" } : current)}>
+                  <option value="yes">Enabled for new runs</option><option value="no">Start PPO directly</option>
+                </select>
+              </Field>
+              <Field label="Teacher steps per environment" help="Number of official sensor/action examples collected from each simulator before PPO starts.">
+                <input type="number" min={2} max={100000} value={form.behavior_cloning_steps_per_env} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_steps_per_env", event.target.value)} />
+              </Field>
+              <Field label="Teacher target speed (m/s)" help="Maximum speed used by the route-aware pure-pursuit teacher. It slows further for tight corners.">
+                <input type="number" min={0.5} max={10} step="any" value={form.behavior_teacher_max_speed_mps} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_teacher_max_speed_mps", event.target.value)} />
+              </Field>
+              <Field label="Behavior-cloning epochs" help="Training passes over the collected teacher examples before PPO takes over.">
+                <input type="number" min={1} max={100} value={form.behavior_cloning_epochs} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_epochs", event.target.value)} />
+              </Field>
+              <Field label="Behavior-cloning batch size" help="Number of sensor/action examples used per cloning update.">
+                <input type="number" min={8} max={4096} value={form.behavior_cloning_batch_size} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_batch_size", event.target.value)} />
+              </Field>
+              <Field label="Behavior-cloning learning rate" help="Optimizer step size used only while fitting the actor to the route teacher.">
+                <input type="number" min={0.000001} max={0.1} step="any" value={form.behavior_cloning_learning_rate} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_learning_rate", event.target.value)} />
+              </Field>
               <Field label="Automatic official evaluation" help="Runs a frozen checkpoint through one warm-up lap and ten scored laps on the official simulator. Three fresh simulator attempts are required before a result can promote the shared best model.">
                 <select value={form.automatic_evaluation_enabled ? "yes" : "no"} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_enabled: event.target.value === "yes" } : current)}>
                   <option value="yes">Enabled</option><option value="no">Disabled</option>
@@ -411,10 +450,8 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Per-episode simulator-clock watchdog (s)" help="Maximum elapsed episode time, including warm-up, measured from advancing ROS sensor timestamps when available. This is separate from the whole training run limit.">
                 <input type="number" min={1} step="any" value={form.training_timeout_s} onChange={(event) => setNumber("training_timeout_s", event.target.value)} />
               </Field>
-              <Field label="Observation profile" help="Selects which simulator-available observations are provided to the policy.">
-                <select value={form.observation_profile} onChange={(event) => setChoice("observation_profile", event.target.value as OfficialTrainSettings["observation_profile"])}>
-                  <option value="official_sensors">Official sensors</option>
-                  <option value="official_sensors_history">Official sensors + short history</option>
+              <Field label="Observation profile" help="New official training runs always fuse the official front camera, LiDAR, and vehicle state as requested.">
+                <select value="official_sensors_camera" disabled>
                   <option value="official_sensors_camera">Official sensors + front camera</option>
                 </select>
               </Field>
@@ -454,6 +491,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
 
       {message && <p className="msg ok" role="status">{message}</p>}
       {error && <p className="msg err" role="alert">{error}</p>}
+      {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase} · step {formatCount(selectedPhase.step)}.</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
       {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>

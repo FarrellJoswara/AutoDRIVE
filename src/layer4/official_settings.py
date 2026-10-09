@@ -38,6 +38,12 @@ class OfficialTrainSettings(BaseModel):
     automatic_evaluation_enabled: bool = True
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
+    behavior_cloning_enabled: bool = True
+    behavior_cloning_steps_per_env: int = Field(default=4000, ge=2, le=100_000)
+    behavior_cloning_epochs: int = Field(default=8, ge=1, le=100)
+    behavior_cloning_batch_size: int = Field(default=256, ge=8, le=4096)
+    behavior_cloning_learning_rate: float = Field(default=1e-3, gt=0, le=0.1)
+    behavior_teacher_max_speed_mps: float = Field(default=1.2, ge=0.5, le=10.0)
     n_steps: int = Field(default=2048, ge=64, multiple_of=64)
     learning_rate: float = Field(default=1e-4, gt=0, le=0.01)
     n_epochs: int = Field(default=4, ge=1, le=20)
@@ -87,6 +93,12 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_AUTO_EVALUATION_ENABLED": "1" if self.automatic_evaluation_enabled else "0",
             "AICAR_AUTO_EVALUATION_TRIGGER": self.automatic_evaluation_trigger,
             "AICAR_AUTO_EVALUATION_INTERVAL": str(self.automatic_evaluation_interval),
+            "AICAR_BEHAVIOR_CLONING_ENABLED": "1" if self.behavior_cloning_enabled else "0",
+            "AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV": str(self.behavior_cloning_steps_per_env),
+            "AICAR_BEHAVIOR_CLONING_EPOCHS": str(self.behavior_cloning_epochs),
+            "AICAR_BEHAVIOR_CLONING_BATCH_SIZE": str(self.behavior_cloning_batch_size),
+            "AICAR_BEHAVIOR_CLONING_LEARNING_RATE": str(self.behavior_cloning_learning_rate),
+            "AICAR_BEHAVIOR_TEACHER_MAX_SPEED_MPS": str(self.behavior_teacher_max_speed_mps),
             "AICAR_PPO_N_STEPS": str(self.n_steps),
             "AICAR_PPO_LEARNING_RATE": str(self.learning_rate),
             "AICAR_PPO_N_EPOCHS": str(self.n_epochs),

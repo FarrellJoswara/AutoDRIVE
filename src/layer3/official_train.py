@@ -143,6 +143,7 @@ def _official_ppo_config(model, *, observation_profile: str) -> dict:
         "max_grad_norm": float(model.max_grad_norm),
         "policy_architecture": architecture,
         "policy_extractor": type(model.policy.features_extractor).__name__,
+        "normalize_images": bool(model.policy.normalize_images),
     }
 
 
@@ -164,6 +165,7 @@ def _verify_official_ppo_config(model, requested: dict, *, observation_profile: 
             "official_sensors_history": "temporal_lidar_cnn",
             "official_sensors_camera": "lidar_camera_cnn",
         }.get(observation_profile, "lidar_cnn"),
+        "normalize_images": False,
     }
     if observation_profile == "official_sensors_camera" and not getattr(
         model.policy.features_extractor, "lidar_pooling", True
@@ -219,6 +221,12 @@ def train_official(
     automatic_evaluation_enabled: bool = True,
     automatic_evaluation_trigger: str = "steps",
     automatic_evaluation_interval: int = 50_000,
+    behavior_cloning_enabled: bool = True,
+    behavior_cloning_steps_per_env: int = 4000,
+    behavior_cloning_epochs: int = 8,
+    behavior_cloning_batch_size: int = 256,
+    behavior_cloning_learning_rate: float = 1e-3,
+    behavior_teacher_max_speed_mps: float = 1.2,
     n_steps: int = 2048,
     learning_rate: float = 1e-4,
     n_epochs: int = 4,
@@ -249,10 +257,19 @@ def train_official(
         raise ValueError("n_envs must be between 1 and 8")
     if total_timesteps < 0:
         raise ValueError("total_timesteps must be zero (unlimited) or positive")
+    if observation_profile != "official_sensors_camera":
+        raise ValueError("official PPO training requires camera, LiDAR, and state observations")
     if checkpoint_every < 1 or n_steps < 1 or n_epochs < 1 or automatic_evaluation_interval < 1:
         raise ValueError("checkpoint and automatic evaluation intervals, n_steps, and n_epochs must be positive")
     if automatic_evaluation_trigger not in {"steps", "episodes"}:
         raise ValueError("automatic_evaluation_trigger must be steps or episodes")
+    if behavior_cloning_enabled and behavior_cloning_steps_per_env < 2:
+        raise ValueError("behavior_cloning_steps_per_env must be >= 2 when cloning is enabled")
+    if behavior_cloning_enabled and (
+        behavior_cloning_epochs < 1 or behavior_cloning_batch_size < 1
+        or behavior_cloning_learning_rate <= 0 or behavior_teacher_max_speed_mps < 0.5
+    ):
+        raise ValueError("behavior-cloning optimizer and teacher settings are invalid")
     if plateau_window_episodes < 2 or plateau_patience < 1:
         raise ValueError("plateau_window_episodes must be >= 2 and plateau_patience >= 1")
     if min(plateau_min_timesteps, max_duration_hours) < 0:
@@ -445,12 +462,96 @@ def train_official(
                 device=device,
                 tensorboard_log=str(out_dir / "tensorboard"),
             )
-            model.set_logger(
-                configure(
-                    folder=str(out_dir / "tensorboard"),
-                    format_strings=["stdout", "csv", "tensorboard"],
-                )
+        cloning_summary = None
+        if resume is None and behavior_cloning_enabled:
+            from src.layer2.route_progress import RouteProgressTracker
+            from src.layer3.behavior_cloning import (
+                behavior_clone_actor, collect_centerline_demonstrations,
             )
+            from src.layer3.expert import CenterlineExpert
+
+            def publish_phase(phase: str, **details: object) -> None:
+                payload = {
+                    "kind": "phase", "phase": phase, "step": int(model.num_timesteps),
+                    "run_id": os.environ.get("AICAR_RUN_ID", out_dir.name),
+                    "runtime": "official", "rollout_size": int(n_steps * n_envs),
+                    "ts": datetime.now(timezone.utc).isoformat(), **details,
+                }
+                (out_dir / "latest_training_phase.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+                hub_url = os.environ.get("HUB_URL", "").rstrip("/")
+                if hub_url:
+                    try:
+                        import urllib.request
+                        request = urllib.request.Request(
+                            hub_url + "/api/train/phase",
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"}, method="POST",
+                        )
+                        with urllib.request.urlopen(request, timeout=2.0):
+                            pass
+                    except Exception as exc:
+                        print(f"Could not publish {phase} phase to Mission Control: {exc}", file=sys.stderr, flush=True)
+
+            route = RouteProgressTracker.from_csv(
+                Path(__file__).resolve().parents[2]
+                / "competition" / "iros2026" / "official_centerline.csv"
+            )
+            expert = CenterlineExpert(route, max_speed_mps=behavior_teacher_max_speed_mps)
+            publish_phase("demonstration_collection")
+            demonstrations, collection_summary = collect_centerline_demonstrations(
+                vec_env, expert,
+                steps=behavior_cloning_steps_per_env,
+                output_path=out_dir / "behavior_cloning_demonstrations.npz",
+                should_stop=stop_requested.is_set,
+            )
+            if stop_requested.is_set():
+                target = out_dir / "official_policy_latest.zip"
+                model.save(str(target.with_suffix("")))
+                (out_dir / "stop_reason.json").write_text(
+                    json.dumps({"reason": "operator_stop_during_behavior_cloning", "num_timesteps": 0}, indent=2),
+                    encoding="utf-8",
+                )
+                publish_phase("stopped", stop_reason="operator_stop_during_behavior_cloning")
+                print("Training stopped during teacher collection; saved the initialized policy.", flush=True)
+                return target
+            if collection_summary["transitions"] < 2:
+                raise RuntimeError("official teacher did not produce enough demonstrations to initialize PPO")
+            publish_phase("behavior_cloning", transitions=collection_summary["transitions"])
+            cloning_summary = behavior_clone_actor(
+                model, demonstrations, epochs=behavior_cloning_epochs,
+                batch_size=behavior_cloning_batch_size,
+                learning_rate=behavior_cloning_learning_rate, seed=seed,
+                should_stop=stop_requested.is_set,
+            )
+            cloning_summary["collection"] = collection_summary
+            (out_dir / "behavior_cloning_summary.json").write_text(
+                json.dumps(cloning_summary, indent=2), encoding="utf-8"
+            )
+            print(
+                "Official behavior cloning completed: "
+                f"{collection_summary['transitions']} sensor/action pairs; "
+                f"validation loss {cloning_summary['initial_validation_loss']:.5f} -> "
+                f"{cloning_summary['final_validation_loss']:.5f}", flush=True,
+            )
+            if stop_requested.is_set():
+                target = out_dir / "official_policy_latest.zip"
+                model.save(str(target.with_suffix("")))
+                (out_dir / "stop_reason.json").write_text(
+                    json.dumps({"reason": "operator_stop_during_behavior_cloning", "num_timesteps": 0}, indent=2),
+                    encoding="utf-8",
+                )
+                publish_phase("stopped", stop_reason="operator_stop_during_behavior_cloning")
+                print("Training stopped during behavior cloning; saved the current policy.", flush=True)
+                return target
+
+        model.set_logger(
+            configure(
+                folder=str(out_dir / "tensorboard"),
+                format_strings=["stdout", "csv", "tensorboard"],
+            )
+        )
 
         effective_ppo = _official_ppo_config(
             model, observation_profile=observation_profile
@@ -479,6 +580,7 @@ def train_official(
                 "laps": "end successfully after the configured official lap count when route-frontier distance also confirms at least 95% of the target distance",
             },
             "observation_profile": observation_profile,
+            "policy_image_normalization": "custom extractor divides uint8 RGB by 255 exactly once; SB3 image normalization disabled",
             "actions": {
                 "throttle_mode": throttle_mode,
                 "negative_throttle_mode": negative_throttle_mode,
@@ -534,6 +636,18 @@ def train_official(
                 "attempts_per_snapshot": 3,
                 "protocol": "one warmup lap followed by ten scored race laps",
             },
+            "behavior_cloning": {
+                "enabled": bool(behavior_cloning_enabled and resume is None),
+                "teacher": "route-aware pure pursuit on official Porto centerline",
+                "teacher_max_speed_mps": behavior_teacher_max_speed_mps,
+                "steps_per_environment": behavior_cloning_steps_per_env,
+                "epochs": behavior_cloning_epochs,
+                "batch_size": behavior_cloning_batch_size,
+                "learning_rate": behavior_cloning_learning_rate,
+                "summary": cloning_summary,
+                "policy_inputs": list(model.observation_space.spaces.keys()),
+                "privileged_teacher_state_saved": False,
+            },
             "exploration_schedule": {
                 "minimum_action_std": 0.2,
                 "maximum_action_std": 0.8,
@@ -572,6 +686,24 @@ def train_official(
             progress_bar=False,
             reset_num_timesteps=resume is None,
         )
+        if os.environ.get("HUB_URL") and behavior_cloning_enabled and resume is None:
+            payload = {
+                "kind": "phase", "phase": "rollout", "step": int(model.num_timesteps),
+                "run_id": os.environ.get("AICAR_RUN_ID", out_dir.name),
+                "runtime": "official", "rollout_size": int(n_steps * n_envs),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                import urllib.request
+                request = urllib.request.Request(
+                    os.environ["HUB_URL"].rstrip("/") + "/api/train/phase",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=2.0):
+                    pass
+            except Exception:
+                pass
         target = out_dir / "official_policy_latest.zip"
         model.save(str(target.with_suffix("")))
         print(f"Saved official-simulator PPO checkpoint: {target}", flush=True)
@@ -616,6 +748,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--automatic-evaluation-enabled", type=int, choices=(0, 1), default=1)
     parser.add_argument("--automatic-evaluation-trigger", choices=("steps", "episodes"), default="steps")
     parser.add_argument("--automatic-evaluation-interval", type=int, default=50_000)
+    parser.add_argument("--behavior-cloning-enabled", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--behavior-cloning-steps-per-env", type=int, default=4000)
+    parser.add_argument("--behavior-cloning-epochs", type=int, default=8)
+    parser.add_argument("--behavior-cloning-batch-size", type=int, default=256)
+    parser.add_argument("--behavior-cloning-learning-rate", type=float, default=1e-3)
+    parser.add_argument("--behavior-teacher-max-speed-mps", type=float, default=1.2)
     parser.add_argument("--n-steps", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--n-epochs", type=int, default=4)
@@ -662,6 +800,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         automatic_evaluation_enabled=bool(args.automatic_evaluation_enabled),
         automatic_evaluation_trigger=args.automatic_evaluation_trigger,
         automatic_evaluation_interval=args.automatic_evaluation_interval,
+        behavior_cloning_enabled=bool(args.behavior_cloning_enabled),
+        behavior_cloning_steps_per_env=args.behavior_cloning_steps_per_env,
+        behavior_cloning_epochs=args.behavior_cloning_epochs,
+        behavior_cloning_batch_size=args.behavior_cloning_batch_size,
+        behavior_cloning_learning_rate=args.behavior_cloning_learning_rate,
+        behavior_teacher_max_speed_mps=args.behavior_teacher_max_speed_mps,
         n_steps=args.n_steps,
         learning_rate=args.learning_rate,
         n_epochs=args.n_epochs,

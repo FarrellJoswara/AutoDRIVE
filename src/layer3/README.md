@@ -8,10 +8,11 @@ Layer 3 is the **brain trainer**: it uses Layer 2’s Gym env and teaches a neur
 
 ## Plain English: what problem are we solving?
 
-Every step, the car gives us two piles of numbers:
+Every official camera-enabled training step, the car gives us three inputs:
 
 1. **LiDAR** — 1081 distance readings in a fan around the car (“how far is stuff in each direction?”).
 2. **State** — 9 normalized sensor/control values (body speeds, yaw rate, acceleration, actuator feedback, and previous commands).
+3. **Front camera** — official RGB frames, resized to 160×90.
 
 We need the computer to turn that into:
 
@@ -23,9 +24,9 @@ A **neural net** does that. While **training**, we also keep score (reward from 
 
 ---
 
-## “1D-CNN on LiDAR + MLP on state, then fuse” — what that actually means
+## “LiDAR CNN + camera CNN + state MLP, then fuse” — what that actually means
 
-Think of the net as a **two-input gadget** that outputs one summary, then another gadget that picks the pedals.
+Think of the net as a **three-input gadget** that combines range, vision, and vehicle state before choosing the pedals.
 
 ### Input A — LiDAR (1081 numbers in a row)
 
@@ -44,14 +45,15 @@ Speed, sideways slip, last controls, etc. There’s no “strip of space” here
 We now have:
 
 - a summary vector from the LiDAR CNN  
+- a visual summary from the camera CNN
 - a summary vector from the state MLP  
 
 **Fuse** = glue them into **one longer list of numbers** (e.g. 256 floats). That list is the car’s situation in a form the rest of the net likes.
 
 ```text
-  lidar[1081] ──▶ 1D-CNN ──▶ summary_A ─┐
-                                         ├─▶ glue ──▶ one feature vector (e.g. 256)
-  state[9]    ──▶ MLP    ──▶ summary_B ─┘
+  lidar[1081]       ──▶ 1D-CNN ──▶ summary_A ─┐
+  camera[90x160x3]  ──▶ 2D-CNN ──▶ summary_B ──┼─▶ glue ──▶ one feature vector (e.g. 256)
+  state[9]          ──▶ MLP    ──▶ summary_C ──┘
                                               │
                                               ▼
                                     “what should I do?” heads
@@ -68,10 +70,10 @@ That glue module is what we call the **feature extractor** (`extractors.py`).
 
 | Piece | Where | What it does |
 |-------|--------|--------------|
-| Feature extractor | `src/layer3/extractors.py` | LiDAR CNN + state MLP → one feature vector |
+| Feature extractor | `src/layer3/extractors.py` | LiDAR CNN + camera CNN + state MLP → one feature vector |
 | Env / VecEnv factory | `src/layer3/envs.py` | 1 env, or **N envs via SubprocVecEnv** |
 | Demonstration driver | `src/layer3/expert.py` | Optional map-aware teacher for action labels; disabled by default |
-| Behavior cloning | `src/layer3/behavior_cloning.py` | Warm-start PPO actor from LiDAR/state demonstrations |
+| Behavior cloning | `src/layer3/behavior_cloning.py` | Warm-start PPO actor from official camera/LiDAR/state demonstrations |
 | **Training** | `src/layer3/train.py` | PPO training, deterministic evaluation, best-checkpoint selection, evaluation plateau and bounded exploration |
 | **Evaluation** | `src/layer3/evaluate.py` | Fixed simulated-time deterministic frontier, pace, crash, stall and lap diagnostics |
 | **Playback** | `src/layer3/play.py` | Load `.zip`, drive — **no learning** (always 1 env) |
@@ -97,7 +99,7 @@ Implemented in `envs.py` / `train.py`. Full detail: [`LAYER3.md` §5](../../LAYE
 ## What training actually does (no jargon)
 
 1. Start one or more Gym envs (each talks to its own sim via Layers 1–2).
-2. Optional: on closed centerline maps, a cautious teacher can label LiDAR/state samples with throttle and steering. This warm-up is disabled by default. Route pose is used for labels only; it is not added to the policy observation.
+2. New Mission Control official runs first use a route-aware teacher in the selected official simulator environments to label camera/LiDAR/state observations with throttle and steering. Privileged route pose is read only to choose teacher actions; it is not saved in the demonstration archive or passed to PPO. Resumed runs skip this stage.
 3. If teacher labels were collected, behavior cloning can initialize the PPO actor from them. Otherwise PPO starts from its own initialization (or the checkpoint selected with Resume).
 4. A lap crossing never ends an episode. Cars continue until a collision, stalled frontier, or configured safety termination; lap counts and times remain measurements.
 5. A separate simulator evaluates an immutable policy snapshot in the background for the configured number of attempts, while the training simulators continue collecting experience. Each attempt ends on collision, frontier stall, or ten completed laps. The median selected score drives checkpoint selection, exploration changes, and plateau stopping; per-attempt scores, the mean, and the best attempt are retained for inspection. If an evaluation batch is still running at the next interval, one request for the latest policy is queued; snapshots never overlap. Attempts currently repeat the configured map spawn, so they measure simulator consistency rather than generalization across spawn conditions.
@@ -105,6 +107,12 @@ Implemented in `envs.py` / `train.py`. Full detail: [`LAYER3.md` §5](../../LAYE
 7. `python -m src.layer3.evaluate --model logs/rl/<run>/final_model.zip --map-id porto` runs the same failure-or-ten-lap evaluation outside training.
 
 Playback skips 3–4: load zip → only look → act (single car).
+
+### Official simulator behavior cloning → PPO
+
+The Mission Control **Train** page exposes the route-teacher stage and PPO as one official workflow. A new run collects the configured number of teacher steps from each official simulator environment, fits the shared PPO actor to those actions, then starts PPO on the same environment pool. The saved demonstration archive contains only `lidar`, `camera` (when enabled), `state`, and `actions`; route pose stays runtime-only. `behavior_cloning_summary.json` records the held-out imitation loss and collection counts. Resumed checkpoints skip cloning.
+
+Camera pixels are `uint8` RGB and are divided by 255 once inside the custom vision extractor. Stable-Baselines3 image normalization is disabled for these custom policies to prevent a second division. The official checkpoint loader also repairs that setting when it loads older camera checkpoints. This corrects inference input scaling; it does not establish that legacy model weights learned from the corrected scale.
 
 ### Privileged PPO to sensor-only transfer experiment
 

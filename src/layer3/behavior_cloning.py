@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -15,16 +15,14 @@ def collect_centerline_demonstrations(
     *,
     steps: int,
     output_path: Path,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, int]]:
     """Collect observations/actions; map pose is used for labels only."""
     observations = vec_env.reset()
     lidar_rows = []
+    camera_rows = []
     state_rows = []
     action_rows = []
-    position_rows = []
-    yaw_rows = []
-    progress_rows = []
-    speed_rows = []
     successful_episodes = 0
     completed_episodes = 0
     termination_counts: Dict[str, int] = {}
@@ -34,18 +32,16 @@ def collect_centerline_demonstrations(
     total_steps = max(0, int(steps))
     report_every = max(1, total_steps // 10)
     for step_index in range(total_steps):
+        if should_stop is not None and should_stop():
+            break
         current_infos = vec_env.env_method("get_current_info")
         actions = expert.action_batch(current_infos)
         for env_index in range(n_envs):
             lidar_rows.append(np.asarray(observations["lidar"][env_index], dtype=np.float32))
             state_rows.append(np.asarray(observations["state"][env_index], dtype=np.float32))
+            if "camera" in observations:
+                camera_rows.append(np.asarray(observations["camera"][env_index], dtype=np.uint8).copy())
             action_rows.append(actions[env_index])
-            info = current_infos[env_index] if isinstance(current_infos[env_index], dict) else {}
-            position = info.get("position") or (0.0, 0.0, 0.0)
-            position_rows.append(np.asarray(position, dtype=np.float32))
-            yaw_rows.append(float(info.get("yaw", 0.0) or 0.0))
-            progress_rows.append(float(info.get("current_progress_m", 0.0) or 0.0))
-            speed_rows.append(float(info.get("true_speed", 0.0) or 0.0))
         observations, _, dones, infos = vec_env.step(actions)
         for env_index, (done, info) in enumerate(zip(dones, infos)):
             if done:
@@ -62,10 +58,6 @@ def collect_centerline_demonstrations(
                         "reason": reason,
                         "lap_count": int(info.get("lap_count", 0) or 0),
                         "frontier_progress_m": info.get("frontier_progress_m"),
-                        "current_progress_m": info.get("current_progress_m"),
-                        "position": list(info.get("position") or ()),
-                        "yaw": info.get("yaw"),
-                        "speed": info.get("true_speed"),
                     })
         if (step_index + 1) % report_every == 0 or step_index + 1 == total_steps:
             print(
@@ -78,11 +70,9 @@ def collect_centerline_demonstrations(
         "lidar": np.asarray(lidar_rows, dtype=np.float32),
         "state": np.asarray(state_rows, dtype=np.float32),
         "actions": np.asarray(action_rows, dtype=np.float32),
-        "positions": np.asarray(position_rows, dtype=np.float32),
-        "yaws": np.asarray(yaw_rows, dtype=np.float32),
-        "route_progress_m": np.asarray(progress_rows, dtype=np.float32),
-        "speed_mps": np.asarray(speed_rows, dtype=np.float32),
     }
+    if camera_rows:
+        dataset["camera"] = np.asarray(camera_rows, dtype=np.uint8)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **dataset)
     return dataset, {
@@ -112,6 +102,7 @@ def collect_policy_demonstrations(
     """
     observations = vec_env.reset()
     lidar_rows = []
+    camera_rows = []
     state_rows = []
     action_rows = []
     total_steps = max(0, int(steps))
@@ -141,6 +132,8 @@ def collect_policy_demonstrations(
         state_rows.extend(
             np.asarray(observations["state"], dtype=np.float32).copy()
         )
+        if "camera" in observations:
+            camera_rows.extend(np.asarray(observations["camera"], dtype=np.uint8).copy())
         action_rows.extend(labels.copy())
         observations, _, _, _ = vec_env.step(actions)
         if (step_index + 1) % report_every == 0 or step_index + 1 == total_steps:
@@ -155,6 +148,8 @@ def collect_policy_demonstrations(
         "state": np.asarray(state_rows, dtype=np.float32),
         "actions": np.asarray(action_rows, dtype=np.float32),
     }
+    if camera_rows:
+        dataset["camera"] = np.asarray(camera_rows, dtype=np.uint8)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **dataset)
     return dataset, {"transitions": int(len(action_rows)), "environments": n_envs}
@@ -168,6 +163,7 @@ def behavior_clone_actor(
     batch_size: int = 256,
     learning_rate: float = 1e-3,
     seed: int = 0,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, float]:
     """Fit the PPO actor's mean action to teacher labels, with a held-out split."""
     import torch
@@ -198,10 +194,7 @@ def behavior_clone_actor(
         with torch.no_grad():
             for start in range(0, len(indices), batch_size):
                 batch = indices[start:start + batch_size]
-                obs, _ = policy.obs_to_tensor({
-                    "lidar": dataset["lidar"][batch],
-                    "state": dataset["state"][batch],
-                })
+                obs, _ = policy.obs_to_tensor({key: value[batch] for key, value in dataset.items() if key != "actions"})
                 actions = torch.as_tensor(dataset["actions"][batch], device=device)
                 predicted = policy.get_distribution(obs).distribution.mean
                 losses.append(float(F.smooth_l1_loss(predicted, actions).item()))
@@ -210,14 +203,15 @@ def behavior_clone_actor(
 
     initial_validation_loss = evaluate(validation_indices)
     training_losses = []
+    stopped_early = False
     for _ in range(max(1, int(epochs))):
         rng.shuffle(training_indices)
         for start in range(0, len(training_indices), batch_size):
+            if should_stop is not None and should_stop():
+                stopped_early = True
+                break
             batch = training_indices[start:start + batch_size]
-            obs, _ = policy.obs_to_tensor({
-                "lidar": dataset["lidar"][batch],
-                "state": dataset["state"][batch],
-            })
+            obs, _ = policy.obs_to_tensor({key: value[batch] for key, value in dataset.items() if key != "actions"})
             actions = torch.as_tensor(dataset["actions"][batch], device=device)
             predicted = policy.get_distribution(obs).distribution.mean
             loss = F.smooth_l1_loss(predicted, actions)
@@ -226,6 +220,8 @@ def behavior_clone_actor(
             torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
             optimizer.step()
             training_losses.append(float(loss.item()))
+        if stopped_early:
+            break
 
     final_validation_loss = evaluate(validation_indices)
     policy.set_training_mode(False)
@@ -235,4 +231,5 @@ def behavior_clone_actor(
         "final_validation_loss": final_validation_loss,
         "mean_training_loss": float(np.mean(training_losses)) if training_losses else 0.0,
         "epochs": float(max(1, int(epochs))),
+        "stopped_early": float(stopped_early),
     }

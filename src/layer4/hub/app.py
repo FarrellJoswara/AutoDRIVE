@@ -635,6 +635,8 @@ async def create_official_run(request: Request) -> Dict[str, Any]:
         if not isinstance(raw, dict):
             raise ValueError("request body must be an object")
         config = OfficialTrainSettings.model_validate(raw.get("config", raw))
+        if config.observation_profile != "official_sensors_camera":
+            raise ValueError("new official training runs require camera, LiDAR, and state observations")
         save_official_train_settings(config)
         _official_train_settings = config
         display_name = raw.get("display_name")
@@ -1040,7 +1042,9 @@ async def post_train_phase(request: Request) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="invalid JSON") from exc
     if not isinstance(payload, dict) or payload.get("kind") != "phase":
         raise HTTPException(status_code=400, detail="invalid training phase payload")
-    if payload.get("phase") not in {"rollout", "ppo_update", "stopped"}:
+    if payload.get("phase") not in {
+        "demonstration_collection", "behavior_cloning", "rollout", "ppo_update", "stopped"
+    }:
         raise HTTPException(status_code=400, detail="invalid training phase")
     official_runs.ingest_telemetry(payload)
     bus.publish_train_phase(payload)

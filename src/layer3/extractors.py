@@ -252,6 +252,10 @@ def policy_kwargs_for_architecture(architecture: str) -> dict:
         ) from exc
     return {
         "features_extractor_class": extractor,
+        # These custom extractors own camera scaling. SB3's default image
+        # preprocessor would divide uint8 camera frames by 255 first, then the
+        # camera branch would divide a second time.
+        "normalize_images": False,
         "features_extractor_kwargs": {
             "features_dim": 256,
             **({"lidar_pooling": False} if architecture == "lidar_camera_raw_cnn" else {}),
