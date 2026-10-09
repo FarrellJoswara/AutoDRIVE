@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import json
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -118,6 +119,15 @@ class NativeOfficialBackend:
                     }
             except (OSError, ValueError, KeyError, TypeError):
                 continue
+
+    def _native_policy_command(self, command: list[str]) -> list[str]:
+        """Run the policy process with the same ROS setup as its bridge pair."""
+        setup = (
+            "set +u; source /opt/ros/jazzy/setup.bash; "
+            f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; "
+            'set -u; exec "$@"'
+        )
+        return ["bash", "-lc", setup, "aicar-native-policy", *command]
 
     @staticmethod
     def _persist_group(group: dict[str, Any]) -> None:
@@ -262,6 +272,12 @@ class NativeOfficialBackend:
                     relay_port = int((published_ports or {}).get("4568", 49152 + index))
                     allocated_domain = self._allocate_ros_domain()
                     allocated_port = self._allocate_devkit_port()
+                    # The bridge and relay share the allocated domain, and the
+                    # policy/evaluator process must join that same domain to
+                    # receive their ROS topics. Previously only the bridge
+                    # pair inherited this value, leaving evaluation clients on
+                    # the default domain where no simulator topics exist.
+                    child_env["ROS_DOMAIN_ID"] = str(allocated_domain)
                     self._start_bridge_pair(
                         records, run_id, index, child_env, run_dir,
                         relay_port=relay_port, ros_domain=allocated_domain,
@@ -280,7 +296,7 @@ class NativeOfficialBackend:
                             else self._training_command(child_env)
                         )
                         process = subprocess.Popen(
-                            command,
+                            self._native_policy_command(command),
                             cwd=ROOT,
                             env=child_env,
                             stdin=subprocess.DEVNULL,
@@ -509,11 +525,17 @@ class NativeOfficialBackend:
             ["wslpath", "-w", str(ports_file)], check=True,
             stdout=subprocess.PIPE, text=True, encoding="utf-8", timeout=10,
         ).stdout.strip()
+        pause_file = run_dir / "evaluation_pause.flag"
+        pause_file_windows = subprocess.run(
+            ["wslpath", "-w", str(pause_file)], check=True,
+            stdout=subprocess.PIPE, text=True, encoding="utf-8", timeout=10,
+        ).stdout.strip()
         arguments = [
             powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", script_windows, "-SimulatorExePath", simulator_exe,
             "-RunId", run_id, "-HubUrl", hub_url, "-BridgeIpAddress", bridge_ip,
             "-PidFile", pid_file_windows, "-PortsFile", ports_file_windows,
+            "-PauseFile", pause_file_windows,
         ]
         process = subprocess.Popen(
             arguments, cwd=ROOT, stdin=subprocess.DEVNULL,
@@ -544,7 +566,21 @@ class NativeOfficialBackend:
         # relay health reports before declaring run startup complete.
         self._wait_for_simulator_streams(connections, run_dir)
 
-    def _wait_for_simulator_streams(self, connections: list[dict[str, Any]], run_dir: Path) -> None:
+    def _read_simulator_health(self, port: int) -> dict[str, Any] | None:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1.0) as response:
+                health = json.loads(response.read())
+            return health if isinstance(health, dict) else None
+        except (OSError, ValueError, urllib.error.URLError):
+            return None
+
+    def _wait_for_simulator_streams(
+        self,
+        connections: list[dict[str, Any]],
+        run_dir: Path,
+        *,
+        minimum_frames: dict[int, tuple[int, int]] | None = None,
+    ) -> dict[int, dict[str, Any]]:
         deadline = time.monotonic() + max(45.0, self.startup_timeout_s)
         last: dict[int, dict[str, Any] | str] = {}
         while time.monotonic() < deadline:
@@ -552,25 +588,24 @@ class NativeOfficialBackend:
             for item in connections:
                 index = int(item["environment"])
                 port = int(item["port"])
-                try:
-                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1.0) as response:
-                        health = json.loads(response.read())
-                    last[index] = health
-                except (OSError, ValueError, urllib.error.URLError) as exc:
-                    last[index] = f"{type(exc).__name__}: {exc}"
+                health = self._read_simulator_health(port)
+                if health is None:
+                    last[index] = "health endpoint unavailable"
                     all_ready = False
                     continue
+                last[index] = health
+                minimum_complete, minimum_camera = (minimum_frames or {}).get(index, (1, 1))
                 if not (
                     int(health.get("simulator_clients", 0)) >= 1
-                    and int(health.get("complete_frames", 0)) >= 1
-                    and int(health.get("camera_frames", 0)) >= 1
+                    and int(health.get("complete_frames", 0)) >= minimum_complete
+                    and int(health.get("camera_frames", 0)) >= minimum_camera
                 ):
                     all_ready = False
             if all_ready:
                 (run_dir / "simulator_stream_health.json").write_text(
                     json.dumps({"environments": last}, indent=2), encoding="utf-8"
                 )
-                return
+                return {int(index): value for index, value in last.items() if isinstance(value, dict)}
             time.sleep(0.5)
         (run_dir / "simulator_stream_health.json").write_text(
             json.dumps({"environments": last}, indent=2), encoding="utf-8"
@@ -579,6 +614,105 @@ class NativeOfficialBackend:
             "Windows simulator ports accepted TCP connections, but all official "
             f"Socket.IO camera streams did not become ready: {json.dumps(last, sort_keys=True)}"
         )
+
+    def pause_training_for_evaluation(
+        self, *, run_id: str, connections: list[dict[str, Any]], hub_url: str,
+    ) -> None:
+        """Freeze PPO and retire its Windows sims while the official evaluator runs."""
+        with self._lock:
+            group = next((item for item in self._groups.values()
+                          if item.get("Labels", {}).get("aicar.run_id") == run_id
+                          and item.get("Labels", {}).get("aicar.role") == "api"), None)
+            trainer = next((item for item in (group or {}).get("records", ())
+                            if item.get("role") == "trainer"), None)
+        if trainer is None:
+            raise RuntimeError(f"training process for {run_id} is unavailable for evaluation pause")
+        process = trainer["process"]
+        if process.poll() is not None:
+            raise RuntimeError(f"training process for {run_id} has already exited")
+
+        run_dir = self._run_dir_for_id(run_id)
+        pause_file = run_dir / "evaluation_pause.flag"
+        if pause_file.exists():
+            raise RuntimeError(f"training run {run_id} is already paused for evaluation")
+        baselines: dict[int, tuple[int, int]] = {}
+        for item in connections:
+            index = int(item["environment"])
+            health = self._read_simulator_health(int(item["port"])) or {}
+            baselines[index] = (
+                int(health.get("complete_frames", 0)) + 1,
+                int(health.get("camera_frames", 0)) + 1,
+            )
+        group["evaluation_frame_baselines"] = baselines
+
+        os.killpg(int(process.pid), getattr(signal, "SIGSTOP", 19))
+        try:
+            pause_file.write_text(json.dumps({
+                "frames": {
+                    str(index): {"complete": values[0] - 1, "camera": values[1] - 1}
+                    for index, values in baselines.items()
+                }
+            }), encoding="utf-8")
+            pid_file = run_dir / "windows_simulator_pids.txt"
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                try:
+                    remaining = pid_file.read_text(encoding="ascii").strip()
+                except OSError:
+                    remaining = ""
+                if not remaining:
+                    return
+                time.sleep(0.2)
+            raise TimeoutError(f"Windows training simulators for {run_id} did not pause")
+        except Exception:
+            pause_file.unlink(missing_ok=True)
+            os.killpg(int(process.pid), getattr(signal, "SIGCONT", 18))
+            raise
+
+    def resume_training_after_evaluation(
+        self, *, run_id: str, connections: list[dict[str, Any]], hub_url: str,
+    ) -> None:
+        with self._lock:
+            group = next((item for item in self._groups.values()
+                          if item.get("Labels", {}).get("aicar.run_id") == run_id
+                          and item.get("Labels", {}).get("aicar.role") == "api"), None)
+            trainer = next((item for item in (group or {}).get("records", ())
+                            if item.get("role") == "trainer"), None)
+        if trainer is None:
+            raise RuntimeError(f"training process for {run_id} is unavailable for evaluation resume")
+        process = trainer["process"]
+        pause_file = self._run_dir_for_id(run_id) / "evaluation_pause.flag"
+        baselines = (group or {}).get("evaluation_frame_baselines", {})
+        if not baselines:
+            try:
+                pause_state = json.loads(pause_file.read_text(encoding="utf-8"))
+                baselines = {
+                    int(index): (int(counts.get("complete", 0)) + 1, int(counts.get("camera", 0)) + 1)
+                    for index, counts in pause_state.get("frames", {}).items()
+                }
+            except (OSError, ValueError, TypeError, AttributeError):
+                baselines = {}
+        try:
+            pause_file.unlink(missing_ok=True)
+            self._wait_for_simulator_streams(
+                connections, self._run_dir_for_id(run_id), minimum_frames=baselines,
+            )
+        finally:
+            if group is not None:
+                group.pop("evaluation_frame_baselines", None)
+            if process.poll() is None:
+                os.killpg(int(process.pid), getattr(signal, "SIGCONT", 18))
+
+    def abort_evaluation_pause(self, run_id: str) -> None:
+        """Wake a suspended trainer so the normal run shutdown can finish."""
+        with self._lock:
+            group = next((item for item in self._groups.values()
+                          if item.get("Labels", {}).get("aicar.run_id") == run_id
+                          and item.get("Labels", {}).get("aicar.role") == "api"), None)
+            trainer = next((item for item in (group or {}).get("records", ())
+                            if item.get("role") == "trainer"), None)
+        if trainer is not None and trainer["process"].poll() is None:
+            os.killpg(int(trainer["process"].pid), getattr(signal, "SIGCONT", 18))
 
     def stop_simulators(self, run_id: str) -> None:
         pid_file = self._run_dir_for_id(run_id) / "windows_simulator_pids.txt"

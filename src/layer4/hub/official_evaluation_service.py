@@ -58,6 +58,9 @@ class OfficialEvaluationService:
         self._queue.extend(self._restart_queue)
         self._restart_queue.clear()
         self._stop_orphan_evaluations()
+        recover_paused_training = getattr(manager, "recover_paused_training_after_hub_restart", None)
+        if callable(recover_paused_training):
+            recover_paused_training()
         self._persist()
         self._worker = threading.Thread(target=self._worker_loop, name="official-evaluation-queue", daemon=True)
         self._worker.start()
@@ -317,7 +320,11 @@ class OfficialEvaluationService:
                 job["updated_utc"] = _utc_now()
                 self._persist()
             self._publish_parent_status(job)
+            paused_training_runs: list[str] = []
             try:
+                pause_training = getattr(self.manager, "pause_active_training_for_evaluation", None)
+                if callable(pause_training):
+                    paused_training_runs = pause_training()
                 self._run_batch(job)
             except Exception as exc:
                 if job.get("current_run_id"):
@@ -328,6 +335,15 @@ class OfficialEvaluationService:
                 job["state"] = "failed"
                 job["error"] = f"{type(exc).__name__}: {exc}"
             finally:
+                if paused_training_runs:
+                    try:
+                        self.manager.resume_training_after_evaluation(paused_training_runs)
+                    except Exception as exc:
+                        job["resume_error"] = f"{type(exc).__name__}: {exc}"
+                        if job.get("error"):
+                            job["error"] += f"; training resume failed: {exc}"
+                        else:
+                            job["error"] = f"training resume failed: {exc}"
                 job["current_run_id"] = None
                 job["updated_utc"] = _utc_now()
                 record = {key: value for key, value in job.items() if key not in {"settings", "stop_requested"}}

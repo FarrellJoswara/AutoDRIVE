@@ -83,6 +83,88 @@ def test_native_backend_starts_windows_fleet_only_after_all_bridge_pairs_exist(m
     manager.stop_run(run["run_id"])
 
 
+def test_automatic_evaluation_quiesces_and_restores_active_windows_training(manager):
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 2})
+    calls = []
+    manager.backend.pause_training_for_evaluation = lambda **kwargs: calls.append(("pause", kwargs))
+    manager.backend.resume_training_after_evaluation = lambda **kwargs: calls.append(("resume", kwargs))
+
+    paused = manager.pause_active_training_for_evaluation()
+    assert paused == [run["run_id"]]
+    assert calls[0][0] == "pause"
+    assert len(calls[0][1]["connections"]) == 2
+
+    manager.resume_training_after_evaluation(paused)
+    assert calls[1][0] == "resume"
+    assert calls[1][1]["run_id"] == run["run_id"]
+    assert run["run_id"] not in manager._evaluation_paused
+    manager.stop_run(run["run_id"])
+
+
+def test_evaluation_worker_brackets_manual_evaluation_with_training_pause(manager, tmp_path):
+    checkpoint = official_checkpoint(tmp_path)
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 2})
+    calls = []
+    manager.backend.pause_training_for_evaluation = lambda **kwargs: calls.append("pause")
+    manager.backend.resume_training_after_evaluation = lambda **kwargs: calls.append("resume")
+    service = OfficialEvaluationService(
+        manager, registry_path=tmp_path / "official-evaluations.json",
+        champion_dir=tmp_path / "best", model_root=tmp_path / "logs" / "rl",
+    )
+    service._run_batch = lambda job: job.update(state="incomplete")
+    try:
+        service.submit(checkpoint, source="manual")
+        deadline = time.monotonic() + 3
+        while service.status()["state"] not in {"incomplete", "failed"} and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.status()["state"] == "incomplete"
+        assert calls == ["pause", "resume"]
+        assert run["run_id"] not in manager._evaluation_paused
+    finally:
+        service.close()
+        manager.stop_run(run["run_id"])
+
+
+def test_native_training_pause_stops_sims_before_eval_and_resumes_after_fresh_camera_frames(tmp_path):
+    import signal
+    import threading
+    from types import SimpleNamespace
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._lock = threading.RLock()
+    run_id = "a1b2c3d4e5f6"
+    run_dir = tmp_path / f"official_run_{run_id}"
+    run_dir.mkdir()
+    (run_dir / "windows_simulator_pids.txt").write_text("", encoding="ascii")
+    process = SimpleNamespace(pid=101, poll=lambda: None)
+    group = {
+        "Labels": {"aicar.run_id": run_id, "aicar.role": "api"},
+        "records": [{"role": "trainer", "process": process}],
+    }
+    backend._groups = {"native-group": group}
+    connections = [{"environment": 0, "port": 53001}]
+    backend._run_dir_for_id = lambda _run_id: run_dir
+    backend._read_simulator_health = lambda _port: {
+        "complete_frames": 10, "camera_frames": 9,
+    }
+    wait_args = []
+    backend._wait_for_simulator_streams = lambda _connections, _run_dir, **kwargs: wait_args.append(kwargs)
+
+    with patch("src.layer4.hub.native_official_backend.os.killpg", create=True) as killpg:
+        backend.pause_training_for_evaluation(run_id=run_id, connections=connections, hub_url="http://hub")
+        assert (run_dir / "evaluation_pause.flag").is_file()
+        assert killpg.call_args_list[-1].args == (101, getattr(signal, "SIGSTOP", 19))
+
+        backend.resume_training_after_evaluation(
+            run_id=run_id, connections=connections, hub_url="http://hub",
+        )
+        assert not (run_dir / "evaluation_pause.flag").exists()
+        assert wait_args == [{"minimum_frames": {0: (11, 10)}}]
+        assert killpg.call_args_list[-1].args == (101, getattr(signal, "SIGCONT", 18))
+        assert "evaluation_frame_baselines" not in group
+
+
 def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
     from src.layer4.hub.native_official_backend import NativeOfficialBackend
 
@@ -101,6 +183,52 @@ def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
     )
 
 
+def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_path):
+    import shlex
+    import threading
+    from types import SimpleNamespace
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._startup_lock = threading.RLock()
+    backend._lock = threading.RLock()
+    backend._groups = {}
+    backend.ros_workspace = tmp_path / "ros_ws"
+    backend._reserved_ros_domains = set()
+    backend._reserved_devkit_ports = set()
+    backend._allocate_ros_domain = lambda: 7
+    backend._allocate_devkit_port = lambda: 4577
+    bridge_domains = []
+    backend._start_bridge_pair = lambda _records, _run_id, _index, env, _run_dir, **kwargs: (
+        bridge_domains.append((env.get("ROS_DOMAIN_ID"), kwargs["ros_domain"]))
+    )
+    backend._evaluation_command = lambda _env: ["evaluate"]
+    backend._persist_group = lambda _group: None
+    spawned_env = {}
+    spawned_command = []
+
+    def fake_popen(command, *, env, **_kwargs):
+        spawned_command.extend(command)
+        spawned_env.update(env)
+        return SimpleNamespace(pid=1234, poll=lambda: None)
+
+    with patch("src.layer4.hub.native_official_backend.subprocess.Popen", side_effect=fake_popen):
+        backend.create_official_run_container(
+            run_id="a1b2c3d4e5f6", role="api", image="unused", network_name="unused",
+            env=["AICAR_MODE=evaluate"], metadata_labels={
+                "aicar.output_dir": str(tmp_path / "logs" / "rl" / "official_run_a1b2c3d4e5f6"),
+                "aicar.run_id": "a1b2c3d4e5f6", "aicar.role": "api",
+            },
+        )
+
+    assert spawned_env["ROS_DOMAIN_ID"] == "7"
+    assert bridge_domains == [("7", 7)]
+    assert spawned_command[:2] == ["bash", "-lc"]
+    assert "source /opt/ros/jazzy/setup.bash" in spawned_command[2]
+    assert shlex.quote(str(backend.ros_workspace / "install" / "setup.bash")) in spawned_command[2]
+    assert spawned_command[3:] == ["aicar-native-policy", "evaluate"]
+
+
 def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
     import socket
     import threading
@@ -111,9 +239,17 @@ def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
     backend._groups = {}
     backend._reserved_ros_domains = set()
     backend._reserved_devkit_ports = set()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("0.0.0.0", 0))
-        first_port = probe.getsockname()[1]
+    first_port = None
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    for candidate in range(40000, 59000):
+        try:
+            probe.bind(("0.0.0.0", candidate))
+        except OSError:
+            continue
+        first_port = candidate
+        break
+    assert first_port is not None
+    probe.close()
     backend._devkit_port_start = first_port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
         occupied.bind(("0.0.0.0", first_port))

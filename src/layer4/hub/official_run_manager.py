@@ -128,6 +128,7 @@ class OfficialRunManager:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._creating: set[str] = set()
         self._stopping: set[str] = set()
+        self._evaluation_paused: set[str] = set()
         self._load_registry()
         self.reconcile()
         self._monitor_stop = threading.Event()
@@ -561,11 +562,19 @@ class OfficialRunManager:
             row["state"] = "stopping"
             row["stop_reason"] = "user_requested"
             self._persist()
+            was_evaluation_paused = run_id in self._evaluation_paused
+            self._evaluation_paused.discard(run_id)
+            abort_pause = getattr(self.backend, "abort_evaluation_pause", None)
+            ids = [row.get("api_container_id")]
+        if was_evaluation_paused and abort_pause:
+            try:
+                abort_pause(run_id)
+            except Exception:
+                pass
             # The API container owns the trainer. Send it SIGTERM while the
             # simulator is still publishing sensors so OfficialRaceEnv.step
             # can return, the stop callback can exit cleanly, and the trainer
             # can save its final checkpoint before the simulator is stopped.
-            ids = [row.get("api_container_id")]
         errors = []
         stopped_ids = set()
         for container_id in ids:
@@ -588,6 +597,83 @@ class OfficialRunManager:
         finally:
             with self._lock:
                 self._stopping.discard(run_id)
+
+    def pause_active_training_for_evaluation(self) -> list[str]:
+        """Free simulator capacity so official evaluations measure the model alone."""
+        with self._lock:
+            rows = [dict(row) for row in self._runs.values()
+                    if row.get("kind", "training") == "training"
+                    and row.get("state") == "running"]
+        if not rows:
+            return []
+        pause = getattr(self.backend, "pause_training_for_evaluation", None)
+        if not callable(pause):
+            raise RuntimeError("official evaluation cannot run reliably while training is active: backend cannot pause training")
+
+        paused: list[str] = []
+        hub_url = os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091")
+        try:
+            for row in rows:
+                run_id = str(row["run_id"])
+                if row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) != "windows_external":
+                    raise RuntimeError(f"cannot isolate evaluation from active training run {run_id}")
+                pause(
+                    run_id=run_id,
+                    connections=list(row.get("simulator_connections") or []),
+                    hub_url=hub_url,
+                )
+                with self._lock:
+                    self._evaluation_paused.add(run_id)
+                paused.append(run_id)
+            return paused
+        except Exception:
+            self.resume_training_after_evaluation(paused)
+            raise
+
+    def resume_training_after_evaluation(self, run_ids: list[str]) -> None:
+        resume = getattr(self.backend, "resume_training_after_evaluation", None)
+        errors: list[str] = []
+        for run_id in reversed(run_ids):
+            with self._lock:
+                row = self._runs.get(run_id)
+                still_running = row is not None and row.get("state") == "running"
+                paused = run_id in self._evaluation_paused
+            if not paused:
+                continue
+            try:
+                if still_running:
+                    if not callable(resume):
+                        raise RuntimeError("backend cannot resume a paused training run")
+                    resume(
+                        run_id=run_id,
+                        connections=list(row.get("simulator_connections") or []),
+                        hub_url=os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091"),
+                    )
+            except Exception as exc:
+                errors.append(f"{run_id}: {exc}")
+            finally:
+                with self._lock:
+                    self._evaluation_paused.discard(run_id)
+        if errors:
+            raise RuntimeError("could not resume training after official evaluation: " + "; ".join(errors))
+
+    def recover_paused_training_after_hub_restart(self) -> None:
+        """Restore an interrupted evaluation's parent learner after hub recovery."""
+        with self._lock:
+            rows = [dict(row) for row in self._runs.values()
+                    if row.get("kind", "training") == "training"
+                    and row.get("state") == "running"
+                    and row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) == "windows_external"]
+        paused = []
+        for row in rows:
+            pause_file = Path(row.get("output_dir", "")) / "evaluation_pause.flag"
+            if pause_file.is_file():
+                run_id = str(row["run_id"])
+                with self._lock:
+                    self._evaluation_paused.add(run_id)
+                paused.append(run_id)
+        if paused:
+            self.resume_training_after_evaluation(paused)
 
     def telemetry(self, run_id: str) -> Dict[str, Any]:
         with self._lock:
