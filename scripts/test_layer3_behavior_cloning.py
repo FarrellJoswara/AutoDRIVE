@@ -219,6 +219,19 @@ class BehaviorCloningTests(unittest.TestCase):
                 FakeVecEnv(), Expert(), steps=2, output_path=path
             )
             self.assertEqual(summary["transitions"], 2)
+            self.assertEqual(
+                summary["route_direction_diagnostics"],
+                [{
+                    "env_id": 0,
+                    "start_progress_m": 3.0,
+                    "end_progress_m": 3.0,
+                    "net_progress_m": 0.0,
+                    "forward_progress_steps": 0,
+                    "backward_progress_steps": 0,
+                    "reverse_motion_steps": 0,
+                    "negative_throttle_steps": 0,
+                }],
+            )
             self.assertEqual(set(dataset), {"lidar", "state", "camera", "actions"})
             with np.load(path) as saved:
                 self.assertEqual(set(saved.files), {"lidar", "state", "camera", "actions"})

@@ -28,6 +28,15 @@ def collect_centerline_demonstrations(
     termination_counts: Dict[str, int] = {}
     termination_examples = []
     n_envs = int(vec_env.num_envs)
+    # Keep compact, non-identifying diagnostics so a saved BC run can prove
+    # whether the teacher advanced along the route and whether it ever asked
+    # for reverse. Do not persist privileged pose/yaw samples in the dataset.
+    initial_route_progress = [None] * n_envs
+    last_route_progress = [None] * n_envs
+    route_forward_steps = [0] * n_envs
+    route_backward_steps = [0] * n_envs
+    reverse_motion_steps = [0] * n_envs
+    negative_throttle_steps = [0] * n_envs
 
     total_steps = max(0, int(steps))
     report_every = max(1, total_steps // 10)
@@ -35,7 +44,17 @@ def collect_centerline_demonstrations(
         if should_stop is not None and should_stop():
             break
         current_infos = vec_env.env_method("get_current_info")
+        for env_index, info in enumerate(current_infos):
+            progress = info.get("current_progress_m")
+            if progress is not None:
+                progress = float(progress)
+                if initial_route_progress[env_index] is None:
+                    initial_route_progress[env_index] = progress
+                last_route_progress[env_index] = progress
         actions = expert.action_batch(current_infos)
+        for env_index, action in enumerate(actions):
+            if float(action[0]) < -1e-6:
+                negative_throttle_steps[env_index] += 1
         for env_index in range(n_envs):
             lidar_rows.append(np.asarray(observations["lidar"][env_index], dtype=np.float32))
             state_rows.append(np.asarray(observations["state"][env_index], dtype=np.float32))
@@ -44,6 +63,19 @@ def collect_centerline_demonstrations(
             action_rows.append(actions[env_index])
         observations, _, dones, infos = vec_env.step(actions)
         for env_index, (done, info) in enumerate(zip(dones, infos)):
+            progress = info.get("current_progress_m")
+            if progress is not None:
+                progress = float(progress)
+                previous = last_route_progress[env_index]
+                if previous is None:
+                    initial_route_progress[env_index] = progress
+                elif progress - previous > 0.02:
+                    route_forward_steps[env_index] += 1
+                elif progress - previous < -0.02:
+                    route_backward_steps[env_index] += 1
+                last_route_progress[env_index] = progress
+            if float(info.get("v_long", 0.0) or 0.0) < -0.15:
+                reverse_motion_steps[env_index] += 1
             if done:
                 completed_episodes += 1
                 if bool(info.get("episode_won", False)):
@@ -80,12 +112,34 @@ def collect_centerline_demonstrations(
             )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_path, **dataset)
+    route_diagnostics = [
+        {
+            "env_id": env_index,
+            "start_progress_m": initial_route_progress[env_index],
+            "end_progress_m": last_route_progress[env_index],
+            "net_progress_m": (
+                None
+                if initial_route_progress[env_index] is None
+                or last_route_progress[env_index] is None
+                else round(
+                    last_route_progress[env_index] - initial_route_progress[env_index],
+                    4,
+                )
+            ),
+            "forward_progress_steps": route_forward_steps[env_index],
+            "backward_progress_steps": route_backward_steps[env_index],
+            "reverse_motion_steps": reverse_motion_steps[env_index],
+            "negative_throttle_steps": negative_throttle_steps[env_index],
+        }
+        for env_index in range(n_envs)
+    ]
     return dataset, {
         "transitions": int(len(action_rows)),
         "completed_episodes": completed_episodes,
         "successful_episodes": successful_episodes,
         "termination_counts": termination_counts,
         "termination_examples": termination_examples,
+        "route_direction_diagnostics": route_diagnostics,
     }
 
 
