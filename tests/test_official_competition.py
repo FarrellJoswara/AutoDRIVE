@@ -242,7 +242,8 @@ def test_evaluator_stops_stationary_run_and_marks_it_invalid():
             )
 
     result = evaluate_attempt(
-        Model(), Env(), wall_timeout_s=2.0, max_steps=1000, attempt_index=1
+        Model(), Env(), wall_timeout_s=2.0, max_steps=1000, attempt_index=1,
+        motion_check_after_s=0.0,
     )
 
     assert result["stop_reason"] == "vehicle_motion_not_verified"
@@ -251,6 +252,56 @@ def test_evaluator_stops_stationary_run_and_marks_it_invalid():
     assert result["adjusted_race_time_s"] is None
     assert result["score_status"] == "vehicle_motion_not_verified"
     assert result["valid_for_comparison"] is False
+
+
+def test_evaluator_motion_preflight_uses_wall_clock_after_sensor_timestamp_jump(monkeypatch):
+    class Model:
+        def predict(self, obs, deterministic=True):
+            return np.zeros(2, dtype=np.float32), None
+
+    class Env:
+        def reset(self):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                {"race_position": (1.0, 0.0, 2.0), "race_complete": False},
+            )
+
+        def step(self, action):
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                0.0,
+                False,
+                False,
+                {
+                    "race_position": (1.0, 0.0, 2.0),
+                    "race_complete": False,
+                    # A newly connected simulator can jump its sensor clock
+                    # while returning repeated frames almost immediately.
+                    "control_interval_s": 3.64,
+                    "lidar_scan_rate_hz": 40.0,
+                    "race_lap_times_s": [],
+                    "race_collisions": 0,
+                    "throttle_command": 0.75,
+                    "steering_command": 0.18,
+                },
+            )
+
+    now = 0.0
+
+    def monotonic():
+        nonlocal now
+        now += 0.01
+        return now
+
+    monkeypatch.setattr("src.layer3.official_evaluate.time.monotonic", monotonic)
+    result = evaluate_attempt(
+        Model(), Env(), wall_timeout_s=100.0, max_steps=1, attempt_index=1,
+        motion_check_after_s=3.0,
+    )
+
+    assert result["stop_reason"] == "step_guard"
+    assert result["motion_verification"]["verified"] is None
+    assert result["motion_verification"]["elapsed_s"] < 3.0
 
 
 def test_evaluator_stops_vehicle_that_stalls_after_initial_motion():

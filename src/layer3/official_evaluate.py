@@ -372,7 +372,7 @@ def evaluate_attempt(
                 last_motion_elapsed_s = control_elapsed_s
         motion_status = verify_vehicle_motion(
             position_trace,
-            control_elapsed_s,
+            time.monotonic() - started,
             check_after_s=motion_check_after_s,
             minimum_displacement_m=motion_minimum_displacement_m,
         )
