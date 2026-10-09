@@ -160,6 +160,14 @@ def resume_ppo_checkpoint(
     if "num_timesteps" not in data:
         raise RuntimeError(f"Checkpoint does not contain PPO timestep metadata: {checkpoint}")
 
+    saved_policy_kwargs = data.get("policy_kwargs") or {}
+    saved_extractor_kwargs = saved_policy_kwargs.get("features_extractor_kwargs") or {}
+    if (
+        observation_profile == "official_sensors_camera"
+        and saved_extractor_kwargs.get("lidar_pooling") is False
+    ):
+        architecture = "lidar_camera_raw_cnn"
+
     fresh_model = make_model(
         env,
         device=device,

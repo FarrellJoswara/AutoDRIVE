@@ -253,6 +253,54 @@ def test_evaluator_stops_stationary_run_and_marks_it_invalid():
     assert result["valid_for_comparison"] is False
 
 
+def test_evaluator_stops_vehicle_that_stalls_after_initial_motion():
+    class Model:
+        def predict(self, obs, deterministic=True):
+            return np.zeros(2, dtype=np.float32), None
+
+    class Env:
+        def __init__(self):
+            self.steps = 0
+
+        def reset(self):
+            self.steps = 0
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                {"race_position": (0.0, 0.0, 0.0), "race_complete": False},
+            )
+
+        def step(self, action):
+            self.steps += 1
+            position = (0.3, 0.0, 0.0) if self.steps == 1 else (0.3, 0.0, 0.0)
+            return (
+                {"lidar": np.ones(8, dtype=np.float32), "state": np.zeros(9, dtype=np.float32)},
+                0.0,
+                False,
+                False,
+                {
+                    "race_position": position,
+                    "race_complete": False,
+                    "control_interval_s": 1.0,
+                    "lidar_scan_rate_hz": 40.0,
+                    "race_lap_times_s": [],
+                    "race_collisions": 0,
+                    "throttle_command": 0.0,
+                    "steering_command": 0.0,
+                },
+            )
+
+    result = evaluate_attempt(
+        Model(), Env(), wall_timeout_s=2.0, max_steps=100,
+        attempt_index=1, motion_stall_after_s=3.0,
+    )
+
+    assert result["stop_reason"] == "vehicle_motion_stalled"
+    assert result["motion_verification"]["verified"] is True
+    assert result["motion_verification"]["stalled"] is True
+    assert result["score_status"] == "incomplete"
+    assert result["adjusted_race_time_s"] is None
+
+
 def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
     racer = object.__new__(RacerRos2)
     racer.include_race_metrics = True

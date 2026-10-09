@@ -90,6 +90,7 @@ class NativeOfficialBackend:
         self._groups: dict[str, dict[str, Any]] = {}
         self._reserved_ros_domains: set[int] = set()
         self._reserved_devkit_ports: set[int] = set()
+        self._devkit_port_start = 4567
         self._networks: dict[str, dict[str, Any]] = {}
         self._windows_launchers: dict[str, subprocess.Popen] = {}
         self._recover_groups()
@@ -352,7 +353,7 @@ class NativeOfficialBackend:
                 if "devkit_ports" not in group:
                     used.update(self._devkit_ports_from_records(group.get("records", ())))
             used.update(self._reserved_devkit_ports)
-            for port in range(4567, 60000):
+            for port in range(self._devkit_port_start, 60000):
                 if port in used:
                     continue
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:

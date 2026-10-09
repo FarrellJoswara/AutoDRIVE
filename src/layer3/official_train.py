@@ -112,6 +112,11 @@ def _official_ppo_config(model, *, observation_profile: str) -> dict:
         "official_sensors_history": "temporal_lidar_cnn",
         "official_sensors_camera": "lidar_camera_cnn",
     }.get(observation_profile, "lidar_cnn")
+    if (
+        observation_profile == "official_sensors_camera"
+        and not getattr(model.policy.features_extractor, "lidar_pooling", True)
+    ):
+        architecture = "lidar_camera_raw_cnn"
     optimizer = getattr(model.policy, "optimizer", None)
     if optimizer is None or not optimizer.param_groups:
         raise RuntimeError("PPO policy optimizer is missing or has no parameter groups")
@@ -160,6 +165,10 @@ def _verify_official_ppo_config(model, requested: dict, *, observation_profile: 
             "official_sensors_camera": "lidar_camera_cnn",
         }.get(observation_profile, "lidar_cnn"),
     }
+    if observation_profile == "official_sensors_camera" and not getattr(
+        model.policy.features_extractor, "lidar_pooling", True
+    ):
+        expected["policy_architecture"] = "lidar_camera_raw_cnn"
     errors = []
     for key, expected_value in expected.items():
         actual = effective.get(key)

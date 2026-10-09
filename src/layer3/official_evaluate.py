@@ -269,6 +269,7 @@ def evaluate_attempt(
     trace_steps: int = 0,
     motion_check_after_s: float = 3.0,
     motion_minimum_displacement_m: float = 0.25,
+    motion_stall_after_s: float = 30.0,
     disqualification_limit: int = 10,
     on_step: Any = None,
 ) -> Dict[str, Any]:
@@ -292,6 +293,9 @@ def evaluate_attempt(
         if initial_position is not None else []
     )
     control_elapsed_s = 0.0
+    last_motion_position = initial_position
+    last_motion_elapsed_s = 0.0
+    motion_ever_verified = False
     motion_status = verify_vehicle_motion(
         position_trace,
         control_elapsed_s,
@@ -350,13 +354,24 @@ def evaluate_attempt(
             scan_rates_hz.append(scan_rate)
         current_position = info.get("race_position")
         if current_position is not None:
-            position_trace.append([float(value) for value in current_position])
+            current_position = [float(value) for value in current_position]
+            position_trace.append(current_position)
+            if last_motion_position is None:
+                last_motion_position = current_position
+            displacement = math.sqrt(sum(
+                (current_position[i] - float(last_motion_position[i])) ** 2
+                for i in range(min(3, len(current_position), len(last_motion_position)))
+            ))
+            if displacement >= motion_minimum_displacement_m:
+                last_motion_position = current_position
+                last_motion_elapsed_s = control_elapsed_s
         motion_status = verify_vehicle_motion(
             position_trace,
             control_elapsed_s,
             check_after_s=motion_check_after_s,
             minimum_displacement_m=motion_minimum_displacement_m,
         )
+        motion_ever_verified = motion_ever_verified or motion_status["verified"] is True
 
         lap_times = list(info.get("race_lap_times_s", []))
         while laps_reported < len(lap_times):
@@ -382,6 +397,18 @@ def evaluate_attempt(
             break
         if motion_status["verified"] is False:
             stop_reason = "vehicle_motion_not_verified"
+            break
+        if (
+            motion_ever_verified
+            and control_elapsed_s - last_motion_elapsed_s >= motion_stall_after_s
+        ):
+            stop_reason = "vehicle_motion_stalled"
+            motion_status = {
+                **motion_status,
+                "stalled": True,
+                "stall_after_s": float(motion_stall_after_s),
+                "seconds_since_motion": control_elapsed_s - last_motion_elapsed_s,
+            }
             break
     else:
         stop_reason = "race_complete"

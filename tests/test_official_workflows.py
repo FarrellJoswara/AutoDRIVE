@@ -111,21 +111,25 @@ def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
     backend._groups = {}
     backend._reserved_ros_domains = set()
     backend._reserved_devkit_ports = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("0.0.0.0", 0))
+        first_port = probe.getsockname()[1]
+    backend._devkit_port_start = first_port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
-        occupied.bind(("0.0.0.0", 4567))
+        occupied.bind(("0.0.0.0", first_port))
         assert backend._allocate_ros_domain() == 0
         assert backend._allocate_ros_domain() == 1
-        assert backend._allocate_devkit_port() == 4568
-        assert backend._allocate_devkit_port() == 4569
+        assert backend._allocate_devkit_port() == first_port + 1
+        assert backend._allocate_devkit_port() == first_port + 2
 
     backend._reserved_ros_domains.clear()
     backend._reserved_devkit_ports.clear()
     backend._groups["active-training"] = {
         "ros_domains": [0, 1, 2, 3],
-        "devkit_ports": [4567, 4568, 4569, 4570],
+        "devkit_ports": [first_port, first_port + 1, first_port + 2, first_port + 3],
     }
     assert backend._allocate_ros_domain() == 4
-    assert backend._allocate_devkit_port() == 4571
+    assert backend._allocate_devkit_port() == first_port + 4
 
 
 def test_reconcile_does_not_mark_a_stopping_run_orphaned(manager):
