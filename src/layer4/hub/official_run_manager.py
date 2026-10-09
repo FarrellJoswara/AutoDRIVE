@@ -420,6 +420,7 @@ class OfficialRunManager:
                     run_id=run_id,
                     connections=simulator_connections or [],
                     hub_url=os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091"),
+                    config=row["config"],
                 )
             with self._lock:
                 row["sim_container_id"] = sim_id

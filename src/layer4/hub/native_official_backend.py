@@ -1,6 +1,6 @@
 """Native WSL process backend for official Windows AutoDRIVE training.
 
-The simulator remains the unmodified Windows GUI build. Each environment gets
+The simulator remains the unmodified Windows build. Each environment gets
 its own ROS domain, official Devkit bridge, and Layer 1 relay; one native PPO
 process owns the shared learner.
 """
@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Any
 
 from src.layer4.settings import ROOT
+
+
+def _windows_simulator_mode_args(config: dict[str, Any] | None) -> list[str]:
+    """Select presentation mode without changing the official player build."""
+    return ["-BatchMode"] if (config or {}).get("simulator_display_mode", "gui") == "offscreen" else []
 
 
 class _RecoveredProcess:
@@ -479,8 +484,11 @@ class NativeOfficialBackend:
                 time.sleep(0.2)
         raise TimeoutError(f"native official bridge for environment {index} did not listen on port {relay_port}")
 
-    def start_simulators(self, *, run_id: str, connections: list[dict[str, Any]], hub_url: str) -> None:
-        """Open one official Windows simulator GUI for each ready native relay."""
+    def start_simulators(
+        self, *, run_id: str, connections: list[dict[str, Any]], hub_url: str,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        """Start official Windows simulators against each ready native relay."""
         if not connections:
             raise ValueError("no simulator connection ports were allocated")
         powershell = "powershell.exe"
@@ -544,6 +552,7 @@ class NativeOfficialBackend:
             "-PidFile", pid_file_windows, "-PortsFile", ports_file_windows,
             "-PauseFile", pause_file_windows,
         ]
+        arguments.extend(_windows_simulator_mode_args(config))
         process = subprocess.Popen(
             arguments, cwd=ROOT, stdin=subprocess.DEVNULL,
             stdout=launcher_log, stderr=subprocess.STDOUT, start_new_session=True,

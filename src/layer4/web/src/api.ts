@@ -256,6 +256,7 @@ export interface MetricsTelemetry {
 /** Settings accepted by the official AutoDRIVE trainer. */
 export interface OfficialTrainSettings {
   simulator_backend: "docker" | "windows_external";
+  simulator_display_mode: "gui" | "offscreen";
   n_envs: number;
   total_timesteps: number;
   stop_on_plateau: boolean;

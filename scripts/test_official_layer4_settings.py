@@ -9,6 +9,12 @@ from src.layer4.official_settings import OfficialTrainSettings, load_official_tr
 
 
 class OfficialTrainSettingsTests(unittest.TestCase):
+    def test_offscreen_is_explicit_and_preserves_gui_default(self):
+        self.assertEqual(OfficialTrainSettings().simulator_display_mode, "gui")
+        self.assertEqual(OfficialTrainSettings(simulator_display_mode="offscreen").simulator_display_mode, "offscreen")
+        with self.assertRaises(ValueError):
+            OfficialTrainSettings(simulator_display_mode="no_graphics")
+
     def test_official_only_fields_map_to_trainer_container_environment(self):
         settings = OfficialTrainSettings(
             total_timesteps=2048,

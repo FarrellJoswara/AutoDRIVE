@@ -163,7 +163,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setForm((current) => current ? { ...current, [key]: value.trim() === "" ? null : value } : current);
   }
 
-  function setChoice<K extends "simulator_backend" | "device" | "observation_profile" | "throttle_mode" | "negative_throttle_mode" | "steering_mode">(key: K, value: OfficialTrainSettings[K]) {
+  function setChoice<K extends "simulator_backend" | "simulator_display_mode" | "device" | "observation_profile" | "throttle_mode" | "negative_throttle_mode" | "steering_mode">(key: K, value: OfficialTrainSettings[K]) {
     setForm((current) => {
       if (!current) return current;
       const next = { ...current, [key]: value };
@@ -436,6 +436,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
                   <option value="windows_external">Official Windows simulator (camera)</option>
                 </select>
               </Field>
+              <Field label="Simulator window" help="Offscreen mode runs the same official Windows simulator in Unity batch mode while keeping the GPU graphics device initialized. It omits -nographics so camera observations remain available, and it avoids opening simulator windows.">
+                <select value={form.simulator_display_mode} onChange={(event) => setChoice("simulator_display_mode", event.target.value as OfficialTrainSettings["simulator_display_mode"])}>
+                  <option value="gui">Show simulator windows</option>
+                  <option value="offscreen">Offscreen rendering (camera on)</option>
+                </select>
+              </Field>
               <Field label="Parallel environments" help="Official simulator/Devkit pairs feeding one PPO model. More environments consume more CPU and memory; measure throughput before increasing.">
                 <input type="number" min={1} max={8} value={form.n_envs} onChange={(event) => setNumber("n_envs", event.target.value)} />
               </Field>
@@ -495,9 +501,9 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
       {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>
-        <p className="meta">Mission Control opens one official graphics-enabled Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner.</p>
+        <p className="meta">Mission Control starts one official Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner.</p>
         <ol>{selectedRun.simulator_connections.map((connection) => <li key={connection.environment}>Environment {connection.environment}: <code>{connection.host}:{connection.port}</code> (ROS domain {connection.ros_domain_id})</li>)}</ol>
-        <p className="meta">Simulator windows open and connect automatically. They close when the run stops.</p>
+        <p className="meta">{selectedRun.config?.simulator_display_mode === "offscreen" ? "Offscreen simulator processes stop when the run stops." : "Simulator windows close when the run stops."}</p>
       </section> : null}
     </section>
   );

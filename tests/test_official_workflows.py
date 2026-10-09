@@ -9,6 +9,7 @@ from src.layer4.hub.official_run_manager import OfficialRunManager
 from src.layer4.hub.official_models import checkpoint_settings, list_official_models
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
+from src.layer4.hub.native_official_backend import _windows_simulator_mode_args
 from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
 from src.layer3.official_train import train_official
 
@@ -78,16 +79,25 @@ def test_windows_graphics_backend_publishes_one_local_bridge_per_env(manager):
     assert not manager.backend.networks
 
 
+def test_windows_simulator_offscreen_flag_keeps_default_gui_mode_unchanged():
+    assert _windows_simulator_mode_args({"simulator_display_mode": "offscreen"}) == ["-BatchMode"]
+    assert _windows_simulator_mode_args({"simulator_display_mode": "gui"}) == []
+    assert _windows_simulator_mode_args({}) == []
+
+
 def test_native_backend_starts_windows_fleet_only_after_all_bridge_pairs_exist(manager):
     calls = []
     manager.backend.simulator_host = "172.22.16.1"
     manager.backend.start_simulators = lambda **kwargs: calls.append(kwargs)
-    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 4})
+    run = manager.create_run({
+        "simulator_backend": "windows_external", "simulator_display_mode": "offscreen", "n_envs": 4,
+    })
 
     assert [item["host"] for item in run["simulator_connections"]] == ["172.22.16.1"] * 4
     assert len(calls) == 1
     assert len(calls[0]["connections"]) == 4
     assert calls[0]["run_id"] == run["run_id"]
+    assert calls[0]["config"]["simulator_display_mode"] == "offscreen"
     assert len(manager.backend.containers) == 4
     manager.stop_run(run["run_id"])
 

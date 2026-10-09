@@ -18,7 +18,9 @@ param(
     [string]$PidFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$PauseFile
+    [string]$PauseFile,
+
+    [switch]$BatchMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,24 +53,35 @@ function Start-SimulatorFleet {
     for ($environment = 0; $environment -lt $Ports.Count; $environment++) {
         $port = $Ports[$environment]
         $arguments = @(
-            "-runInBackground", "-screen-fullscreen", "0",
-            "-screen-width", "960", "-screen-height", "540",
             "-ip", $BridgeIpAddress, "-port", [string]$port
         )
+        if ($BatchMode) {
+            # Unity batch mode suppresses its UI but keeps the GPU device active.
+            # Deliberately omit -nographics so the official camera sensor renders.
+            $simLog = Join-Path (Split-Path -Parent $PidFile) "official_simulator_env$environment.log"
+            $arguments = @("-batchmode", "-logFile", $simLog) + $arguments
+        } else {
+            $arguments = @(
+                "-runInBackground", "-screen-fullscreen", "0",
+                "-screen-width", "960", "-screen-height", "540"
+            ) + $arguments
+        }
         $process = Start-Process -FilePath $SimulatorExePath -ArgumentList $arguments -PassThru
         $script:processes += $process
         $script:processes.Id | Set-Content -LiteralPath $PidFile -Encoding Ascii
         Write-Output "Started official simulator PID $($process.Id) for environment $environment on port $port."
-        $windowDeadline = (Get-Date).AddSeconds(90)
-        do {
-            $process.Refresh()
-            if ($process.HasExited) { throw "Official simulator PID $($process.Id) exited before opening its window." }
-            if ($process.MainWindowHandle -ne 0) { break }
-            Start-Sleep -Milliseconds 500
-        } while ((Get-Date) -lt $windowDeadline)
-        if ($process.MainWindowHandle -eq 0) { throw "Official simulator PID $($process.Id) did not open a window within 90 seconds." }
-        Start-Sleep -Seconds 3
-        & $connectHelper -ProcessId $process.Id -IpAddress $BridgeIpAddress -Port $port -ConnectTimeoutSeconds 90
+        if (-not $BatchMode) {
+            $windowDeadline = (Get-Date).AddSeconds(90)
+            do {
+                $process.Refresh()
+                if ($process.HasExited) { throw "Official simulator PID $($process.Id) exited before opening its window." }
+                if ($process.MainWindowHandle -ne 0) { break }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $windowDeadline)
+            if ($process.MainWindowHandle -eq 0) { throw "Official simulator PID $($process.Id) did not open a window within 90 seconds." }
+            Start-Sleep -Seconds 3
+            & $connectHelper -ProcessId $process.Id -IpAddress $BridgeIpAddress -Port $port -ConnectTimeoutSeconds 90
+        }
         $deadline = (Get-Date).AddSeconds(90)
         do {
             $process.Refresh()

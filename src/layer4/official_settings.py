@@ -23,6 +23,8 @@ class OfficialTrainSettings(BaseModel):
 
     # Zero means no timestep ceiling; plateau and optional wall-clock stop rules still apply.
     simulator_backend: Literal["docker", "windows_external"] = "windows_external"
+    # Offscreen still initializes the GPU graphics device; never pair this with -nographics.
+    simulator_display_mode: Literal["gui", "offscreen"] = "gui"
     n_envs: int = Field(default=1, ge=1, le=8)
     total_timesteps: int = Field(default=1_000_000, ge=0)
     stop_on_plateau: bool = True
