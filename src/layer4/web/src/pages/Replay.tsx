@@ -6,13 +6,19 @@ import { FleetCanvas } from "../fleet/FleetCanvas";
 export function ReplayPage() {
   const [models, setModels] = useState<ModelCheckpoint[]>([]);
   const [modelId, setModelId] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [status, setStatus] = useState<ReplayStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function refreshModels() {
-    const available = await fetchReplayModels();
-    setModels(available);
-    setModelId((current) => available.some((model) => model.id === current) ? current : available[0]?.id ?? "");
+    setModelsLoading(true);
+    try {
+      const available = await fetchReplayModels();
+      setModels(available);
+      setModelId((current) => available.some((model) => model.id === current) ? current : available[0]?.id ?? "");
+    } finally {
+      setModelsLoading(false);
+    }
   }
   useEffect(() => {
     void refreshModels().catch((reason) => setError(String(reason)));
@@ -41,17 +47,24 @@ export function ReplayPage() {
     <p className="lede">Run a saved policy with deterministic actions in a fresh official simulator. Simulator timing can still vary. Its observation profile and controls come from the training record. Restart creates a new race attempt.</p>
     <label className="field">Checkpoint
       <select value={modelId} disabled={active || busy} onChange={(event) => setModelId(event.target.value)}>
-        {!models.length && <option value="">No compatible official checkpoints found</option>}
+        {modelsLoading && <option value="">Loading official checkpoints…</option>}
+        {!modelsLoading && !models.length && <option value="">No compatible official checkpoints found</option>}
         {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
       </select>
     </label>
     <div className="actions">
-      <button className="primary" disabled={busy || active || !modelId} onClick={() => void perform(() => startReplay({model_id: modelId, map_id: "none", seed: 0, device: "cpu"}))}>Start evaluation</button>
+      <button className="primary" disabled={busy || active || modelsLoading || !modelId} onClick={() => void perform(() => startReplay({model_id: modelId, map_id: "none", seed: 0, device: "cpu"}))}>Start evaluation</button>
       <button disabled={busy || !active} onClick={() => void perform(stopReplay)}>Stop evaluation</button>
       <button disabled={busy || !status?.run_id} onClick={() => void perform(resetReplay)}>Restart attempt</button>
-      <button disabled={busy} onClick={() => void refreshModels().catch((reason) => setError(String(reason)))}>Refresh checkpoints</button>
+      <button disabled={busy || modelsLoading} onClick={() => void refreshModels().catch((reason) => setError(String(reason)))}>Refresh checkpoints</button>
     </div>
     <p role="status">{status?.state ?? "idle"} · {status?.run_id ?? "No attempt selected"} · {fleet ? (age > 1500 ? "Telemetry stale" : "Live telemetry") : "Waiting for telemetry"}</p>
+    {status?.simulator_backend === "windows_external" && status.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connection" style={{ marginTop: 12 }}>
+      <h3 style={{ marginTop: 0 }}>Connect the official Windows simulator</h3>
+      <p className="meta">This checkpoint was trained with the graphics-enabled official Windows simulator. Start it on the assigned bridge port so replay uses the same camera and sensor workflow.</p>
+      <p>Environment 0: <code>{status.simulator_connections[0].host}:{status.simulator_connections[0].port}</code></p>
+      <p className="meta">Run <code>scripts/start_official_windows_simulators.ps1 -SimulatorExePath &lt;AutoDRIVE Simulator.exe&gt; -Ports {status.simulator_connections.map((connection) => connection.port).join(",")} -RunId {status.run_id} -HubUrl {window.location.origin}</code> in PowerShell.</p>
+    </section> : null}
     {(error || status?.error) && <p className="error" role="alert">{error || status?.error}</p>}
     {result && <div className="panel">
       <h3>Official attempt result</h3>

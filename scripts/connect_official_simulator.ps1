@@ -36,6 +36,12 @@ public static class AutoDriveWindowInput {
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool attachState);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 }
@@ -62,6 +68,49 @@ if (-not [AutoDriveWindowInput]::ClientToScreen($window, [ref]$origin)) {
     throw "Could not resolve the simulator client area on screen."
 }
 
+function Set-TargetWindowForeground {
+    # Unity launches from several processes; Windows may refuse the ordinary
+    # foreground request after the first window. Temporarily attach this input
+    # thread to the active window's thread so each target window can be focused.
+    $currentThread = [AutoDriveWindowInput]::GetCurrentThreadId()
+    $foreground = [AutoDriveWindowInput]::GetForegroundWindow()
+    $foregroundProcess = [uint32]0
+    $foregroundThread = if ($foreground -ne [IntPtr]::Zero) {
+        [AutoDriveWindowInput]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcess)
+    } else { [uint32]0 }
+    $attached = $false
+    if ($foregroundThread -ne 0 -and $foregroundThread -ne $currentThread) {
+        $attached = [AutoDriveWindowInput]::AttachThreadInput($currentThread, $foregroundThread, $true)
+    }
+    try {
+        [void][AutoDriveWindowInput]::ShowWindow($window, 9) # SW_RESTORE
+        [void][AutoDriveWindowInput]::BringWindowToTop($window)
+        [void][AutoDriveWindowInput]::SetForegroundWindow($window)
+        Start-Sleep -Milliseconds 300
+        if ([AutoDriveWindowInput]::GetForegroundWindow() -ne $window) {
+            [void][AutoDriveWindowInput]::SetForegroundWindow($window)
+            Start-Sleep -Milliseconds 300
+        }
+        return ([AutoDriveWindowInput]::GetForegroundWindow() -eq $window)
+    } finally {
+        if ($attached) {
+            [void][AutoDriveWindowInput]::AttachThreadInput($currentThread, $foregroundThread, $false)
+        }
+    }
+}
+
+if (-not (Set-TargetWindowForeground)) {
+    throw "Could not activate official simulator PID $ProcessId; no connection-panel input was sent."
+}
+
+$inputX = 0.10
+$menuX = 0.04
+$menuY = 0.04
+$ipY = 0.168
+$portY = 0.283
+$buttonY = 0.377
+$buttonCenterX = 0.04
+
 function Invoke-CanvasClick([double]$xFraction, [double]$yFraction) {
     $x = $origin.X + [int][Math]::Round($width * $xFraction)
     $y = $origin.Y + [int][Math]::Round($height * $yFraction)
@@ -73,37 +122,47 @@ function Invoke-CanvasClick([double]$xFraction, [double]$yFraction) {
     Start-Sleep -Milliseconds 120
 }
 
-function Get-ConnectionButtonBrightness {
+function Test-ConnectionPanelOpen {
+    # The form's IP field is a large, bright rectangle at this location when
+    # the official panel is open. This remains stable across window sizes and
+    # avoids relying on the small connection icon's anti-aliased pixels.
     $bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, [System.Drawing.Size]::new($width, $height))
-    $centerX = [int][Math]::Round($width * 0.04)
-    $centerY = [int][Math]::Round($height * 0.377)
-    $count = 0
-    for ($dy = -16; $dy -le 16; $dy++) {
-        for ($dx = -16; $dx -le 16; $dx++) {
-            if (($dx * $dx + $dy * $dy) -gt 256) { continue }
-            $pixel = $bitmap.GetPixel($centerX + $dx, $centerY + $dy)
-            if ($pixel.R -ge 210 -and $pixel.G -ge 210 -and $pixel.B -ge 210) {
-                $count++
+    try {
+        $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, [System.Drawing.Size]::new($width, $height))
+        $centerX = [int][Math]::Round($width * $inputX)
+        $centerY = [int][Math]::Round($height * $ipY)
+        $bright = 0
+        for ($dy = -5; $dy -le 5; $dy++) {
+            for ($dx = -12; $dx -le 12; $dx++) {
+                $pixel = $bitmap.GetPixel($centerX + $dx, $centerY + $dy)
+                if ($pixel.R -ge 220 -and $pixel.G -ge 220 -and $pixel.B -ge 220) { $bright++ }
             }
         }
+        return $bright -ge 200
+    } finally {
+        $graphics.Dispose()
+        $bitmap.Dispose()
     }
-    $graphics.Dispose()
-    $bitmap.Dispose()
-    return $count
 }
 
-$brightPixels = Get-ConnectionButtonBrightness
-if ($brightPixels -lt 300) {
+if (-not (Set-TargetWindowForeground)) {
+    throw "Could not activate official simulator PID $ProcessId before inspecting its connection panel."
+}
+
+$panelOpen = Test-ConnectionPanelOpen
+if (-not $panelOpen) {
     # The simulator starts with its panels collapsed. Open the left Menu Panel,
     # then re-check the button before sending any form input or connection click.
-    Invoke-CanvasClick 0.04 0.04
-    Start-Sleep -Milliseconds 500
-    $brightPixels = Get-ConnectionButtonBrightness
+    Invoke-CanvasClick $menuX $menuY
+    $panelDeadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 500
+        $panelOpen = Test-ConnectionPanelOpen
+    } while (-not $panelOpen -and (Get-Date) -lt $panelDeadline)
 }
-if ($brightPixels -lt 300) {
-    throw "Connection Button was not detected. Open the simulator Menu Panel and keep the window visible; no click was sent."
+if (-not $panelOpen) {
+    throw "The simulator connection panel did not open. No connection click was sent."
 }
 
 # A live TCP connection to the selected port means this simulator is already
@@ -119,13 +178,13 @@ if ($existingConnection) {
 [void][AutoDriveWindowInput]::SetForegroundWindow($window)
 Start-Sleep -Milliseconds 250
 
-Invoke-CanvasClick 0.10 0.168
+Invoke-CanvasClick $inputX $ipY
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 [System.Windows.Forms.SendKeys]::SendWait($IpAddress)
-Invoke-CanvasClick 0.10 0.283
+Invoke-CanvasClick $inputX $portY
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 [System.Windows.Forms.SendKeys]::SendWait([string]$Port)
-Invoke-CanvasClick 0.10 0.377
+Invoke-CanvasClick $buttonCenterX $buttonY
 
 $deadline = (Get-Date).AddSeconds($ConnectTimeoutSeconds)
 do {

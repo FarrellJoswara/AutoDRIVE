@@ -14,8 +14,8 @@ import {
 } from "../api";
 
 /**
- * Map authoring workshop — does not Start/Stop train or Activate physics.
- * Train dropdown only lists builtin + mesh-ready maps; prep them here.
+ * Map authoring workshop for local/custom simulator assets and map telemetry.
+ * Official competition runs use the track bundled in their selected simulator image.
  */
 export function MapsPage() {
   const [maps, setMaps] = useState<MapCatalogEntry[]>([]);
@@ -120,7 +120,7 @@ export function MapsPage() {
         refreshMaps(res.maps.filter((m) => m.id !== "none"));
         const r = res.result;
         setMsg(
-          `Mesh ready — contours=${String(r.n_contours)} visual=${String(r.n_verts_visual)}v collider=${String(r.n_verts_collider)}v. Available in Train map dropdown.`
+          `Mesh ready — contours=${String(r.n_contours)} visual=${String(r.n_verts_visual)}v collider=${String(r.n_verts_collider)}v. Available to local/custom simulator workflows.`
         );
       })
       .catch((err: unknown) => {
@@ -208,9 +208,9 @@ export function MapsPage() {
     <section className="panel maps-panel">
       <h2>Maps</h2>
       <p className="lede">
-        Prepare tracks here (upload, mesh, centerline). This tab does not start
-        training or switch sim physics — pick a mesh-ready map on{" "}
-        <strong>Train</strong> and lock it in with Start.
+        Prepare and inspect map assets here (upload, mesh, centerline, and lap gate).
+        Official competition runs use the track bundled in their simulator image;
+        these custom map assets do not change an official run.
       </p>
 
       <div className="fleet-toolbar">
@@ -389,11 +389,10 @@ export function MapsPage() {
             <strong>source</strong> {selectedMap.source ?? "—"}
           </div>
           {selectedMap.mesh_status === "ready" ? (
-            <p className="msg ok">Ready for Train map dropdown.</p>
+            <p className="msg ok">Mesh ready for local/custom simulator workflows.</p>
           ) : (
             <p className="lede" style={{ marginTop: "0.5rem" }}>
-              Generate mesh before this map appears as a Train option (besides
-              builtin).
+              Generate a mesh before using this map with the local/custom simulator.
             </p>
           )}
         </div>

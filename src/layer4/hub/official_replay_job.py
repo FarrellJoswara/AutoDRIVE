@@ -36,6 +36,8 @@ class OfficialReplayJob:
             "map_id": "none", "seed": None, "run_id": self.run_id,
             "evaluation": report,
             "last_fleet": self.manager.telemetry(self.run_id).get("fleet") if self.run_id else None,
+            "simulator_backend": row.get("simulator_backend"),
+            "simulator_connections": row.get("simulator_connections", []),
         }
 
     def start(self, *, model_path, trace_steps=0, **_ignored):

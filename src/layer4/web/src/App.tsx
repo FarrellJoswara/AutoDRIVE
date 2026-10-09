@@ -10,8 +10,11 @@ const WatchPage = lazy(() =>
 const ReplayPage = lazy(() =>
   import("./pages/Replay").then((m) => ({ default: m.ReplayPage }))
 );
+const MapsPage = lazy(() =>
+  import("./pages/Maps").then((m) => ({ default: m.MapsPage }))
+);
 
-type Page = "train" | "watch" | "replay";
+type Page = "train" | "watch" | "replay" | "maps";
 
 function trainingNotice(status: ReturnType<typeof useHubStore>["status"]) {
   if (!status || (status.state !== "exited" && status.state !== "error")) return null;
@@ -114,6 +117,7 @@ export function App() {
             ["train", "Train"],
             ["watch", "Watch"],
             ["replay", "Replay"],
+            ["maps", "Maps"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -176,6 +180,11 @@ export function App() {
       {page === "replay" && (
         <Suspense fallback={<section className="panel"><h2>Replay</h2><p className="lede">Loading…</p></section>}>
           <ReplayPage />
+        </Suspense>
+      )}
+      {page === "maps" && (
+        <Suspense fallback={<section className="panel"><h2>Maps</h2><p className="lede">Loading…</p></section>}>
+          <MapsPage />
         </Suspense>
       )}
     </div>

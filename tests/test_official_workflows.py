@@ -48,6 +48,173 @@ def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
     assert not manager.backend.networks
 
 
+def test_windows_graphics_backend_publishes_one_local_bridge_per_env(manager):
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 2})
+    containers = list(manager.backend.containers.values())
+    assert {item["Labels"]["aicar.role"] for item in containers} == {"api", "api-1"}
+    assert run["simulator_backend"] == "windows_external"
+    assert run["simulator_image"] == "official AutoDRIVE IROS 2026 Windows simulator"
+    assert len(run["simulator_connections"]) == 2
+    ports = [item["port"] for item in run["simulator_connections"]]
+    assert ports[1] == ports[0] + 1
+    apis = {item["Labels"]["aicar.role"]: item for item in containers}
+    assert apis["api"]["kwargs"]["published_ports"] == {"4568": ports[0]}
+    assert apis["api-1"]["kwargs"]["published_ports"] == {"4568": ports[1]}
+    assert "AICAR_MODE=train" in apis["api"]["kwargs"]["env"]
+    assert "AICAR_MODE=bridge" in apis["api-1"]["kwargs"]["env"]
+    manager.stop_run(run["run_id"])
+    assert not manager.backend.containers
+    assert not manager.backend.networks
+
+
+def test_native_backend_starts_windows_fleet_only_after_all_bridge_pairs_exist(manager):
+    calls = []
+    manager.backend.simulator_host = "172.22.16.1"
+    manager.backend.start_simulators = lambda **kwargs: calls.append(kwargs)
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 4})
+
+    assert [item["host"] for item in run["simulator_connections"]] == ["172.22.16.1"] * 4
+    assert len(calls) == 1
+    assert len(calls[0]["connections"]) == 4
+    assert calls[0]["run_id"] == run["run_id"]
+    assert len(manager.backend.containers) == 4
+    manager.stop_run(run["run_id"])
+
+
+def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    value = NativeOfficialBackend._local_logs_path("/runs/rl/official_run_abcd/checkpoint.zip")
+    assert value.replace("\\", "/").endswith("logs/rl/official_run_abcd/checkpoint.zip")
+
+
+def test_native_backend_translates_run_settings_to_native_trainer_arguments():
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    command = NativeOfficialBackend._training_command({
+        "AICAR_TRAIN_OUT": "/tmp/run-output",
+        "AICAR_TRAIN_N_ENVS": "4",
+        "AICAR_TRAIN_TIMESTEPS": "256",
+        "AICAR_PPO_DEVICE": "cuda",
+        "AICAR_PPO_N_STEPS": "64",
+        "AICAR_PPO_N_EPOCHS": "1",
+        "AICAR_OBSERVATION_PROFILE": "official_sensors_camera",
+        "AICAR_TRAIN_STOP_ON_PLATEAU": "0",
+    })
+    args = dict(zip(command[3::2], command[4::2]))
+    assert args["--out"] == "/tmp/run-output"
+    assert args["--n-envs"] == "4"
+    assert args["--total-timesteps"] == "256"
+    assert args["--device"] == "cuda"
+    assert args["--n-steps"] == "64"
+    assert args["--n-epochs"] == "1"
+    assert args["--observation-profile"] == "official_sensors_camera"
+    assert args["--stop-on-plateau"] == "0"
+
+
+def test_official_relay_accepts_bridge_event_before_socketio_namespace_connect():
+    import asyncio
+    import engineio
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from src.layer1.official_bridge_relay import OfficialBridgeRelay
+
+    relay = OfficialBridgeRelay()
+
+    async def exercise_unity_event_order():
+        app = web.Application()
+        relay.sio.attach(app, socketio_path="socket.io")
+        server = TestServer(app)
+        await server.start_server()
+        client = engineio.AsyncClient()
+        try:
+            await client.connect(
+                str(server.make_url("/")).rstrip("/"),
+                engineio_path="socket.io",
+                transports=["websocket"],
+            )
+            # AutoDRIVE Unity sends an Engine.IO MESSAGE with a Socket.IO
+            # Bridge event before the formal Socket.IO namespace connect.
+            await client.send('2["Bridge",{}]')
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while relay._incomplete_frames == 0 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            assert relay._incomplete_frames == 1
+            assert len(relay._connected_simulators) == 1
+        finally:
+            if getattr(client, "state", None) == "connected":
+                await client.disconnect()
+            await server.close()
+
+    asyncio.run(exercise_unity_event_order())
+
+
+def test_legacy_docker_registry_paths_resolve_to_persistent_workspace_logs(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"runs": [{
+        "run_id": "ab12cd34ef56", "state": "completed",
+        "output_dir": "/app/logs/rl/official_run_ab12cd34ef56",
+        "log_path": "/app/logs/rl/official_run_ab12cd34ef56/hub_train.log",
+    }]}), encoding="utf-8")
+    manager = OfficialRunManager(
+        backend=FakeDocker(tmp_path), registry_path=registry,
+        runs_root=tmp_path / "logs" / "rl", start_monitor=False,
+    )
+    try:
+        run = manager.get_run("ab12cd34ef56")
+        assert run["output_dir"] == str(tmp_path / "logs" / "rl" / "official_run_ab12cd34ef56")
+        assert run["log_path"] == str(tmp_path / "logs" / "rl" / "official_run_ab12cd34ef56" / "hub_train.log")
+    finally:
+        manager.close()
+
+
+def test_external_simulator_port_blocks_are_valid_and_unique(manager):
+    first = manager.create_run({"simulator_backend": "windows_external", "n_envs": 8})
+    second = manager.create_run({"simulator_backend": "windows_external", "n_envs": 8})
+    first_ports = {item["port"] for item in first["simulator_connections"]}
+    second_ports = {item["port"] for item in second["simulator_connections"]}
+    assert len(first_ports) == 8
+    assert len(second_ports) == 8
+    assert all(49152 <= port <= 65535 for port in first_ports | second_ports)
+    assert first_ports.isdisjoint(second_ports)
+    manager.stop_run(first["run_id"])
+    manager.stop_run(second["run_id"])
+
+
+def test_external_run_creation_error_is_reported_and_cleaned_up(manager, monkeypatch):
+    def fail_create(**kwargs):
+        raise RuntimeError("simulated Docker port allocation failure")
+
+    monkeypatch.setattr(manager.backend, "create_official_run_container", fail_create)
+    with pytest.raises(RuntimeError, match="simulated Docker port allocation failure"):
+        manager.create_run({"simulator_backend": "windows_external", "n_envs": 1})
+    failed = manager.list_runs()["runs"][0]
+    assert failed["state"] == "failed"
+    assert failed["error"] == "simulated Docker port allocation failure"
+    assert failed["cleanup_error"] is None
+    assert not manager.backend.networks
+
+
+def test_docker_api_binds_external_bridge_ports_to_loopback_only(monkeypatch):
+    from src.layer4.hub import docker_control
+
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"Id": "container-id"} if method == "POST" and "/containers/create" in path else None
+
+    monkeypatch.setattr(docker_control, "_request", request)
+    docker_control.create_official_run_container(
+        run_id="0123456789ab", role="api", image="aicar-iros2026",
+        network_name="aicar-run-0123456789ab", published_ports={"4568": 48123},
+    )
+    body = calls[0][2]["body"]
+    assert body["ExposedPorts"] == {"4568/tcp": {}}
+    assert body["HostConfig"]["PortBindings"] == {
+        "4568/tcp": [{"HostIp": "127.0.0.1", "HostPort": "48123"}]
+    }
+
+
 def test_cuda_run_uses_gpu_learner_image_and_keeps_workers_cpu(manager):
     with patch("src.layer4.hub.official_run_manager.GPU_API_IMAGE", "aicar-test:cuda"):
         run = manager.create_run({"n_envs": 2, "device": "cuda"})

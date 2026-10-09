@@ -24,7 +24,11 @@ def checkpoint_settings(checkpoint: Path) -> dict:
     profile = config.get("observation_profile")
     if profile not in {"official_sensors", "official_sensors_history", "official_sensors_camera"}:
         raise ValueError("Checkpoint is missing a supported official observation profile")
-    return {"observation_profile": profile, **{key: actions[key] for key in ACTION_KEYS}}
+    backend = config.get("simulator_backend", "docker")
+    if backend not in {"docker", "windows_external"}:
+        raise ValueError("Checkpoint has an unsupported simulator backend")
+    return {"simulator_backend": backend, "observation_profile": profile,
+            **{key: actions[key] for key in ACTION_KEYS}}
 
 
 def list_official_models(root: Path) -> list[dict]:

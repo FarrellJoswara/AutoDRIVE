@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from src.layer4.hub.map_activate import activate_map
 from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
 from src.layer4.hub.official_run_manager import OfficialRunManager
+from src.layer4.hub.native_official_backend import NativeOfficialBackend
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_models import list_official_models
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
@@ -50,7 +51,13 @@ HUB_PORT = int(os.environ.get("HUB_PORT", os.environ.get("READY_PORT", "8090")))
 HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
-official_runs = OfficialRunManager()
+_run_backend = os.environ.get("AICAR_RUN_BACKEND", "native" if os.name != "nt" else "docker").strip().lower()
+if _run_backend == "native":
+    official_runs = OfficialRunManager(backend=NativeOfficialBackend())
+elif _run_backend == "docker":
+    official_runs = OfficialRunManager()
+else:
+    raise RuntimeError("AICAR_RUN_BACKEND must be 'native' or 'docker'")
 replay_job = OfficialReplayJob(official_runs, on_status=lambda s: bus.publish_replay_status(s))
 _settings: Settings = load_settings()
 _official_train_settings: OfficialTrainSettings = load_official_train_settings()
@@ -68,13 +75,14 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(official_runs.reconcile)
     except Exception:
         pass
-    # A hard hub restart can leave the standalone replay simulator behind.
-    try:
-        from src.layer4.hub.docker_control import remove_replay_sim
+    # The legacy Docker replay simulator is only cleaned up in Docker mode.
+    if _run_backend == "docker":
+        try:
+            from src.layer4.hub.docker_control import remove_replay_sim
 
-        await asyncio.to_thread(remove_replay_sim)
-    except Exception:
-        pass
+            await asyncio.to_thread(remove_replay_sim)
+        except Exception:
+            pass
     try:
         yield
     finally:
@@ -84,12 +92,13 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(replay_job.stop)
         except Exception:
             pass
-        try:
-            from src.layer4.hub.docker_control import remove_replay_sim
+        if _run_backend == "docker":
+            try:
+                from src.layer4.hub.docker_control import remove_replay_sim
 
-            await asyncio.to_thread(remove_replay_sim)
-        except Exception:
-            pass
+                await asyncio.to_thread(remove_replay_sim)
+            except Exception:
+                pass
 
 
 app = FastAPI(title="AiCar Mission Control", version="0.1.0", lifespan=lifespan)
@@ -145,7 +154,7 @@ async def api_shutdown(request: Request) -> Dict[str, Any]:
     except Exception:
         pass
 
-    if stop_stack:
+    if stop_stack and _run_backend == "docker":
         try:
             from src.layer4.hub.docker_control import stop_compose_containers
 
@@ -176,7 +185,7 @@ async def api_shutdown(request: Request) -> Dict[str, Any]:
     return {
         "ok": True,
         "shutting_down": True,
-        "stack": stop_stack,
+        "stack": stop_stack and _run_backend == "docker",
         "stopped_containers": stopped,
         "train": train_status,
     }

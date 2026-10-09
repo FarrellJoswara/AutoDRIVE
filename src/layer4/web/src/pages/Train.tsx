@@ -100,7 +100,13 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     Promise.all([getOfficialSettings(), getOfficialRuns()])
       .then(([settingsResult, runsResult]) => {
         if (cancelled) return;
-        setForm(settingsResult.settings);
+        const configuredSettings = settingsResult.settings;
+        setForm({
+          ...configuredSettings,
+          timeout_s: configuredSettings.simulator_backend === "windows_external"
+            ? Math.max(180, configuredSettings.timeout_s)
+            : configuredSettings.timeout_s,
+        });
         setRuns(runsResult.runs);
         setMaxRuns(runsResult.max_concurrent_runs);
         setSelectedRunId(runsResult.runs.find(isActive)?.run_id ?? runsResult.runs[0]?.run_id ?? null);
@@ -135,8 +141,15 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setForm((current) => current ? { ...current, [key]: value.trim() === "" ? null : value } : current);
   }
 
-  function setChoice<K extends "device" | "observation_profile" | "throttle_mode" | "negative_throttle_mode" | "steering_mode">(key: K, value: OfficialTrainSettings[K]) {
-    setForm((current) => current ? { ...current, [key]: value } : current);
+  function setChoice<K extends "simulator_backend" | "device" | "observation_profile" | "throttle_mode" | "negative_throttle_mode" | "steering_mode">(key: K, value: OfficialTrainSettings[K]) {
+    setForm((current) => {
+      if (!current) return current;
+      const next = { ...current, [key]: value };
+      if (key === "simulator_backend" && value === "windows_external") {
+        next.timeout_s = Math.max(180, next.timeout_s);
+      }
+      return next;
+    });
   }
 
   async function startRun(event?: FormEvent) {
@@ -354,10 +367,15 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>Simulator, observations, and controls</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
+              <Field label="Simulator graphics" help="Mission Control starts the official graphics-enabled Windows simulator and a native WSL PPO learner with the official ROS 2 bridge. Docker is not used on this run path.">
+                <select value={form.simulator_backend} onChange={(event) => setChoice("simulator_backend", event.target.value as OfficialTrainSettings["simulator_backend"])}>
+                  <option value="windows_external">Official Windows simulator (camera)</option>
+                </select>
+              </Field>
               <Field label="Parallel environments" help="Official simulator/Devkit pairs feeding one PPO model. More environments consume more CPU and memory; measure throughput before increasing.">
                 <input type="number" min={1} max={8} value={form.n_envs} onChange={(event) => setNumber("n_envs", event.target.value)} />
               </Field>
-              <Field label="PPO device" help="CUDA uses the NVIDIA GPU for PPO updates. It requires the optional CUDA policy image and NVIDIA Container Toolkit; simulator work remains CPU-bound.">
+              <Field label="PPO device" help="CUDA uses the WSL-visible NVIDIA GPU for PPO updates. Simulator rendering runs in the official Windows application.">
                 <select value={form.device} onChange={(event) => setChoice("device", event.target.value as OfficialTrainSettings["device"])}>
                   <option value="cpu">CPU (default)</option><option value="cuda">NVIDIA GPU (CUDA)</option>
                 </select>
@@ -412,6 +430,12 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
       {message && <p className="msg ok" role="status">{message}</p>}
       {error && <p className="msg err" role="alert">{error}</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
+      {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
+        <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>
+        <p className="meta">Mission Control opens one official graphics-enabled Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner.</p>
+        <ol>{selectedRun.simulator_connections.map((connection) => <li key={connection.environment}>Environment {connection.environment}: <code>{connection.host}:{connection.port}</code> (ROS domain {connection.ros_domain_id})</li>)}</ol>
+        <p className="meta">Simulator windows open and connect automatically. They close when the run stops.</p>
+      </section> : null}
     </section>
   );
 });

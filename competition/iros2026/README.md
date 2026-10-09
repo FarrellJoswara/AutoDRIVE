@@ -173,6 +173,26 @@ simulator's documented `-ip <relay-host> -port 4568` arguments. For repeatable
 local comparisons, start a fresh simulator process for every attempt and
 preserve the exact image tags.
 
+Mission Control also supports `simulator_backend=windows_external` for hosts
+where Docker's Unity graphics device cannot render camera sensors. The PPO
+learner and official ROS/API bridges remain in Docker; the unchanged official
+Windows simulator connects to each bridge through a localhost-only port. The
+run page lists one port per environment. Start the simulator processes with
+graphics enabled and let the launcher stop them when the run stops:
+
+```powershell
+./scripts/start_official_windows_simulators.ps1 `
+  -SimulatorExePath 'C:\path\to\AutoDRIVE Simulator.exe' `
+  -Ports 46000,46001 `
+  -RunId <run-id> `
+  -HubUrl http://127.0.0.1:8090
+```
+
+The simulator processes use the official executable's `-ip 127.0.0.1 -port`
+arguments, and each ROS domain still feeds the same single PPO learner. Keep
+the launcher PowerShell window open; it terminates only the simulator
+processes it started after the run reaches a terminal state.
+
 For controlled transfer diagnostics, `AICAR_NEGATIVE_THROTTLE_MODE` accepts
 `allow` (the policy's signed output is passed through), `zero` (negative
 throttle becomes coasting), or `positive_magnitude` (negative output is mapped

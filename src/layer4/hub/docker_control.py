@@ -105,6 +105,7 @@ def create_official_run_container(
     extra_hosts: Optional[List[str]] = None, working_dir: Optional[str] = None,
     metadata_labels: Optional[Dict[str, str]] = None,
     gpu: bool = False,
+    published_ports: Optional[Dict[str, int]] = None,
 ) -> str:
     """Create and start a run-scoped API or simulator container."""
     if not re.fullmatch(r"(?:api|sim)(?:-[1-7])?", role):
@@ -132,6 +133,12 @@ def create_official_run_container(
             "EndpointsConfig": {network_name: {"Aliases": [role, name]}}
         },
     }
+    if published_ports:
+        config["ExposedPorts"] = {f"{int(container_port)}/tcp": {} for container_port in published_ports}
+        config["HostConfig"]["PortBindings"] = {
+            f"{int(container_port)}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+            for container_port, host_port in published_ports.items()
+        }
     if gpu:
         config["HostConfig"]["DeviceRequests"] = [{
             "Driver": "nvidia", "Count": -1, "DeviceIDs": [],

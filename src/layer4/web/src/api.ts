@@ -203,6 +203,8 @@ export interface ReplayStatus {
   seed: number | null;
   run_id: string | null;
   last_fleet?: FleetTelemetry | null;
+  simulator_backend?: "docker" | "windows_external";
+  simulator_connections?: Array<{ environment: number; host: string; port: number; ros_domain_id: number }>;
 }
 
 export interface ModelCheckpoint {
@@ -233,6 +235,7 @@ export interface MetricsTelemetry {
 
 /** Settings accepted by the official AutoDRIVE trainer. */
 export interface OfficialTrainSettings {
+  simulator_backend: "docker" | "windows_external";
   n_envs: number;
   total_timesteps: number;
   stop_on_plateau: boolean;
@@ -275,6 +278,8 @@ export type OfficialRunState = "starting" | "running" | "stopping" | "exited" | 
 export interface RunSummary {
   run_id: string;
   kind?: "training" | "evaluation";
+  simulator_backend?: "docker" | "windows_external";
+  simulator_connections?: Array<{ environment: number; host: string; port: number; ros_domain_id: number }>;
   state: OfficialRunState;
   started_at?: string | null;
   pid?: number | null;

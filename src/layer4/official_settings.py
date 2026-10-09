@@ -22,6 +22,7 @@ class OfficialTrainSettings(BaseModel):
     """
 
     # Zero means no timestep ceiling; plateau and optional wall-clock stop rules still apply.
+    simulator_backend: Literal["docker", "windows_external"] = "windows_external"
     n_envs: int = Field(default=1, ge=1, le=8)
     total_timesteps: int = Field(default=1_000_000, ge=0)
     stop_on_plateau: bool = True
@@ -64,6 +65,7 @@ class OfficialTrainSettings(BaseModel):
         """Build the exact trainer environment for one manager-assigned run."""
         values = {
             "AICAR_MODE": "train",
+            "AICAR_SIMULATOR_BACKEND": self.simulator_backend,
             "AICAR_TRAIN_N_ENVS": str(self.n_envs),
             "HUB_URL": hub_url,
             "AICAR_RUN_ID": run_id,

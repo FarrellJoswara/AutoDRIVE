@@ -365,6 +365,7 @@ def train_official(
             "runtime": "official IROS 2026 API and simulator images",
             "official_api_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
             "official_simulator_image": _official_simulator_image(),
+            "simulator_backend": os.environ.get("AICAR_SIMULATOR_BACKEND", "docker"),
             "episode": {
                 "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,

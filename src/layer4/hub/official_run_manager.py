@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -148,13 +149,23 @@ class OfficialRunManager:
             rows = data.get("runs", []) if isinstance(data, dict) else []
             for row in rows:
                 if isinstance(row, dict) and row.get("run_id"):
+                    # Docker-era registries stored mount paths such as
+                    # /app/logs/rl/... . Resolve those records back to this
+                    # checkout's persistent logs so native-hub telemetry and
+                    # camera endpoints remain readable after migration.
+                    raw_output = str(row.get("output_dir") or "")
+                    for prefix in ("/app/logs/rl/", "/runs/rl/"):
+                        if raw_output.startswith(prefix):
+                            row["output_dir"] = str(self.runs_root / raw_output[len(prefix):])
+                            if row.get("log_path"):
+                                row["log_path"] = str(Path(row["output_dir"]) / "hub_train.log")
+                            break
                     self._runs[str(row["run_id"])] = row
         except (OSError, ValueError, TypeError):
             self._runs = {}
 
     def _persist(self) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.registry_path.with_suffix(self.registry_path.suffix + ".tmp")
         # Fleet frames and current metrics are hot, potentially large values;
         # keep them out of the lifecycle registry. Fleet is separately
         # checkpointed by the official Layer 3 callback in watch_latest.json.
@@ -167,11 +178,27 @@ class OfficialRunManager:
             {key: value for key, value in row.items() if key not in ephemeral}
             for row in self._runs.values()
         ]
-        tmp.write_text(
-            json.dumps({"version": 1, "runs": persisted_runs}, indent=2),
-            encoding="utf-8",
+        # WSL DrvFS can host more than one hub process during a restart. A
+        # shared fixed `.tmp` name lets one writer replace another writer's
+        # staging file, causing ENOENT at os.replace and turning an otherwise
+        # successful simulator startup into a failed run. Keep each staging
+        # file unique and on the same filesystem as the destination.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{self.registry_path.name}.", suffix=".tmp",
+            dir=self.registry_path.parent,
         )
-        os.replace(tmp, self.registry_path)
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"version": 1, "runs": persisted_runs}, indent=2))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, self.registry_path)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
 
     def _monitor_loop(self) -> None:
         while not self._monitor_stop.wait(self.poll_interval_s):
@@ -207,6 +234,7 @@ class OfficialRunManager:
             "exit_code", "stop_reason", "cleanup_error", "network_name",
             "api_container_name", "sim_container_name", "latest_fleet",
             "latest_metrics", "latest_telemetry", "map_id", "worker_container_ids",
+            "simulator_backend", "simulator_connections",
         )
         summary = {key: row.get(key) for key in keys}
         summary["pid"] = None
@@ -242,6 +270,15 @@ class OfficialRunManager:
         if kind != "evaluation" and evaluation_trace_steps:
             raise ValueError("evaluation traces are only supported for evaluation runs")
         config = normalize_official_config(official_config)
+        # Older API callers do not send simulator_backend; keep their explicit
+        # legacy behavior. The Mission Control form always sends its selected
+        # backend, whose new-run default is the graphics-enabled Windows path.
+        if "simulator_backend" not in official_config:
+            config["simulator_backend"] = "docker"
+        if config["simulator_backend"] == "windows_external":
+            # GUI startup can take much longer than the container-only player.
+            # Give the official Windows build time to open before Layer 2 times out.
+            config["timeout_s"] = max(180.0, float(config["timeout_s"]))
         if kind == "evaluation" and (not config.get("resume") or config["n_envs"] != 1):
             raise ValueError("evaluation requires a checkpoint and exactly one fresh simulator")
         display = _safe_display_name(display_name)
@@ -253,11 +290,24 @@ class OfficialRunManager:
             run_id = uuid.uuid4().hex[:12]
             created = _utc_now()
             run_dir = self.runs_root / f"official_run_{run_id}"
+            simulator_connections = None
+            if config["simulator_backend"] == "windows_external":
+                external_base_port = self._external_simulator_port_base(run_id, config["n_envs"])
+                simulator_connections = [
+                    {"environment": index, "host": getattr(self.backend, "simulator_host", "127.0.0.1"), "port": external_base_port + index,
+                     "ros_domain_id": index}
+                    for index in range(config["n_envs"])
+                ]
             row: Dict[str, Any] = {
                 "run_id": run_id,
                 "display_name": display,
                 "kind": kind,
-                "simulator_image": EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE,
+                "simulator_image": (
+                    "official AutoDRIVE IROS 2026 Windows simulator"
+                    if config.get("simulator_backend", "docker") == "windows_external"
+                    else (EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE)
+                ),
+                "simulator_backend": config.get("simulator_backend", "docker"),
                 "evaluation_trace_steps": evaluation_trace_steps,
                 "state": "starting",
                 "created_at": created,
@@ -277,6 +327,7 @@ class OfficialRunManager:
                 "api_container_name": f"aicar-run-{run_id}-api",
                 "sim_container_id": None,
                 "sim_container_name": f"aicar-run-{run_id}-sim",
+                "simulator_connections": simulator_connections,
             }
             self._runs[run_id] = row
             self._creating.add(run_id)
@@ -296,6 +347,11 @@ class OfficialRunManager:
                     raise RuntimeError("run was stopped while its network was starting")
                 self._persist()
             env = self._api_environment(config, run_id)
+            external_simulators = config.get("simulator_backend", "docker") == "windows_external"
+            external_base_port = row["simulator_connections"][0]["port"] if external_simulators else None
+            if external_simulators:
+                env = [value for value in env if not value.startswith("AICAR_OFFICIAL_SIMULATOR_IMAGE=")]
+                env.append("AICAR_OFFICIAL_SIMULATOR_IMAGE=official AutoDRIVE IROS 2026 Windows simulator")
             if kind == "evaluation":
                 env = [value for value in env if not value.startswith("AICAR_MODE=")]
                 env.extend([
@@ -313,6 +369,7 @@ class OfficialRunManager:
                 extra_hosts=["host.docker.internal:host-gateway"],
                 metadata_labels=self._container_metadata(row),
                 gpu=config["device"] == "cuda",
+                published_ports={"4568": external_base_port} if external_simulators else None,
             )
             with self._lock:
                 row["api_container_id"] = api_id
@@ -321,7 +378,10 @@ class OfficialRunManager:
                 row["started_at"] = _utc_now()
                 self._persist()
             for index in range(1, config["n_envs"]):
-                for role, image in ((f"api-{index}", API_IMAGE), (f"sim-{index}", row["simulator_image"])):
+                worker_roles = ((f"api-{index}", API_IMAGE),) if external_simulators else (
+                    (f"api-{index}", API_IMAGE), (f"sim-{index}", row["simulator_image"])
+                )
+                for role, image in worker_roles:
                     with self._lock:
                         if row.get("state") != "starting":
                             raise RuntimeError("run was stopped while workers were starting")
@@ -335,18 +395,27 @@ class OfficialRunManager:
                         ],
                         metadata_labels=self._container_metadata(row),
                         gpu=role.startswith("sim"),
+                        published_ports={"4568": external_base_port + index} if external_simulators and role.startswith("api") else None,
                     )
                     with self._lock:
                         row.setdefault("worker_container_ids", {})[role] = worker_id
                         self._persist()
-            sim_id = self.backend.create_official_run_container(
-                run_id=run_id, role="sim", image=row["simulator_image"],
-                network_name=row["network_name"],
-                entrypoint=["/bin/bash", "-lc"],
-                command=[_official_simulator_command("api")],
-                metadata_labels=self._container_metadata(row),
-                gpu=True,
-            )
+            sim_id = None
+            if not external_simulators:
+                sim_id = self.backend.create_official_run_container(
+                    run_id=run_id, role="sim", image=row["simulator_image"],
+                    network_name=row["network_name"],
+                    entrypoint=["/bin/bash", "-lc"],
+                    command=[_official_simulator_command("api")],
+                    metadata_labels=self._container_metadata(row),
+                    gpu=True,
+                )
+            if external_simulators and hasattr(self.backend, "start_simulators"):
+                self.backend.start_simulators(
+                    run_id=run_id,
+                    connections=simulator_connections or [],
+                    hub_url=os.environ.get("AICAR_HUB_PUBLIC_URL", "http://127.0.0.1:8091"),
+                )
             with self._lock:
                 row["sim_container_id"] = sim_id
                 if row.get("state") != "starting":
@@ -355,7 +424,7 @@ class OfficialRunManager:
                 self._persist()
             return self._summary(row)
         except Exception as exc:
-            self._cleanup_row_resources(row, stopped_ids=stopped_ids)
+            self._cleanup_row_resources(row)
             with self._lock:
                 if row.get("state") != "stopped":
                     row["state"] = "failed"
@@ -374,8 +443,34 @@ class OfficialRunManager:
             run_id=run_id,
         )
         env["AICAR_CONTROLLER"] = "ppo"
+        env["AICAR_SIMULATOR_BACKEND"] = config.get("simulator_backend", "docker")
         env["AICAR_OFFICIAL_SIMULATOR_IMAGE"] = TRAIN_SIM_IMAGE
         return [f"{key}={value}" for key, value in env.items()]
+
+    def _external_simulator_port_base(self, run_id: str, n_envs: int) -> int:
+        # Reserve one unique, consecutive, localhost-only block per active run.
+        # Each slot is eight ports wide (the maximum supported env count),
+        # within the valid dynamic/private TCP port range.
+        first_port = 49152
+        block_count = (65536 - first_port) // 8
+        reserved_blocks = set()
+        for row in self._runs.values():
+            if row.get("state") not in {"starting", "running", "stopping"}:
+                continue
+            for connection in row.get("simulator_connections") or []:
+                try:
+                    reserved_blocks.add((int(connection["port"]) - first_port) // 8)
+                except (KeyError, TypeError, ValueError):
+                    continue
+        start_block = int(run_id[:6], 16) % block_count
+        for offset in range(block_count):
+            block = (start_block + offset) % block_count
+            if block in reserved_blocks:
+                continue
+            base_port = first_port + block * 8
+            if base_port + n_envs - 1 <= 65535:
+                return base_port
+        raise RuntimeError("no unused localhost port block is available for external simulators")
 
     @staticmethod
     def _container_metadata(row: Dict[str, Any]) -> Dict[str, str]:
@@ -419,6 +514,12 @@ class OfficialRunManager:
                         row["worker_container_ids"].pop(key, None)
                 except Exception as exc:
                     cleanup_errors.append(f"remove {container_id}: {exc}")
+        stop_simulators = getattr(self.backend, "stop_simulators", None)
+        if stop_simulators:
+            try:
+                stop_simulators(str(row.get("run_id", "")))
+            except Exception as exc:
+                cleanup_errors.append(f"stop Windows simulators: {exc}")
         network_id = row.get("network_id")
         if network_id:
             try:
@@ -623,9 +724,10 @@ class OfficialRunManager:
                     api_state = (api or {}).get("State", "")
                     sim_state = (sim or {}).get("State", "")
                     sentinel = Path(row.get("output_dir", "")) / ("evaluation.json" if row.get("kind") == "evaluation" else "stop_reason.json")
-                    expected_roles = {"api", "sim"} | {
+                    external_simulators = row.get("simulator_backend", row.get("config", {}).get("simulator_backend", "docker")) == "windows_external"
+                    expected_roles = ({"api"} if external_simulators else {"api", "sim"}) | {
                         f"{role}-{index}" for index in range(1, int(row.get("config", {}).get("n_envs", 1)))
-                        for role in ("api", "sim")
+                        for role in (("api",) if external_simulators else ("api", "sim"))
                     }
                     all_running = all(roles.get(role, {}).get("State") == "running" for role in expected_roles)
                     if all_running:
@@ -653,7 +755,7 @@ class OfficialRunManager:
                         row["state"] = "stopped"
                         row["finished_at"] = row.get("finished_at") or _utc_now()
                         cleanup_rows.append(row)
-                    elif api_state == "exited" or sim_state == "exited":
+                    elif api_state == "exited" or (not external_simulators and sim_state == "exited"):
                         sentinel = Path(row.get("output_dir", "")) / ("evaluation.json" if row.get("kind") == "evaluation" else "stop_reason.json")
                         row["state"] = "completed" if sentinel.is_file() else "failed"
                         row["finished_at"] = row.get("finished_at") or _utc_now()

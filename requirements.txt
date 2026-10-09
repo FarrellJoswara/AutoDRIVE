@@ -10,6 +10,7 @@ matplotlib>=3.8.0
 # Devkit EIO=3 stack (socketio 4 / engineio 3) — it causes connect/disconnect flicker.
 python-socketio[client]>=5.10.0
 python-engineio>=4.9.0
+aiohttp>=3.9.0
 gevent>=21.12.0
 gevent-websocket>=0.10.1
 requests>=2.31.0
