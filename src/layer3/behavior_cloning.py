@@ -160,6 +160,25 @@ def collect_centerline_demonstrations(
                     "negative_throttle_steps": episode_negative_throttle_steps[env_index],
                     "lap_count": int(info.get("lap_count", 0) or 0),
                     "frontier_progress_m": info.get("frontier_progress_m"),
+                    "terminal_position_xy_m": (
+                        None if info.get("position") is None
+                        else [float(value) for value in info["position"][:2]]
+                    ),
+                    "terminal_yaw_rad": (
+                        None if info.get("yaw") is None else float(info["yaw"])
+                    ),
+                    "terminal_true_speed_mps": (
+                        None if info.get("true_speed") is None
+                        else float(info["true_speed"])
+                    ),
+                    "terminal_throttle_command": (
+                        None if info.get("throttle_command") is None
+                        else float(info["throttle_command"])
+                    ),
+                    "terminal_steering_command": (
+                        None if info.get("steering_command") is None
+                        else float(info["steering_command"])
+                    ),
                 })
                 episode_start_progress[env_index] = None
                 episode_forward_steps[env_index] = 0

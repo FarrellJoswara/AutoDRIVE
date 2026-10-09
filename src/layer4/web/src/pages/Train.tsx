@@ -393,7 +393,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
                 <input type="number" min={2} max={100000} value={form.behavior_cloning_steps_per_env} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_steps_per_env", event.target.value)} />
               </Field>
               <Field label="Teacher target speed (m/s)" help="Maximum speed used by the route-aware pure-pursuit teacher. It slows further for tight corners.">
-                <input type="number" min={0.5} max={10} step="any" value={form.behavior_teacher_max_speed_mps} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_teacher_max_speed_mps", event.target.value)} />
+                <input type="number" min={0.2} max={10} step="any" value={form.behavior_teacher_max_speed_mps} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_teacher_max_speed_mps", event.target.value)} />
               </Field>
               <Field label="Behavior-cloning epochs" help="Training passes over the collected teacher examples before PPO takes over.">
                 <input type="number" min={1} max={100} value={form.behavior_cloning_epochs} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_epochs", event.target.value)} />

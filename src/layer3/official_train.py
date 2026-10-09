@@ -245,7 +245,7 @@ def train_official(
     behavior_cloning_epochs: int = 8,
     behavior_cloning_batch_size: int = 256,
     behavior_cloning_learning_rate: float = 1e-3,
-    behavior_teacher_max_speed_mps: float = 1.2,
+    behavior_teacher_max_speed_mps: float = 0.3,
     n_steps: int = 2048,
     learning_rate: float = 1e-4,
     n_epochs: int = 4,
@@ -288,7 +288,7 @@ def train_official(
         raise ValueError("behavior_cloning_only requires a new run with behavior cloning enabled")
     if behavior_cloning_enabled and (
         behavior_cloning_epochs < 1 or behavior_cloning_batch_size < 1
-        or behavior_cloning_learning_rate <= 0 or behavior_teacher_max_speed_mps < 0.5
+        or behavior_cloning_learning_rate <= 0 or behavior_teacher_max_speed_mps < 0.2
     ):
         raise ValueError("behavior-cloning optimizer and teacher settings are invalid")
     if plateau_window_episodes < 2 or plateau_patience < 1:

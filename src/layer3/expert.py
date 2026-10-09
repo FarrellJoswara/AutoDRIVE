@@ -29,7 +29,7 @@ class CenterlineExpert:
         lookahead_base_m: float = 1.5,
     ) -> None:
         self.route = route
-        self.max_speed_mps = max(0.5, float(max_speed_mps))
+        self.max_speed_mps = max(0.2, float(max_speed_mps))
         self.wheelbase_m = max(0.05, float(wheelbase_m))
         self.max_steer_angle_rad = max(0.05, float(max_steer_angle_rad))
         self.max_lateral_accel_mps2 = max(0.1, float(max_lateral_accel_mps2))

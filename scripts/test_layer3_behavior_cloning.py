@@ -316,6 +316,11 @@ class BehaviorCloningTests(unittest.TestCase):
                         "frontier_progress_m": 12.0,
                         "termination_reason": "collision",
                         "episode_won": False,
+                        "position": [1.25, -0.5, 0.1],
+                        "yaw": 0.75,
+                        "true_speed": 0.4,
+                        "throttle_command": 0.12,
+                        "steering_command": -0.2,
                     }]
                 self.progress = 3.2
                 return self.reset(), np.zeros(1), np.zeros(1, dtype=bool), [{
@@ -337,6 +342,11 @@ class BehaviorCloningTests(unittest.TestCase):
         self.assertEqual(episode["start_progress_m"], 10.0)
         self.assertEqual(episode["end_progress_m"], 12.0)
         self.assertEqual(episode["net_progress_m"], 2.0)
+        self.assertEqual(episode["terminal_position_xy_m"], [1.25, -0.5])
+        self.assertEqual(episode["terminal_yaw_rad"], 0.75)
+        self.assertEqual(episode["terminal_true_speed_mps"], 0.4)
+        self.assertEqual(episode["terminal_throttle_command"], 0.12)
+        self.assertEqual(episode["terminal_steering_command"], -0.2)
         self.assertIsNone(summary["route_direction_diagnostics"][0]["net_progress_m"])
 
 

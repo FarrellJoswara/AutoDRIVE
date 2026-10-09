@@ -35,7 +35,7 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ENABLED"], "1")
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ONLY"], "0")
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV"], "4000")
-        self.assertEqual(env["AICAR_BEHAVIOR_TEACHER_MAX_SPEED_MPS"], "1.2")
+        self.assertEqual(env["AICAR_BEHAVIOR_TEACHER_MAX_SPEED_MPS"], "0.3")
         self.assertEqual(env["AICAR_TRAIN_TIME_COST"], "0.0")
         self.assertEqual(env["AICAR_TRAIN_FRONTIER_STAGNATION_S"], "5.0")
         self.assertEqual(env["AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE"], "200.0")
@@ -53,6 +53,12 @@ class OfficialTrainSettingsTests(unittest.TestCase):
             automatic_evaluation_enabled=False,
         ).to_container_env(hub_url="http://brain:8090", run_id="bc123")
         self.assertEqual(env["AICAR_BEHAVIOR_CLONING_ONLY"], "1")
+
+    def test_teacher_speed_can_be_lowered_for_safe_demonstration_collection(self):
+        settings = OfficialTrainSettings(behavior_teacher_max_speed_mps=0.2)
+        self.assertEqual(settings.behavior_teacher_max_speed_mps, 0.2)
+        with self.assertRaises(ValueError):
+            OfficialTrainSettings(behavior_teacher_max_speed_mps=0.19)
 
     def test_competition_settings_reject_custom_runtime_fields(self):
         with self.assertRaises(ValueError):
