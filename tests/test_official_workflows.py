@@ -786,4 +786,21 @@ def test_completed_progress_uses_saved_count_not_sampled_telemetry(manager):
     result = manager.get_run(run["run_id"])
     assert result["state"] == "completed"
     assert result["latest_metrics"]["step"] == 256
+
+
+def test_rejected_behavior_cloning_run_is_failed_not_completed(manager):
+    run = manager.create_run({"simulator_backend": "windows_external"})
+    row = manager._runs[run["run_id"]]
+    manager.backend.containers[row["api_container_id"]]["State"] = "exited"
+    Path(run["output_dir"], "stop_reason.json").write_text(json.dumps({
+        "reason": "behavior_cloning_rejected: teacher_collection_collision_detected",
+        "usable_checkpoint": False,
+    }))
+
+    manager.reconcile(run["run_id"])
+
+    result = manager.get_run(run["run_id"])
+    assert result["state"] == "failed"
+    assert result["stop_reason"].startswith("behavior_cloning_rejected:")
+    assert "behavior_cloning_rejected" in result["error"]
     assert result["map_id"] == "none"

@@ -38,6 +38,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _stop_reason_from_sentinel(path: Path) -> Optional[str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    return str(reason) if reason else None
+
+
 def normalize_official_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the official trainer's public settings and reject unknowns."""
     if not isinstance(raw, dict):
@@ -839,7 +848,11 @@ class OfficialRunManager:
                             cleanup_rows.append(row)
                         elif row.get("state") not in {"stopped", "failed", "completed"}:
                             sentinel = Path(row.get("output_dir", "")) / ("evaluation.json" if row.get("kind") == "evaluation" else "stop_reason.json")
-                            row["state"] = "completed" if sentinel.is_file() else "running"
+                            sentinel_reason = _stop_reason_from_sentinel(sentinel)
+                            rejected_bc = str(sentinel_reason or "").startswith("behavior_cloning_rejected")
+                            row["state"] = (
+                                "failed" if rejected_bc else "completed"
+                            ) if sentinel.is_file() else "running"
                             row["started_at"] = row.get("started_at") or _utc_now()
                         if row["state"] in {"completed", "failed", "stopped"}:
                             row["finished_at"] = row.get("finished_at") or _utc_now()
@@ -854,7 +867,11 @@ class OfficialRunManager:
                         cleanup_rows.append(row)
                     elif api_state == "exited" or (not external_simulators and sim_state == "exited"):
                         sentinel = Path(row.get("output_dir", "")) / ("evaluation.json" if row.get("kind") == "evaluation" else "stop_reason.json")
-                        row["state"] = "completed" if sentinel.is_file() else "failed"
+                        sentinel_reason = _stop_reason_from_sentinel(sentinel)
+                        rejected_bc = str(sentinel_reason or "").startswith("behavior_cloning_rejected")
+                        row["state"] = (
+                            "failed" if rejected_bc else "completed"
+                        ) if sentinel.is_file() else "failed"
                         row["finished_at"] = row.get("finished_at") or _utc_now()
                         for item in (api, sim):
                             if item and item.get("State") == "exited":
@@ -871,8 +888,11 @@ class OfficialRunManager:
                             except (OSError, ValueError, AttributeError):
                                 row["stop_reason"] = row.get("stop_reason") or ("training_complete" if row["state"] == "completed" else "container_not_running")
                         if row["state"] == "failed":
-                            row["stop_reason"] = "container_exit"
-                            row["error"] = row.get("error") or "official API or simulator container exited"
+                            row["stop_reason"] = sentinel_reason or "container_exit"
+                            if rejected_bc:
+                                row["error"] = row.get("error") or str(sentinel_reason)
+                            else:
+                                row["error"] = row.get("error") or "official API or simulator container exited"
                         cleanup_rows.append(row)
                     elif row.get("state") not in {"stopped", "failed", "completed"}:
                         row["state"] = "failed"
