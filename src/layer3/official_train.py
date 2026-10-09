@@ -24,6 +24,16 @@ _OFFICIAL_FIXED_PPO = {
     "max_grad_norm": 0.5,
 }
 
+_DEFAULT_OFFICIAL_SIMULATOR_IMAGE = (
+    "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
+)
+
+
+def _official_simulator_image() -> str:
+    """Return the simulator provenance recorded with an official checkpoint."""
+    value = os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE", "").strip()
+    return value or _DEFAULT_OFFICIAL_SIMULATOR_IMAGE
+
 
 class EpisodeReturnPlateau:
     """Stop only after repeated windows fail to improve mean episode return."""
@@ -354,7 +364,7 @@ def train_official(
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "runtime": "official IROS 2026 API and simulator images",
             "official_api_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
-            "official_simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice",
+            "official_simulator_image": _official_simulator_image(),
             "episode": {
                 "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,

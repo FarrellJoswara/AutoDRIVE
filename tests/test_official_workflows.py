@@ -28,6 +28,7 @@ def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
             for item in containers if item["Labels"]["aicar.role"].startswith("api")}
     assert apis["api"]["AICAR_TRAIN_N_ENVS"] == "3"
     assert apis["api"]["AICAR_MODE"] == "train"
+    assert apis["api"]["AICAR_OFFICIAL_SIMULATOR_IMAGE"].endswith(":2026-iros-practice")
     assert apis["api-1"]["ROS_DOMAIN_ID"] == "1"
     assert apis["api-2"]["ROS_DOMAIN_ID"] == "2"
     assert all(apis[role]["AICAR_MODE"] == "bridge" for role in ("api-1", "api-2"))
@@ -172,6 +173,18 @@ def test_official_settings_bound_worker_count():
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"
+
+
+def test_official_checkpoint_records_external_simulator_provenance(monkeypatch):
+    from src.layer3.official_train import _official_simulator_image
+
+    monkeypatch.setenv(
+        "AICAR_OFFICIAL_SIMULATOR_IMAGE",
+        "AutoDRIVE IROS 2026 compete Windows binary",
+    )
+    assert _official_simulator_image() == "AutoDRIVE IROS 2026 compete Windows binary"
+    monkeypatch.delenv("AICAR_OFFICIAL_SIMULATOR_IMAGE")
+    assert _official_simulator_image().endswith(":2026-iros-practice")
 
 
 def test_camera_endpoint_only_serves_camera_runs(tmp_path, monkeypatch):

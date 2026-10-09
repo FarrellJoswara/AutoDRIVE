@@ -374,6 +374,7 @@ class OfficialRunManager:
             run_id=run_id,
         )
         env["AICAR_CONTROLLER"] = "ppo"
+        env["AICAR_OFFICIAL_SIMULATOR_IMAGE"] = TRAIN_SIM_IMAGE
         return [f"{key}={value}" for key, value in env.items()]
 
     @staticmethod
