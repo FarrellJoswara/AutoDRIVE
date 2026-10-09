@@ -617,13 +617,13 @@ def test_official_settings_bound_worker_count():
     assert environment["AICAR_TRAIN_N_ENVS"] == "2"
     assert settings.frontier_stagnation_s == 5.0
     assert environment["AICAR_TRAIN_FRONTIER_STAGNATION_S"] == "5.0"
-    assert settings.lap_completion_reward == 100.0
-    assert environment["AICAR_TRAIN_LAP_COMPLETION_REWARD"] == "100.0"
-    assert settings.collision_reward_percent == 50.0
-    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "50.0"
+    assert settings.lap_completion_reward == 0.0
+    assert environment["AICAR_TRAIN_LAP_COMPLETION_REWARD"] == "0.0"
+    assert settings.collision_reward_percent == 100.0
+    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "100.0"
     assert settings.backward_speed_penalty_scale == 10.0
     assert environment["AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE"] == "10.0"
-    assert environment["AICAR_TRAIN_FAILURE_REWARD_PERCENT"] == "50.0"
+    assert environment["AICAR_TRAIN_FAILURE_REWARD_PERCENT"] == "100.0"
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"

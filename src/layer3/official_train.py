@@ -230,11 +230,11 @@ def train_official(
     warmup_laps: int = 0,
     time_cost_per_simulated_second: float = 5.0,
     collision_penalty_magnitude: float = 100.0,
-    collision_reward_percent: float = 50.0,
-    lap_completion_reward: float = 100.0,
+    collision_reward_percent: float = 100.0,
+    lap_completion_reward: float = 0.0,
     failed_episode_penalty: float = 100.0,
     backward_speed_penalty_scale: float = 10.0,
-    episode_failure_reward_percent: float = 50.0,
+    episode_failure_reward_percent: float = 100.0,
     frontier_stagnation_s: float = 5.0,
     observation_profile: str = "official_sensors_camera",
     steering_action_scale: float = 1.0,
@@ -486,11 +486,11 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
-                "positive_reward": "new high-water route frontier distance plus completed-lap milestone reward",
+                "positive_reward": "new high-water route frontier distance; no pace multiplier or lap bonus",
                 "frontier_progress_per_m": 10.0,
                 "pace_target_mps": 6.0,
-                "pace_bonus_strength": 1.0,
-                "pace_source": "episode_average; quadratic multiplier capped at 2x",
+                "pace_bonus_strength": 0.0,
+                "pace_source": "disabled; each new frontier metre has fixed reward",
                 "backward_speed_penalty_per_m": backward_speed_penalty_scale,
                 "backward_speed_deadband_mps": 0.1,
                 "collision_cost": f"{collision_penalty_magnitude:g} + {collision_reward_percent:g}% of positive frontier return",
@@ -620,11 +620,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--warmup-laps", type=int, default=0)
     parser.add_argument("--time-cost-per-simulated-second", type=float, default=5.0)
     parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
-    parser.add_argument("--collision-reward-percent", type=float, default=50.0)
-    parser.add_argument("--lap-completion-reward", type=float, default=100.0)
+    parser.add_argument("--collision-reward-percent", type=float, default=100.0)
+    parser.add_argument("--lap-completion-reward", type=float, default=0.0)
     parser.add_argument("--failed-episode-penalty", type=float, default=100.0)
     parser.add_argument("--backward-speed-penalty-scale", type=float, default=10.0)
-    parser.add_argument("--episode-failure-reward-percent", type=float, default=50.0)
+    parser.add_argument("--episode-failure-reward-percent", type=float, default=100.0)
     parser.add_argument("--frontier-stagnation-s", type=float, default=5.0)
     parser.add_argument(
         "--observation-profile",

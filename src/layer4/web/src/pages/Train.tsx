@@ -324,20 +324,20 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Maximum wall-clock duration (hours)" help="Optional overall run limit. Set to 0 to disable; the simulator's per-episode timeout is configured separately.">
                 <input type="number" min={0} step="any" value={form.max_duration_hours} onChange={(event) => setNumber("max_duration_hours", event.target.value)} />
               </Field>
-              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second, including while moving. Positive driving rewards come from new frontier progress and completing official laps.">
+              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second. Official training gives a fixed reward per new frontier metre, with no pace multiplier or lap bonus, so a collision cannot turn a fast crash into a positive life.">
                 <input type="number" min={0} step="any" value={form.time_cost_per_simulated_second} onChange={(event) => setNumber("time_cost_per_simulated_second", event.target.value)} />
               </Field>
               <Field label="End a stalled life after (simulated seconds)" help="When the car makes no new frontier progress for this long, the training environment ends its life and resets it to spawn. This applies only to training; official lap evaluations keep running.">
                 <input type="number" min={0} step="any" value={form.frontier_stagnation_s} onChange={(event) => setNumber("frontier_stagnation_s", event.target.value)} />
               </Field>
-              <Field label="Reward per completed official lap" help="Adds this milestone reward when the official simulator's lap counter advances. This encourages completing clean laps before optimizing lap time; it is training reward only and never enters the policy observation.">
+              <Field label="Reward per completed official lap" help="Official training defaults this to zero. Lap completion is tracked for reporting, but frontier progress is the only positive reward so false lap-counter events cannot pay the policy.">
                 <input type="number" min={0} step="any" value={form.lap_completion_reward} onChange={(event) => setNumber("lap_completion_reward", event.target.value)} />
               </Field>
               <Field label="Fixed cost per collision" help="A collision ends the current car life and applies this fixed cost plus the configured share of frontier reward earned during that life.">
                 <input type="number" min={0} step="any" value={form.collision_penalty_magnitude} onChange={(event) => setNumber("collision_penalty_magnitude", event.target.value)} />
               </Field>
-              <Field label="Collision cost as share of earned frontier reward (%)" help="Claws back this percentage of the positive frontier reward earned in the current life when it collides.">
-                <input type="number" min={0} max={1000} step="any" value={form.collision_reward_percent} onChange={(event) => setNumber("collision_reward_percent", event.target.value)} />
+              <Field label="Collision cost as share of earned frontier reward (%)" help="Official training defaults to 100%: a collision erases all positive frontier and lap reward earned in that life, then applies the fixed collision cost.">
+                <input type="number" min={0} max={100} step="any" value={form.collision_reward_percent} onChange={(event) => setNumber("collision_reward_percent", event.target.value)} />
               </Field>
               <Field label="Reverse-motion cost per metre" help="Penalizes distance traveled backward relative to the car body. Reverse throttle used to brake while still moving forward is not penalized.">
                 <input type="number" min={0} step="any" value={form.backward_speed_penalty_scale} onChange={(event) => setNumber("backward_speed_penalty_scale", event.target.value)} />
@@ -346,7 +346,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
                 <input type="number" min={0} step="any" value={form.failed_episode_penalty} onChange={(event) => setNumber("failed_episode_penalty", event.target.value)} />
               </Field>
               <Field label="Failure cost as share of earned frontier reward (%)" help="Claws back this percentage of the positive frontier reward earned in the current life when a non-collision failure ends it.">
-                <input type="number" min={0} max={1000} step="any" value={form.episode_failure_reward_percent} onChange={(event) => setNumber("episode_failure_reward_percent", event.target.value)} />
+                <input type="number" min={0} max={100} step="any" value={form.episode_failure_reward_percent} onChange={(event) => setNumber("episode_failure_reward_percent", event.target.value)} />
               </Field>
             </div>
             <p className="meta">{form.total_timesteps === 0 ? (form.stop_on_plateau || form.max_duration_hours > 0 ? "No timestep limit; plateau and/or wall-clock rules end the run." : "No automatic end configured; stop the run manually.") : `Hard cap: ${formatCount(form.total_timesteps)} steps${form.stop_on_plateau ? " or earlier if the plateau rule triggers" : ""}.`}</p>

@@ -50,11 +50,11 @@ class OfficialTrainSettings(BaseModel):
     warmup_laps: int = Field(default=0, ge=0, le=20)
     time_cost_per_simulated_second: float = Field(default=5.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
-    collision_reward_percent: float = Field(default=50.0, ge=0, le=1000)
-    lap_completion_reward: float = Field(default=100.0, ge=0)
+    collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
+    lap_completion_reward: float = Field(default=0.0, ge=0)
     failed_episode_penalty: float = Field(default=100.0, ge=0)
     backward_speed_penalty_scale: float = Field(default=10.0, ge=0)
-    episode_failure_reward_percent: float = Field(default=50.0, ge=0, le=1000)
+    episode_failure_reward_percent: float = Field(default=100.0, ge=0, le=100)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
     ] = "official_sensors_camera"
@@ -124,9 +124,8 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
     except (OSError, ValueError):
         return OfficialTrainSettings()
     if isinstance(raw, dict):
-        # Older settings included a lap reward plus obsolete escalating collision
-        # and lidar-braking controls. Preserve the lap milestone value while
-        # dropping only controls that no longer map to the reward implementation.
+        # Older settings included obsolete escalating collision and lidar
+        # braking controls. Preserve explicit user choices in other fields.
         legacy_reward_schema = "collision_penalty_base" in raw or "lidar_brake_distance_m" in raw
         for legacy in ("collision_penalty_base", "lidar_brake_distance_m"):
             raw.pop(legacy, None)
@@ -135,10 +134,10 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
                 "warmup_laps": 0,
                 "time_cost_per_simulated_second": 5.0,
                 "collision_penalty_magnitude": 100.0,
-                "collision_reward_percent": 50.0,
+                "collision_reward_percent": 100.0,
                 "failed_episode_penalty": 100.0,
                 "backward_speed_penalty_scale": 10.0,
-                "episode_failure_reward_percent": 50.0,
+                "episode_failure_reward_percent": 100.0,
                 "frontier_stagnation_s": 5.0,
             })
     return OfficialTrainSettings.model_validate(raw)

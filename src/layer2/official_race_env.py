@@ -58,11 +58,11 @@ class OfficialRaceEnv(gym.Env):
         training_timeout_s: float = 600.0,
         training_time_cost_per_simulated_second: float = 5.0,
         training_collision_penalty_magnitude: float = 100.0,
-        training_collision_reward_percent: float = 50.0,
-        training_lap_completion_reward: float = 100.0,
+        training_collision_reward_percent: float = 100.0,
+        training_lap_completion_reward: float = 0.0,
         training_failure_penalty: float = 100.0,
         training_backward_speed_penalty_scale: float = 10.0,
-        training_failure_reward_percent: float = 50.0,
+        training_failure_reward_percent: float = 100.0,
         training_frontier_stagnation_s: float = 5.0,
         stop_on_collision: bool = False,
         frontier_path: Optional[Path] = None,
@@ -397,7 +397,10 @@ class OfficialRaceEnv(gym.Env):
                 cfg=RewardConfig(
                     route_progress_scale=10.0,
                     frontier_pace_target_mps=6.0,
-                    frontier_pace_bonus_strength=1.0,
+                    # Official training rewards safe frontier distance, not
+                    # raw pace. Pace multiplication let a fast crash bank a
+                    # large positive return before its partial clawback.
+                    frontier_pace_bonus_strength=0.0,
                     frontier_pace_source="episode_average",
                     time_penalty_per_second=self.training_time_cost_per_simulated_second,
                     backward_speed_penalty_scale=self.training_backward_speed_penalty_scale,
