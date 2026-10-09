@@ -1,10 +1,12 @@
 import { FormEvent, forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import {
   createOfficialRun,
+  getBestOfficialEvaluation,
   getOfficialRuns,
   getOfficialSettings,
   stopOfficialRun,
   type OfficialRunList,
+  type OfficialChampion,
   type OfficialTrainSettings,
   type RunSummary,
 } from "../api";
@@ -76,6 +78,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<RunFilter>("all");
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [bestOfficialModel, setBestOfficialModel] = useState<OfficialChampion | null>(null);
 
   const activeRuns = useMemo(() => runs.filter(isActive), [runs]);
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
@@ -127,6 +130,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   useEffect(() => {
     const timer = window.setInterval(() => {
       void refreshRuns().catch(() => undefined);
+      void getBestOfficialEvaluation().then((result) => setBestOfficialModel(result.best)).catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(timer);
   }, []);
@@ -220,6 +224,11 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
         <span className="meta" aria-live="polite">{activeRuns.length}/{maxRuns} active · {Math.max(0, maxRuns - activeRuns.length)} slots available</span>
       </header>
       <p className="lede">Each run trains one model across its official simulator environments. Select a run to monitor it in Watch.</p>
+      <section className="panel" aria-label="Best official model" style={{ marginTop: 12 }}>
+        <h3 style={{ marginTop: 0 }}>Best officially evaluated model</h3>
+        {bestOfficialModel ? <p>{bestOfficialModel.model_path} · median adjusted race time <strong>{bestOfficialModel.median_adjusted_race_time_s.toFixed(2)} s</strong> across {bestOfficialModel.attempts} valid attempts. Source: {bestOfficialModel.source}.</p>
+          : <p className="meta">No checkpoint has completed three valid official evaluations yet.</p>}
+      </section>
 
       <section aria-labelledby="runs-heading" style={{ marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
@@ -343,6 +352,19 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           <details style={{ marginTop: 12 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>PPO and checkpoint settings</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
+              <Field label="Automatic official evaluation" help="Runs a frozen checkpoint through one warm-up lap and ten scored laps on the official simulator. Three fresh simulator attempts are required before a result can promote the shared best model.">
+                <select value={form.automatic_evaluation_enabled ? "yes" : "no"} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_enabled: event.target.value === "yes" } : current)}>
+                  <option value="yes">Enabled</option><option value="no">Disabled</option>
+                </select>
+              </Field>
+              <Field label="Evaluate every" help="Choose a run-relative transition step interval or completed episode interval. Episode counts are summed across all parallel environments.">
+                <select value={form.automatic_evaluation_trigger} disabled={!form.automatic_evaluation_enabled} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_trigger: event.target.value as OfficialTrainSettings["automatic_evaluation_trigger"] } : current)}>
+                  <option value="steps">Training steps</option><option value="episodes">Completed episodes</option>
+                </select>
+              </Field>
+              <Field label={`Evaluation interval (${form.automatic_evaluation_trigger})`} help="A trigger saves a frozen policy snapshot and queues three independent official races. If evaluation is active, only the newest pending snapshot for this run is kept.">
+                <input type="number" min={1} value={form.automatic_evaluation_interval} disabled={!form.automatic_evaluation_enabled} onChange={(event) => setNumber("automatic_evaluation_interval", event.target.value)} />
+              </Field>
               <Field label="Checkpoint interval (steps)" help="How often the trainer writes a recoverable model checkpoint.">
                 <input type="number" min={1} value={form.checkpoint_every} onChange={(event) => setNumber("checkpoint_every", event.target.value)} />
               </Field>

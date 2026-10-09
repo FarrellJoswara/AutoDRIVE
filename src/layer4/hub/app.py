@@ -20,6 +20,7 @@ from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
 from src.layer4.hub.official_run_manager import OfficialRunManager
 from src.layer4.hub.native_official_backend import NativeOfficialBackend
 from src.layer4.hub.official_replay_job import OfficialReplayJob
+from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
 from src.layer4.hub.official_models import list_official_models
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
 from src.layer4.official_settings import (
@@ -58,7 +59,11 @@ elif _run_backend == "docker":
     official_runs = OfficialRunManager()
 else:
     raise RuntimeError("AICAR_RUN_BACKEND must be 'native' or 'docker'")
-replay_job = OfficialReplayJob(official_runs, on_status=lambda s: bus.publish_replay_status(s))
+official_evaluations = OfficialEvaluationService(official_runs)
+replay_job = OfficialReplayJob(
+    official_runs, on_status=lambda s: bus.publish_replay_status(s),
+    evaluation_service=official_evaluations,
+)
 _settings: Settings = load_settings()
 _official_train_settings: OfficialTrainSettings = load_official_train_settings()
 
@@ -86,6 +91,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        official_evaluations.close()
         official_runs.close()
         # Then clean up the short-lived replay process/container.
         try:
@@ -492,7 +498,7 @@ async def api_activate_map(map_id: str, request: Request) -> Any:
 
 @app.get("/train/status")
 async def train_status() -> Dict[str, Any]:
-    runs = official_runs.list_runs()["runs"]
+    runs = [row for row in official_runs.list_runs()["runs"] if row.get("kind", "training") == "training"]
     selected = next(
         (item for item in runs if item.get("state") in {"starting", "running", "stopping"}),
         runs[0] if runs else None,
@@ -607,11 +613,13 @@ async def get_official_run_camera(run_id: str, env_id: int) -> FileResponse:
 
 @app.get("/train/runs")
 async def list_official_runs() -> Dict[str, Any]:
-    return official_runs.list_runs()
+    result = official_runs.list_runs()
+    result["runs"] = [row for row in result["runs"] if row.get("kind", "training") == "training"]
+    return result
 
 
 def _latest_run_id() -> Optional[str]:
-    runs = official_runs.list_runs()["runs"]
+    runs = [row for row in official_runs.list_runs()["runs"] if row.get("kind", "training") == "training"]
     selected = next(
         (row for row in runs if row.get("state") in {"starting", "running", "stopping"}),
         runs[0] if runs else None,
@@ -665,6 +673,58 @@ async def official_run_telemetry(run_id: str) -> Dict[str, Any]:
         return _run_telemetry(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="official run not found") from exc
+
+
+@app.post("/train/runs/{run_id}/evaluation")
+async def queue_automatic_evaluation(run_id: str, request: Request) -> Dict[str, Any]:
+    """Queue a frozen training snapshot for the shared official-race evaluator."""
+    try:
+        run = official_runs.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="training run not found") from exc
+    if run.get("kind") != "training":
+        raise HTTPException(status_code=400, detail="automatic evaluation requires a training run")
+    try:
+        body = await request.json()
+        raw_path = str(body.get("model_path", ""))
+        step = body.get("step")
+        episode = body.get("episode")
+        trigger = str(body.get("trigger", "steps"))
+        if trigger not in {"steps", "episodes"}:
+            raise ValueError("trigger must be steps or episodes")
+        if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+            raise ValueError("step must be a non-negative integer")
+        if isinstance(episode, bool) or not isinstance(episode, int) or episode < 0:
+            raise ValueError("episode must be a non-negative integer")
+        output = Path(run["output_dir"]).resolve()
+        if raw_path.startswith("/runs/rl/"):
+            candidate = (ROOT / "logs" / "rl" / raw_path.removeprefix("/runs/rl/")).resolve()
+        elif raw_path.startswith("/app/logs/rl/"):
+            candidate = (ROOT / "logs" / "rl" / raw_path.removeprefix("/app/logs/rl/")).resolve()
+        else:
+            candidate = Path(raw_path).resolve()
+        candidate.relative_to(output)
+        if candidate.parent.name != "checkpoints" or not candidate.name.startswith("automatic_evaluation_"):
+            raise ValueError("snapshot must be an automatic evaluator checkpoint in this run's checkpoints directory")
+        return replay_job.start_automatic(
+            model_path=candidate, run_id=run_id, trigger=trigger,
+            step=step if trigger == "steps" else None,
+            episode=episode if trigger == "episodes" else None,
+        )
+    except (ValueError, TypeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/evaluations/best")
+async def best_official_evaluation() -> Dict[str, Any]:
+    return {"best": official_evaluations.champion()}
+
+
+@app.get("/api/evaluations/history")
+async def official_evaluation_history() -> list[Dict[str, Any]]:
+    return official_evaluations.history()
 
 
 @app.get("/train/runs/{run_id}/evaluations")

@@ -285,8 +285,11 @@ class OfficialRunManager:
         with self._lock:
             self._refresh_locked()
             active = [row for row in self._runs.values() if row.get("state") in {"starting", "running", "stopping"}]
-            if len(active) >= self.max_concurrent_runs:
+            active_training = [row for row in active if row.get("kind", "training") != "evaluation"]
+            if kind == "training" and len(active_training) >= self.max_concurrent_runs:
                 raise RuntimeError(f"maximum concurrent official runs reached ({self.max_concurrent_runs})")
+            if kind == "evaluation" and any(row.get("kind") == "evaluation" for row in active):
+                raise RuntimeError("another official evaluation simulator is already active")
             run_id = uuid.uuid4().hex[:12]
             created = _utc_now()
             run_dir = self.runs_root / f"official_run_{run_id}"
@@ -356,6 +359,7 @@ class OfficialRunManager:
                 env = [value for value in env if not value.startswith("AICAR_MODE=")]
                 env.extend([
                     "AICAR_MODE=evaluate", "AICAR_KEEP_BRIDGE=0",
+                    "AICAR_EVALUATION_ATTEMPTS=1", "AICAR_RACE_WALL_TIMEOUT_S=1800",
                     f"AICAR_MODEL_PATH={config['resume']}",
                     f"AICAR_EVALUATION_OUTPUT=/runs/rl/official_run_{run_id}/evaluation.json",
                 ])

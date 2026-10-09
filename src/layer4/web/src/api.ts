@@ -27,6 +27,12 @@ export interface TrainStatus {
 }
 
 export interface EvaluationResult {
+  protocol?: "official_10_lap_race";
+  valid?: boolean;
+  completed_attempts?: number;
+  attempts_required?: number;
+  median_adjusted_race_time_s?: number | null;
+  promoted_to_best?: boolean;
   timesteps: number;
   simulated_seconds: number;
   frontier_distance_m: number;
@@ -73,7 +79,13 @@ export function getEvaluationHistory(): Promise<EvaluationResult[]> {
 }
 
 export interface EvaluationStatus {
-  state: "waiting" | "running" | "complete";
+  state: "waiting" | "queued" | "running" | "complete" | "incomplete" | "failed" | "stopped";
+  protocol?: "official_10_lap_race";
+  trigger?: "steps" | "episodes";
+  trigger_episode?: number | null;
+  attempts_completed?: number;
+  attempts_required?: number;
+  error?: string | null;
   snapshot_timesteps?: number | null;
   selection_metric: "frontier_speed" | "reward_per_simulated_second" | "total_reward" | "ten_lap_time";
   evaluation_runs_per_snapshot?: number;
@@ -190,8 +202,16 @@ export interface Settings {
 }
 
 export interface ReplayStatus {
-  evaluation?: { completed_attempts: number; best_adjusted_race_time_s: number | null; runs: {stop_reason?: string; score_status?: string}[] } | null;
-  state: TrainState;
+  evaluation?: { completed_attempts: number; attempts_required?: number; valid?: boolean; median_adjusted_race_time_s?: number | null; best_adjusted_race_time_s: number | null; runs: {stop_reason?: string; score_status?: string; adjusted_race_time_s?: number | null}[] } | null;
+  state: TrainState | "queued" | "complete" | "incomplete" | "failed" | "stopped";
+  evaluation_id?: string | null;
+  source?: "automatic" | "manual";
+  parent_run_id?: string | null;
+  attempts_completed?: number;
+  attempts_required?: number;
+  trigger?: "steps" | "episodes";
+  trigger_step?: number | null;
+  trigger_episode?: number | null;
   pid: number | null;
   started_at: string | null;
   argv: string[];
@@ -248,6 +268,9 @@ export interface OfficialTrainSettings {
   device: "cpu" | "cuda";
   resume: string | null;
   checkpoint_every: number;
+  automatic_evaluation_enabled: boolean;
+  automatic_evaluation_trigger: "steps" | "episodes";
+  automatic_evaluation_interval: number;
   n_steps: number;
   learning_rate: number;
   n_epochs: number;
@@ -271,6 +294,44 @@ export interface OfficialTrainSettings {
   throttle_mode: string;
   negative_throttle_mode: string;
   steering_mode: string;
+}
+
+export interface OfficialChampion {
+  model_path: string;
+  model_sha256: string;
+  median_adjusted_race_time_s: number;
+  attempts: number;
+  source: "automatic" | "manual";
+  parent_run_id?: string | null;
+  evaluation_id: string;
+  updated_utc: string;
+}
+
+export interface OfficialEvaluationRecord {
+  evaluation_id: string;
+  source: "automatic" | "manual";
+  state: string;
+  model_path: string;
+  parent_run_id?: string | null;
+  trigger?: "steps" | "episodes" | null;
+  trigger_step?: number | null;
+  trigger_episode?: number | null;
+  result?: {
+    valid?: boolean;
+    median_adjusted_race_time_s?: number | null;
+    completed_attempts?: number;
+    attempts_required?: number;
+  } | null;
+  error?: string | null;
+  created_utc?: string;
+}
+
+export function getBestOfficialEvaluation(): Promise<{ best: OfficialChampion | null }> {
+  return jsonFetch("/api/evaluations/best");
+}
+
+export function getOfficialEvaluationHistory(): Promise<OfficialEvaluationRecord[]> {
+  return jsonFetch("/api/evaluations/history");
 }
 
 export type OfficialRunState = "starting" | "running" | "stopping" | "exited" | "error" | "completed" | "stopped" | "failed";

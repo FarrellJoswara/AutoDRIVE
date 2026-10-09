@@ -1,75 +1,58 @@
-"""Replay a saved policy as a fresh official evaluation attempt."""
-import json
-import threading
+"""Mission Control facade for manual official full-race evaluation."""
+
 from pathlib import Path
-from src.layer4.hub.official_models import checkpoint_settings
+from typing import Any
+
+from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
 
 
 class OfficialReplayJob:
-    def __init__(self, manager, on_status=None):
+    """Keep the existing Replay API while using the shared evaluator queue."""
+
+    def __init__(self, manager: Any, on_status=None, evaluation_service: OfficialEvaluationService | None = None):
         self.manager = manager
         self.on_status = on_status
-        self._lock = threading.RLock()
-        self._starting = False
-        self._last_config = None
-        runs = manager.list_runs()["runs"]
-        self.run_id = next((r["run_id"] for r in runs if r.get("kind") == "evaluation"), None)
-        if self.run_id:
-            resume = manager.get_run(self.run_id).get("config", {}).get("resume")
-            if isinstance(resume, str) and resume.startswith("/runs/"):
-                self._last_config = {"model_path": manager.runs_root.parent / resume[len("/runs/"):]}
+        self.evaluation_service = evaluation_service or OfficialEvaluationService(manager)
+        self._last_config: dict[str, Any] | None = None
+        try:
+            latest = next((row for row in manager.list_runs().get("runs", []) if row.get("kind") == "evaluation"), None)
+            resume = latest.get("config", {}).get("resume") if latest else None
+            if isinstance(resume, str) and resume.startswith("/runs/rl/"):
+                self._last_config = {"model_path": manager.runs_root / resume.removeprefix("/runs/rl/"), "trace_steps": 0}
+        except Exception:
+            pass
 
-    def status(self):
-        row = self.manager.get_run(self.run_id) if self.run_id else {}
-        mapped = {"completed": "exited", "stopped": "exited", "failed": "error"}
-        report = None
-        if row.get("output_dir"):
-            try:
-                report = json.loads((Path(row["output_dir"]) / "evaluation.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
+    def status(self) -> dict[str, Any]:
+        status = self.evaluation_service.status()
+        result = status.get("evaluation")
         return {
-            "state": "starting" if self._starting else mapped.get(row.get("state"), row.get("state", "idle")),
-            "pid": None, "argv": [], "started_at": row.get("started_at"),
-            "exit_code": row.get("exit_code"), "error": row.get("error"),
-            "log_path": row.get("log_path"), "model": row.get("config", {}).get("resume"),
-            "map_id": "none", "seed": None, "run_id": self.run_id,
-            "evaluation": report,
-            "last_fleet": self.manager.telemetry(self.run_id).get("fleet") if self.run_id else None,
-            "simulator_backend": row.get("simulator_backend"),
-            "simulator_connections": row.get("simulator_connections", []),
+            **status,
+            "pid": None, "argv": [], "started_at": status.get("updated_utc"),
+            "exit_code": None, "map_id": "none", "seed": None,
+            "evaluation": result,
         }
 
     def start(self, *, model_path, trace_steps=0, **_ignored):
-        if isinstance(trace_steps, bool) or not isinstance(trace_steps, int) or not 0 <= trace_steps <= 500:
-            raise ValueError("trace_steps must be an integer between 0 and 500")
-        with self._lock:
-            if self.status()["state"] in {"starting", "running", "stopping"}:
-                raise RuntimeError("An official replay is already active")
-            config = {**checkpoint_settings(Path(model_path)), "resume": str(model_path), "n_envs": 1}
-            self._starting = True
-        try:
-            row = self.manager.create_run(
-                config,
-                f"Evaluation: {Path(model_path).name}",
-                kind="evaluation",
-                evaluation_trace_steps=trace_steps,
-            )
-            self.run_id = row["run_id"]
-            self._last_config = {"model_path": model_path, "trace_steps": trace_steps}
-        finally:
-            self._starting = False
-        result = self.status()
+        path = Path(model_path)
+        self._last_config = {"model_path": path, "trace_steps": trace_steps}
+        result = self.evaluation_service.submit(path, source="manual", trace_steps=trace_steps)
         if self.on_status:
-            self.on_status(result)
+            self.on_status(self.status())
+        return {**result, "pid": None, "argv": [], "map_id": "none", "seed": None}
+
+    def start_automatic(self, *, model_path: Path, run_id: str, trigger: str, step: int | None, episode: int | None):
+        result = self.evaluation_service.submit(
+            model_path, source="automatic", parent_run_id=run_id,
+            trigger=trigger, trigger_step=step, trigger_episode=episode,
+        )
+        if self.on_status:
+            self.on_status(self.status())
         return result
 
     def stop(self):
-        if self.run_id:
-            self.manager.stop_run(self.run_id)
-        result = self.status()
+        result = self.evaluation_service.stop()
         if self.on_status:
-            self.on_status(result)
+            self.on_status(self.status())
         return result
 
     def reset(self):

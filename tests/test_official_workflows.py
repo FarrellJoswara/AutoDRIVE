@@ -1,5 +1,6 @@
 """Focused checks for official orchestration; FakeDocker is not simulator proof."""
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -7,6 +8,7 @@ from scripts.test_official_run_manager import FakeDocker
 from src.layer4.hub.official_run_manager import OfficialRunManager
 from src.layer4.hub.official_models import checkpoint_settings, list_official_models
 from src.layer4.hub.official_replay_job import OfficialReplayJob
+from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
 from src.layer4.official_settings import OfficialTrainSettings
 
 
@@ -287,31 +289,117 @@ def test_catalog_finds_official_checkpoint_subdirectory_and_filters_custom(tmp_p
 
 def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, tmp_path):
     path = official_checkpoint(tmp_path)
-    replay = OfficialReplayJob(manager)
+    service = OfficialEvaluationService(
+        manager, registry_path=tmp_path / "official-evaluations.json",
+        champion_dir=tmp_path / "best_official_model",
+        model_root=tmp_path / "logs" / "rl",
+    )
+    replay = OfficialReplayJob(manager, evaluation_service=service)
+    original_create = manager.create_run
+    attempt_envs = []
+
+    def complete_evaluation(*args, **kwargs):
+        row = original_create(*args, **kwargs)
+        api = next(item for item in manager.backend.containers.values()
+                   if item["Labels"]["aicar.run_id"] == row["run_id"] and item["Labels"]["aicar.role"] == "api")
+        attempt_envs.append(dict(value.split("=", 1) for value in api["kwargs"]["env"]))
+        attempt_number = len([run for run in manager.list_runs()["runs"] if run.get("kind") == "evaluation"])
+        result = {
+            "score_status": "valid", "valid_for_comparison": True,
+            "adjusted_race_time_s": 101.0 + attempt_number, "race_time_s": 100.0 + attempt_number,
+            "race_lap_times_s": [10.0] * 10, "race_collisions": 0,
+            "stop_reason": "race_complete",
+        }
+        Path(row["output_dir"], "evaluation.json").write_text(json.dumps({"runs": [result]}))
+        return row
+
     with patch("src.layer4.hub.official_run_manager.ROOT", tmp_path):
+        manager.create_run = complete_evaluation
         status = replay.start(model_path=path, trace_steps=500)
-    run = manager.get_run(status["run_id"])
-    assert run["kind"] == "evaluation"
-    assert run["simulator_image"].endswith(":2026-iros-compete")
-    api = next(item for item in manager.backend.containers.values() if item["Labels"]["aicar.role"] == "api")
-    env = dict(value.split("=", 1) for value in api["kwargs"]["env"])
-    assert env["AICAR_MODE"] == "evaluate"
-    assert env["AICAR_OBSERVATION_PROFILE"] == "official_sensors_history"
-    assert env["AICAR_THROTTLE_MODE"] == "forward_only"
-    assert env["AICAR_EVALUATION_TRACE_STEPS"] == "500"
-    sim = next(item for item in manager.backend.containers.values()
-               if item["Labels"]["aicar.role"] == "sim")
-    assert sim["kwargs"]["image"] == "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete"
-    Path(run["output_dir"], "evaluation.json").write_text(json.dumps({"completed_attempts": 0, "runs": []}))
-    manager.reconcile()
-    assert replay.status()["evaluation"]["completed_attempts"] == 0
-    assert replay.status()["state"] == "exited"
+        assert status["state"] == "queued"
+        deadline = time.monotonic() + 5
+        while replay.status()["state"] not in {"complete", "incomplete", "failed"} and time.monotonic() < deadline:
+            time.sleep(0.01)
+    completed = replay.status()
+    assert completed["state"] == "complete"
+    assert completed["evaluation"]["completed_attempts"] == 3
+    assert completed["evaluation"]["median_adjusted_race_time_s"] == 103.0
+    assert service.champion()["model_path"] == "best_official_model/model.zip"
+    recovered_service = OfficialEvaluationService(
+        manager, registry_path=tmp_path / "official-evaluations.json",
+        champion_dir=tmp_path / "best_official_model",
+        model_root=tmp_path / "logs" / "rl",
+    )
+    assert recovered_service.champion()["model_sha256"] == service.champion()["model_sha256"]
+    assert recovered_service.history()[0]["source"] == "manual"
+    recovered_service.close()
+    evaluated = [run for run in manager.list_runs()["runs"] if run.get("kind") == "evaluation"]
+    assert len(evaluated) == 3
+    assert all(run["simulator_image"].endswith(":2026-iros-compete") for run in evaluated)
+    assert all(run["config"]["warmup_laps"] == 1 and run["config"]["race_laps"] == 10 for run in evaluated)
+    for env in attempt_envs:
+        assert env["AICAR_MODE"] == "evaluate"
+        assert env["AICAR_OBSERVATION_PROFILE"] == "official_sensors_history"
+        assert env["AICAR_THROTTLE_MODE"] == "forward_only"
+        assert env["AICAR_EVALUATION_TRACE_STEPS"] == "500"
     assert not manager.backend.containers
-    recovered = OfficialReplayJob(manager)
     with patch("src.layer4.hub.official_run_manager.ROOT", tmp_path):
-        restarted = recovered.reset()
-    assert restarted["run_id"] != status["run_id"]
-    recovered.stop()
+        restarted = replay.reset()
+    assert restarted["state"] == "queued"
+    replay.stop()
+    service.close()
+
+
+def test_evaluation_registry_discards_temporary_checkpoints(manager, tmp_path):
+    outside = tmp_path / "pytest-temp" / "model.zip"
+    outside.parent.mkdir()
+    outside.touch()
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"history": [{
+        "evaluation_id": "stale", "model_path": str(outside), "state": "failed",
+    }]}))
+    service = OfficialEvaluationService(
+        manager, registry_path=registry, champion_dir=tmp_path / "best",
+        model_root=tmp_path / "logs" / "rl",
+    )
+    assert service.history() == []
+    assert json.loads(registry.read_text())["history"] == []
+    service.close()
+
+
+def test_manual_evaluation_queues_behind_running_automatic_evaluation(manager, tmp_path):
+    import threading
+
+    path = official_checkpoint(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    service = OfficialEvaluationService(
+        manager, registry_path=tmp_path / "registry.json",
+        champion_dir=tmp_path / "best", model_root=tmp_path / "logs" / "rl",
+    )
+
+    def hold_current_job(job):
+        entered.set()
+        release.wait(timeout=2)
+        job["state"] = "stopped"
+
+    service._run_batch = hold_current_job
+    try:
+        service.submit(
+            path, source="automatic", parent_run_id="training-run",
+            trigger="steps", trigger_step=50_000,
+        )
+        assert entered.wait(timeout=2)
+        queued = service.submit(path, source="manual")
+        assert queued["state"] == "queued"
+        assert service.status()["source"] == "automatic"
+    finally:
+        release.set()
+        deadline = time.monotonic() + 2
+        while service.status().get("source") == "automatic" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        service.stop()
+        service.close()
 
 
 def test_replay_trace_steps_are_bounded(manager, tmp_path):
@@ -340,6 +428,22 @@ def test_official_settings_bound_worker_count():
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"
+    assert environment["AICAR_AUTO_EVALUATION_ENABLED"] == "1"
+    assert environment["AICAR_AUTO_EVALUATION_TRIGGER"] == "steps"
+    assert environment["AICAR_AUTO_EVALUATION_INTERVAL"] == "50000"
+
+
+def test_automatic_evaluation_schedule_counts_run_relative_steps_and_vector_episodes():
+    from src.layer3.official_train import AutomaticEvaluationSchedule
+
+    steps = AutomaticEvaluationSchedule("steps", 100, starting_steps=128)
+    assert steps.observe(163, [{}, {}]) == (False, 163, 0)
+    assert steps.observe(231, [{"episode": {"r": 1}}, {"episode": {"r": 2}}]) == (True, 231, 2)
+    assert steps.observe(232, []) == (False, 232, 2)
+
+    episodes = AutomaticEvaluationSchedule("episodes", 3, starting_steps=1000)
+    assert episodes.observe(1008, [{"episode": {}}, {}, {"episode": {}}]) == (False, 1008, 2)
+    assert episodes.observe(1012, [{"episode": {}}]) == (True, 1012, 3)
 
 
 def test_official_checkpoint_records_external_simulator_provenance(monkeypatch):

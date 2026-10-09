@@ -427,7 +427,14 @@ export function WatchPage() {
           <article className="training-progress-panel"><h3>Evaluation</h3>
             {evaluation ? <>
               <p><span className="badge" data-state={evaluation.state}>{evaluation.state}</span></p>
-              {evalResult ? <div className="official-metric-grid">
+              {evalResult?.protocol === "official_10_lap_race" ? <div className="official-metric-grid">
+                <div><span>Race protocol</span><strong>1 warm-up + 10 scored laps</strong></div>
+                <div><span>Attempts</span><strong>{evaluation.attempts_completed ?? 0}/{evaluation.attempts_required ?? 3}</strong></div>
+                <div><span>Median adjusted time</span><strong>{formatNumber(evalResult.median_adjusted_race_time_s, 3, " s")}</strong></div>
+                <div><span>Valid batch</span><strong>{evalResult.valid ? "Yes" : "Pending / incomplete"}</strong></div>
+                <div><span>Promotion</span><strong>{evalResult.promoted_to_best ? "New best" : "Not promoted"}</strong></div>
+                <div><span>Trigger</span><strong>{evaluation.trigger === "episodes" ? `Episode ${evaluation.trigger_episode ?? "—"}` : `Step ${evaluation.snapshot_timesteps?.toLocaleString?.() ?? "—"}`}</strong></div>
+              </div> : evalResult ? <div className="official-metric-grid">
                 <div><span>10-lap time</span><strong>{formatNumber(evalResult.best_10_lap_time_s, 3, " s")}</strong></div>
                 <div><span>Laps observed</span><strong>{evalResult.laps_observed}</strong></div>
                 <div><span>Frontier pace</span><strong>{formatNumber(evalResult.frontier_speed_mps, 3, " m/s")}</strong></div>
@@ -435,6 +442,7 @@ export function WatchPage() {
                 <div><span>Failed episodes</span><strong>{evalResult.failed_episodes}</strong></div>
                 <div><span>Evaluation attempts</span><strong>{evalResult.evaluation_runs ?? "—"}</strong></div>
               </div> : <p className="meta">No completed evaluation result for this run yet.</p>}
+              {evaluation.error ? <p className="error" role="alert">{evaluation.error}</p> : null}
               {snapshot?.evaluation_history?.length ? <p className="meta">{snapshot.evaluation_history.length} saved evaluations for this run.</p> : null}
             </> : <p className="meta">Waiting for evaluation data from this run.</p>}
           </article>

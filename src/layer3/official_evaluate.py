@@ -444,7 +444,7 @@ def evaluate(
     *,
     attempts: int = 1,
     device: str = "cpu",
-    wall_timeout_s: float = 300.0,
+    wall_timeout_s: float = 1800.0,
     max_steps: int = 150_000,
     timeout_s: float = 180.0,
     steering_action_scale: float = 1.0,
@@ -586,7 +586,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--attempts", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
-    parser.add_argument("--wall-timeout-s", type=float, default=300.0)
+    parser.add_argument("--wall-timeout-s", type=float, default=1800.0)
     parser.add_argument("--max-steps", type=int, default=150_000, help="Failsafe guard per race, not a scoring cutoff")
     parser.add_argument("--timeout-s", type=float, default=180.0, help="Wait for initial official sensor topics")
     parser.add_argument("--steering-action-scale", type=float, default=1.0)

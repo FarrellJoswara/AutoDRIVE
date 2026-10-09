@@ -35,6 +35,32 @@ def _official_simulator_image() -> str:
     return value or _DEFAULT_OFFICIAL_SIMULATOR_IMAGE
 
 
+class AutomaticEvaluationSchedule:
+    """Run-relative step or vector-episode trigger accounting."""
+
+    def __init__(self, trigger: str, interval: int, starting_steps: int) -> None:
+        if trigger not in {"steps", "episodes"} or interval < 1:
+            raise ValueError("automatic evaluation trigger/interval is invalid")
+        self.trigger = trigger
+        self.interval = int(interval)
+        self.starting_steps = int(starting_steps)
+        self.completed_episodes = 0
+        self.next_trigger = self.interval
+
+    def observe(self, num_timesteps: int, infos: list[dict]) -> tuple[bool, int, int]:
+        self.completed_episodes += sum(
+            1 for info in infos
+            if isinstance(info, dict) and isinstance(info.get("episode"), dict)
+        )
+        step = int(num_timesteps)
+        elapsed = step - self.starting_steps if self.trigger == "steps" else self.completed_episodes
+        due = elapsed >= self.next_trigger
+        if due:
+            while self.next_trigger <= elapsed:
+                self.next_trigger += self.interval
+        return due, step, self.completed_episodes
+
+
 class EpisodeReturnPlateau:
     """Stop only after repeated windows fail to improve mean episode return."""
 
@@ -181,6 +207,9 @@ def train_official(
     device: str = "cpu",
     resume: Optional[Path] = None,
     checkpoint_every: int = 10_000,
+    automatic_evaluation_enabled: bool = True,
+    automatic_evaluation_trigger: str = "steps",
+    automatic_evaluation_interval: int = 50_000,
     n_steps: int = 2048,
     learning_rate: float = 1e-4,
     n_epochs: int = 4,
@@ -210,8 +239,10 @@ def train_official(
         raise ValueError("n_envs must be between 1 and 8")
     if total_timesteps < 0:
         raise ValueError("total_timesteps must be zero (unlimited) or positive")
-    if checkpoint_every < 1 or n_steps < 1 or n_epochs < 1:
-        raise ValueError("checkpoint_every, n_steps, and n_epochs must be positive")
+    if checkpoint_every < 1 or n_steps < 1 or n_epochs < 1 or automatic_evaluation_interval < 1:
+        raise ValueError("checkpoint and automatic evaluation intervals, n_steps, and n_epochs must be positive")
+    if automatic_evaluation_trigger not in {"steps", "episodes"}:
+        raise ValueError("automatic_evaluation_trigger must be steps or episodes")
     if plateau_window_episodes < 2 or plateau_patience < 1:
         raise ValueError("plateau_window_episodes must be >= 2 and plateau_patience >= 1")
     if min(plateau_min_timesteps, max_duration_hours) < 0:
@@ -225,6 +256,53 @@ def train_official(
     from src.layer3.hub_callback import maybe_hub_callback
     from src.layer3.official_policy import resume_ppo_checkpoint
     from src.layer3.train import make_model
+
+    class _AutomaticEvaluationTrigger(BaseCallback):
+        """Save immutable PPO snapshots and enqueue official race evaluations."""
+
+        def __init__(self, starting_steps: int) -> None:
+            super().__init__(verbose=0)
+            self.schedule = AutomaticEvaluationSchedule(
+                automatic_evaluation_trigger, automatic_evaluation_interval, starting_steps
+            )
+            self.index = 0
+
+        def _on_step(self) -> bool:
+            nonlocal out_dir
+            infos = self.locals.get("infos") or []
+            due, step, completed_episodes = self.schedule.observe(int(self.model.num_timesteps), infos)
+            if not automatic_evaluation_enabled or not due:
+                return True
+            hub_url = os.environ.get("HUB_URL", "").rstrip("/")
+            run_id = os.environ.get("AICAR_RUN_ID", "")
+            if not hub_url or not run_id:
+                print("Automatic official evaluation skipped: HUB_URL or AICAR_RUN_ID is unavailable.", flush=True)
+                return True
+            self.index += 1
+            snapshot = out_dir / "checkpoints" / f"automatic_evaluation_{self.index:06d}_steps_{step}.zip"
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            self.model.save(str(snapshot.with_suffix("")))
+            payload = json.dumps({
+                "model_path": str(snapshot), "trigger": automatic_evaluation_trigger,
+                "step": step, "episode": completed_episodes,
+            }).encode("utf-8")
+            import urllib.request
+            request = urllib.request.Request(
+                f"{hub_url}/train/runs/{run_id}/evaluation", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=10.0) as response:
+                    queued = json.loads(response.read().decode("utf-8"))
+                print(
+                    "Automatic official evaluation queued: "
+                    f"trigger={automatic_evaluation_trigger} step={step} "
+                    f"episode={completed_episodes} id={queued.get('evaluation_id')}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Could not queue official evaluation snapshot {snapshot}: {exc}", file=sys.stderr, flush=True)
+            return True
 
     stop_requested = threading.Event()
     previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
@@ -418,6 +496,14 @@ def train_official(
                 "device": device,
                 "seed": seed,
             },
+            "automatic_evaluation": {
+                "enabled": automatic_evaluation_enabled,
+                "trigger": automatic_evaluation_trigger,
+                "interval": automatic_evaluation_interval,
+                "interval_scope": "run_relative",
+                "attempts_per_snapshot": 3,
+                "protocol": "one warmup lap followed by ten scored race laps",
+            },
             "resume": str(Path(resume).resolve()) if resume else None,
         }
         (out_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -432,13 +518,15 @@ def train_official(
             run_dir=out_dir,
         )
         callbacks = [checkpoint_callback]
+        starting_steps = int(model.num_timesteps)
+        if automatic_evaluation_enabled:
+            callbacks.append(_AutomaticEvaluationTrigger(starting_steps))
         if hub_callback is not None:
             callbacks.append(hub_callback)
             print(
                 f"Watch telemetry enabled: HUB_URL is set (run_id={out_dir.name})",
                 flush=True,
             )
-        starting_steps = int(model.num_timesteps)
         stop_callback = _TrainingStopCallback(starting_steps, time.monotonic())
         callbacks.append(stop_callback)
         model.learn(
@@ -488,6 +576,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--checkpoint-every", type=int, default=10_000)
+    parser.add_argument("--automatic-evaluation-enabled", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--automatic-evaluation-trigger", choices=("steps", "episodes"), default="steps")
+    parser.add_argument("--automatic-evaluation-interval", type=int, default=50_000)
     parser.add_argument("--n-steps", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--n-epochs", type=int, default=4)
@@ -530,6 +621,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         device=args.device,
         resume=args.resume,
         checkpoint_every=args.checkpoint_every,
+        automatic_evaluation_enabled=bool(args.automatic_evaluation_enabled),
+        automatic_evaluation_trigger=args.automatic_evaluation_trigger,
+        automatic_evaluation_interval=args.automatic_evaluation_interval,
         n_steps=args.n_steps,
         learning_rate=args.learning_rate,
         n_epochs=args.n_epochs,

@@ -35,6 +35,9 @@ class OfficialTrainSettings(BaseModel):
     device: Literal["cpu", "cuda"] = "cpu"
     resume: Optional[str] = None
     checkpoint_every: int = Field(default=10_000, ge=1)
+    automatic_evaluation_enabled: bool = True
+    automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
+    automatic_evaluation_interval: int = Field(default=50_000, ge=1)
     n_steps: int = Field(default=2048, ge=64, multiple_of=64)
     learning_rate: float = Field(default=1e-4, gt=0, le=0.01)
     n_epochs: int = Field(default=4, ge=1, le=20)
@@ -80,6 +83,9 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_TRAIN_SEED": str(self.seed),
             "AICAR_PPO_DEVICE": self.device,
             "AICAR_TRAIN_CHECKPOINT_EVERY": str(self.checkpoint_every),
+            "AICAR_AUTO_EVALUATION_ENABLED": "1" if self.automatic_evaluation_enabled else "0",
+            "AICAR_AUTO_EVALUATION_TRIGGER": self.automatic_evaluation_trigger,
+            "AICAR_AUTO_EVALUATION_INTERVAL": str(self.automatic_evaluation_interval),
             "AICAR_PPO_N_STEPS": str(self.n_steps),
             "AICAR_PPO_LEARNING_RATE": str(self.learning_rate),
             "AICAR_PPO_N_EPOCHS": str(self.n_epochs),
