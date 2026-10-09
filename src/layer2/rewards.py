@@ -49,11 +49,12 @@ Default weight is 0.0 (off).
 
 Reward priorities
 -----------------
-New best-so-far frontier distance is the only positive driving reward, with a
-quadratic episode-average pace multiplier capped at 1 + bonus strength. Time costs penalize
-elapsed time; reverse travel, collisions, and non-stall failed episode endings
-cost reward. Frontier stalls reset after their timeout without an extra
-terminal cost. Laps are diagnostic and never change reward or episode life.
+New best-so-far frontier distance earns a quadratic episode-average pace
+multiplier capped at 1 + bonus strength. Official training may also award an
+explicit bonus when its race counter confirms a completed lap. Time costs
+penalize elapsed time; reverse travel, collisions, and non-stall failed
+episode endings cost reward. Frontier stalls reset after their timeout
+without an extra terminal cost.
 """
 
 from __future__ import annotations
@@ -87,6 +88,8 @@ class RewardConfig:
     # Strength of the quadratic pace bonus. 1 preserves a 2x cap; 2 yields 3x.
     frontier_pace_bonus_strength: float = 1.0
     frontier_pace_source: Literal["episode_average", "current_push"] = "episode_average"
+    # Optional milestone reward for an official lap-counter increase.
+    lap_completion_reward: float = 0.0
 
     # Cost per simulated second, including while making progress. This makes
     # slower completion less profitable than faster completion over the same route.
@@ -123,6 +126,7 @@ def compute_reward_components(
     prev_steering: float,
     steering: float,
     cfg: RewardConfig,
+    lap_completion_count: int = 0,
 ) -> dict[str, float]:
     """
     Compute the scalar reward for one AutoDriveEnv step.
@@ -141,6 +145,10 @@ def compute_reward_components(
         Episode-to-date average new-frontier distance divided by simulated time.
         It scales the per-metre progress reward, capped at 2x at the configured
         target pace.
+    lap_completion_count:
+        Number of official lap-counter increments on this step. The configured
+        milestone reward is used only by official training; policy inputs remain
+        sensor-only.
     collision_event:
         True if this step counted as a new collision (env-detected).
     slip_angle:
@@ -166,6 +174,7 @@ def compute_reward_components(
     """
     components = {
         "route_progress": 0.0,
+        "lap_completion": 0.0,
         "reverse_direction_gate": 0.0,
         "backward_motion": 0.0,
         "time_cost": 0.0,
@@ -213,6 +222,11 @@ def compute_reward_components(
         else:
             components["route_progress"] = route_reward
 
+    components["lap_completion"] = (
+        max(0.0, float(cfg.lap_completion_reward))
+        * max(0, int(lap_completion_count))
+    )
+
     components["time_cost"] = (
         -max(0.0, float(cfg.time_penalty_per_second))
         * max(0.0, float(step_duration_s))
@@ -224,6 +238,7 @@ def compute_reward_components(
     positive_frontier_return = (
         max(0.0, float(positive_episode_return))
         + max(0.0, float(components["route_progress"]))
+        + max(0.0, float(components["lap_completion"]))
     )
     if collision_event:
         magnitude = max(0.0, float(cfg.collision_penalty_magnitude))

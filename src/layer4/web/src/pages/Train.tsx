@@ -324,11 +324,14 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Maximum wall-clock duration (hours)" help="Optional overall run limit. Set to 0 to disable; the simulator's per-episode timeout is configured separately.">
                 <input type="number" min={0} step="any" value={form.max_duration_hours} onChange={(event) => setNumber("max_duration_hours", event.target.value)} />
               </Field>
-              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second, including while moving. Frontier progress is the only positive driving reward.">
+              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second, including while moving. Positive driving rewards come from new frontier progress and completing official laps.">
                 <input type="number" min={0} step="any" value={form.time_cost_per_simulated_second} onChange={(event) => setNumber("time_cost_per_simulated_second", event.target.value)} />
               </Field>
-              <Field label="End a stalled life after (simulated seconds)" help="When the car stops advancing its high-water route frontier for this long, its simulator resets and receives the non-collision failure cost and clawback.">
+              <Field label="End a stalled life after (simulated seconds)" help="When the car makes no new frontier progress for this long, the training environment ends its life and resets it to spawn. This applies only to training; official lap evaluations keep running.">
                 <input type="number" min={0} step="any" value={form.frontier_stagnation_s} onChange={(event) => setNumber("frontier_stagnation_s", event.target.value)} />
+              </Field>
+              <Field label="Reward per completed official lap" help="Adds this milestone reward when the official simulator's lap counter advances. This encourages completing clean laps before optimizing lap time; it is training reward only and never enters the policy observation.">
+                <input type="number" min={0} step="any" value={form.lap_completion_reward} onChange={(event) => setNumber("lap_completion_reward", event.target.value)} />
               </Field>
               <Field label="Fixed cost per collision" help="A collision ends the current car life and applies this fixed cost plus the configured share of frontier reward earned during that life.">
                 <input type="number" min={0} step="any" value={form.collision_penalty_magnitude} onChange={(event) => setNumber("collision_penalty_magnitude", event.target.value)} />

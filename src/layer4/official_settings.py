@@ -45,12 +45,13 @@ class OfficialTrainSettings(BaseModel):
     gae_lambda: float = Field(default=0.95, ge=0, le=1)
     timeout_s: float = Field(default=30.0, gt=0)
     training_timeout_s: float = Field(default=600.0, gt=0)
-    frontier_stagnation_s: float = Field(default=10.0, ge=0)
+    frontier_stagnation_s: float = Field(default=5.0, ge=0)
     race_laps: int = Field(default=10, ge=1, le=100)
     warmup_laps: int = Field(default=0, ge=0, le=20)
     time_cost_per_simulated_second: float = Field(default=5.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
     collision_reward_percent: float = Field(default=50.0, ge=0, le=1000)
+    lap_completion_reward: float = Field(default=100.0, ge=0)
     failed_episode_penalty: float = Field(default=100.0, ge=0)
     backward_speed_penalty_scale: float = Field(default=10.0, ge=0)
     episode_failure_reward_percent: float = Field(default=50.0, ge=0, le=1000)
@@ -99,6 +100,7 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_TRAIN_TIME_COST": str(self.time_cost_per_simulated_second),
             "AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE": str(self.collision_penalty_magnitude),
             "AICAR_TRAIN_COLLISION_REWARD_PERCENT": str(self.collision_reward_percent),
+            "AICAR_TRAIN_LAP_COMPLETION_REWARD": str(self.lap_completion_reward),
             "AICAR_TRAIN_FAILURE_PENALTY": str(self.failed_episode_penalty),
             "AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE": str(self.backward_speed_penalty_scale),
             "AICAR_TRAIN_FAILURE_REWARD_PERCENT": str(self.episode_failure_reward_percent),
@@ -122,10 +124,11 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
     except (OSError, ValueError):
         return OfficialTrainSettings()
     if isinstance(raw, dict):
-        # Older UI settings used lap bonuses and escalating collision penalties.
-        # Drop those obsolete controls while retaining the user's unrelated PPO/run settings.
-        legacy_reward_schema = "lap_completion_reward" in raw or "collision_penalty_base" in raw
-        for legacy in ("lap_completion_reward", "collision_penalty_base", "lidar_brake_distance_m"):
+        # Older settings included a lap reward plus obsolete escalating collision
+        # and lidar-braking controls. Preserve the lap milestone value while
+        # dropping only controls that no longer map to the reward implementation.
+        legacy_reward_schema = "collision_penalty_base" in raw or "lidar_brake_distance_m" in raw
+        for legacy in ("collision_penalty_base", "lidar_brake_distance_m"):
             raw.pop(legacy, None)
         if legacy_reward_schema:
             raw.update({
@@ -136,7 +139,7 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
                 "failed_episode_penalty": 100.0,
                 "backward_speed_penalty_scale": 10.0,
                 "episode_failure_reward_percent": 50.0,
-                "frontier_stagnation_s": 10.0,
+                "frontier_stagnation_s": 5.0,
             })
     return OfficialTrainSettings.model_validate(raw)
 

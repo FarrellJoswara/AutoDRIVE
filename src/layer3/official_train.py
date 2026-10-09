@@ -231,10 +231,11 @@ def train_official(
     time_cost_per_simulated_second: float = 5.0,
     collision_penalty_magnitude: float = 100.0,
     collision_reward_percent: float = 50.0,
+    lap_completion_reward: float = 100.0,
     failed_episode_penalty: float = 100.0,
     backward_speed_penalty_scale: float = 10.0,
     episode_failure_reward_percent: float = 50.0,
-    frontier_stagnation_s: float = 10.0,
+    frontier_stagnation_s: float = 5.0,
     observation_profile: str = "official_sensors_camera",
     steering_action_scale: float = 1.0,
     straight_throttle_gain: float = 1.0,
@@ -398,6 +399,7 @@ def train_official(
             training_time_cost_per_simulated_second=time_cost_per_simulated_second,
             training_collision_penalty_magnitude=collision_penalty_magnitude,
             training_collision_reward_percent=collision_reward_percent,
+            training_lap_completion_reward=lap_completion_reward,
             training_frontier_stagnation_s=frontier_stagnation_s,
             frontier_path=Path(__file__).resolve().parents[2]
             / "competition" / "iros2026" / "official_centerline.csv",
@@ -470,7 +472,7 @@ def train_official(
                 "frontier_stagnation_s": frontier_stagnation_s,
                 "collision_behavior": "apply collision penalty; terminate the episode and reset through the official training API to the configured spawn",
                 "training_watchdog_s": training_timeout_s,
-                "laps": "diagnostics only; do not terminate or reward lap crossings",
+                "laps": "official lap-counter increases earn the configured training milestone reward; they do not terminate an episode",
             },
             "observation_profile": observation_profile,
             "actions": {
@@ -484,7 +486,7 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
-                "positive_reward": "new high-water route frontier distance only",
+                "positive_reward": "new high-water route frontier distance plus completed-lap milestone reward",
                 "frontier_progress_per_m": 10.0,
                 "pace_target_mps": 6.0,
                 "pace_bonus_strength": 1.0,
@@ -493,10 +495,10 @@ def train_official(
                 "backward_speed_deadband_mps": 0.1,
                 "collision_cost": f"{collision_penalty_magnitude:g} + {collision_reward_percent:g}% of positive frontier return",
                 "non_collision_failure_cost": f"{failed_episode_penalty:g} + {episode_failure_reward_percent:g}% of positive frontier return",
-                "frontier_stall": "end and reset life; charged as a non-collision failure",
+                "frontier_stall": f"end and reset life after {frontier_stagnation_s:g} seconds without frontier progress; apply the configured non-collision failure penalty and clawback",
                 "slip_penalty": 0.0,
                 "steering_change_penalty": 0.0,
-                "lap_completion_bonus": 0,
+                "lap_completion_bonus": lap_completion_reward,
                 "restricted_topics_used_only_for_reward_and_episode_control": True,
                 "restricted_topics_in_policy_observation": False,
             },
@@ -619,10 +621,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--time-cost-per-simulated-second", type=float, default=5.0)
     parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
     parser.add_argument("--collision-reward-percent", type=float, default=50.0)
+    parser.add_argument("--lap-completion-reward", type=float, default=100.0)
     parser.add_argument("--failed-episode-penalty", type=float, default=100.0)
     parser.add_argument("--backward-speed-penalty-scale", type=float, default=10.0)
     parser.add_argument("--episode-failure-reward-percent", type=float, default=50.0)
-    parser.add_argument("--frontier-stagnation-s", type=float, default=10.0)
+    parser.add_argument("--frontier-stagnation-s", type=float, default=5.0)
     parser.add_argument(
         "--observation-profile",
         choices=("official_sensors", "official_sensors_history", "official_sensors_camera"),
@@ -664,6 +667,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         time_cost_per_simulated_second=args.time_cost_per_simulated_second,
         collision_penalty_magnitude=args.collision_penalty_magnitude,
         collision_reward_percent=args.collision_reward_percent,
+        lap_completion_reward=args.lap_completion_reward,
         failed_episode_penalty=args.failed_episode_penalty,
         backward_speed_penalty_scale=args.backward_speed_penalty_scale,
         episode_failure_reward_percent=args.episode_failure_reward_percent,

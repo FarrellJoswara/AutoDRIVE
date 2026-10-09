@@ -284,6 +284,7 @@ export interface OfficialTrainSettings {
   time_cost_per_simulated_second: number;
   collision_penalty_magnitude: number;
   collision_reward_percent: number;
+  lap_completion_reward: number;
   failed_episode_penalty: number;
   backward_speed_penalty_scale: number;
   episode_failure_reward_percent: number;

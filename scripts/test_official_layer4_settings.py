@@ -27,11 +27,12 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertEqual(env["AICAR_RUN_ID"], "abc123")
         self.assertEqual(env["AICAR_TRAIN_OUT"], "/runs/rl/official_run_abc123")
         self.assertEqual(env["AICAR_TRAIN_TIME_COST"], "5.0")
-        self.assertEqual(env["AICAR_TRAIN_FRONTIER_STAGNATION_S"], "10.0")
+        self.assertEqual(env["AICAR_TRAIN_FRONTIER_STAGNATION_S"], "5.0")
         self.assertEqual(env["AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE"], "100.0")
         self.assertEqual(env["AICAR_TRAIN_COLLISION_REWARD_PERCENT"], "50.0")
         self.assertEqual(env["AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE"], "10.0")
         self.assertEqual(env["AICAR_TRAIN_FAILURE_REWARD_PERCENT"], "50.0")
+        self.assertEqual(env["AICAR_TRAIN_LAP_COMPLETION_REWARD"], "100.0")
         self.assertNotIn("AICAR_TRAIN_LAP_REWARD", env)
         self.assertNotIn("PORT", env)
         self.assertNotIn("AICAR_MAP_ID", env)
@@ -56,6 +57,8 @@ class OfficialTrainSettingsTests(unittest.TestCase):
         self.assertEqual(settings.collision_penalty_magnitude, 100.0)
         self.assertEqual(settings.collision_reward_percent, 50.0)
         self.assertEqual(settings.failed_episode_penalty, 100.0)
+        self.assertEqual(settings.frontier_stagnation_s, 5.0)
+        self.assertEqual(settings.lap_completion_reward, 100.0)
         self.assertEqual(settings.warmup_laps, 0)
 
 

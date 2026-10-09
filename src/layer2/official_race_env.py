@@ -59,10 +59,11 @@ class OfficialRaceEnv(gym.Env):
         training_time_cost_per_simulated_second: float = 5.0,
         training_collision_penalty_magnitude: float = 100.0,
         training_collision_reward_percent: float = 50.0,
+        training_lap_completion_reward: float = 100.0,
         training_failure_penalty: float = 100.0,
         training_backward_speed_penalty_scale: float = 10.0,
         training_failure_reward_percent: float = 50.0,
-        training_frontier_stagnation_s: float = 10.0,
+        training_frontier_stagnation_s: float = 5.0,
         frontier_path: Optional[Path] = None,
     ) -> None:
         super().__init__()
@@ -97,6 +98,7 @@ class OfficialRaceEnv(gym.Env):
         )
         self.training_collision_penalty_magnitude = max(0.0, float(training_collision_penalty_magnitude))
         self.training_collision_reward_percent = max(0.0, float(training_collision_reward_percent))
+        self.training_lap_completion_reward = max(0.0, float(training_lap_completion_reward))
         self.training_frontier_stagnation_s = max(0.0, float(training_frontier_stagnation_s))
         self.frontier_path = Path(frontier_path) if frontier_path else None
         self._frontier_spawn_xy: Optional[Tuple[float, float]] = None
@@ -394,14 +396,19 @@ class OfficialRaceEnv(gym.Env):
                     backward_speed_deadband_mps=0.1,
                     collision_penalty_magnitude=self.training_collision_penalty_magnitude,
                     collision_reward_percent=self.training_collision_reward_percent,
+                    lap_completion_reward=self.training_lap_completion_reward,
                     episode_failure_penalty_magnitude=self.training_failure_penalty,
                     episode_failure_reward_percent=self.training_failure_reward_percent,
                     slip_penalty=0.0,
                     steer_jerk_penalty=0.0,
                 ),
+                lap_completion_count=completed_since_last,
             )
             reward = float(components["total"])
-            self._positive_episode_return += max(0.0, float(components["route_progress"]))
+            self._positive_episode_return += (
+                max(0.0, float(components["route_progress"]))
+                + max(0.0, float(components["lap_completion"]))
+            )
             self._last_training_steering = float(steering)
             info["training_reward_components"] = components
             info["frontier_progress_m"] = (progress or {}).get("progress_m")

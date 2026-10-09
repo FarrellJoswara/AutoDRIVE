@@ -615,6 +615,10 @@ def test_official_settings_bound_worker_count():
     settings = OfficialTrainSettings(n_envs=2)
     environment = settings.to_container_env(hub_url="http://hub", run_id="r")
     assert environment["AICAR_TRAIN_N_ENVS"] == "2"
+    assert settings.frontier_stagnation_s == 5.0
+    assert environment["AICAR_TRAIN_FRONTIER_STAGNATION_S"] == "5.0"
+    assert settings.lap_completion_reward == 100.0
+    assert environment["AICAR_TRAIN_LAP_COMPLETION_REWARD"] == "100.0"
     assert settings.collision_reward_percent == 50.0
     assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "50.0"
     assert settings.backward_speed_penalty_scale == 10.0

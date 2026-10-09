@@ -4,11 +4,11 @@
 
 - Official PPO lives start at the documented AutoDRIVE spawn and use restricted IPS x/y only for Layer 2 frontier reward and episode control. The coordinates are excluded from policy observations and actions.
 - `competition/iros2026/official_centerline.csv` is a bounded, closed route reference derived from a completed official simulator lap trace. It is documented as a demonstrated path, not surveyed track geometry, and each training reset validates the expected spawn before initializing the frontier.
-- Only new high-water frontier distance earns positive driving reward. Simulated time costs 5 reward units/second by default; lap crossings add no reward and do not end an episode. A new collision ends the life and costs 100 plus 20% of its positive frontier return. A stalled frontier resets after 10 simulated seconds with time cost only; other watchdog failures cost 100.
-- Layer 4 exposes the current objective, migrates old reward settings, and packages the frontier data with the official training image.
+- New high-water frontier distance earns continuous progress reward, and each completed official lap earns a 100-point training milestone. Simulated time costs 5 reward units/second by default. A new collision ends the life and costs 100 plus 50% of positive frontier and lap reward; frontier stagnation ends the life after 5 simulated seconds, and applies the configured non-collision failure penalty.
+- Layer 4 exposes the frontier, lap milestone, collision clawback, and stagnation settings; it migrates old reward settings and packages the frontier data with the official training image.
 
 ## Still outstanding
 
-- Layer 3 still stops on training episode-return plateau. The planned separate deterministic 30-second official evaluation every 50,000 steps, reward-rate checkpoint selection, and adaptive action-standard-deviation schedule are not implemented.
-- The frontier is based on a successful recorded vehicle path. Long-run official simulator training must confirm that its 2 m corridor projects consistently across collisions, resets, and parallel environments.
-- Parallel throughput, sustained timing stability, checkpoint recovery, and a valid ten-lap official result remain runtime acceptance checks; Python tests do not establish them.
+- A valid, collision-compliant official ten-lap result remains outstanding. Current automatic evaluations complete one scored lap before reaching the 11-collision disqualification threshold; no checkpoint is in the official best registry.
+- The frontier is based on a successful recorded vehicle path. Further long-run training must confirm that its corridor projection remains useful across collisions, resets, and parallel environments.
+- Parallel throughput, sustained timing stability, and checkpoint recovery continue to require runtime monitoring; Python tests do not establish the official simulator workflow.

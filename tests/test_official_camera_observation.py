@@ -170,8 +170,8 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
     env.race_laps = 10
     env.warmup_laps = 0
     env.training_mode = True
-    env._training_elapsed_s = 9.9
-    env.training_frontier_stagnation_s = 10.0
+    env._training_elapsed_s = 4.9
+    env.training_frontier_stagnation_s = 5.0
     env.training_timeout_s = 600.0
     env.route_progress = FakeRoute()
     env._episode_frontier_distance_m = 4.0
@@ -181,6 +181,7 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
     env.training_time_cost_per_simulated_second = 5.0
     env.training_collision_penalty_magnitude = 100.0
     env.training_collision_reward_percent = 50.0
+    env.training_lap_completion_reward = 100.0
     env.training_failure_penalty = 100.0
     env.training_failure_reward_percent = 50.0
     env.training_backward_speed_penalty_scale = 10.0

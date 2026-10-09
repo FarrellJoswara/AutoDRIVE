@@ -709,7 +709,7 @@ def test_official_policy_and_race_env_share_identical_observation_transform():
                 np.testing.assert_array_equal(training_obs[key], deployment_obs[key])
 
 
-def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
+def test_official_training_rewards_frontier_and_completed_laps(tmp_path):
     class TrainingRacer(FakeRacer):
         def __init__(self):
             initial = _snapshot(lap=0, last_lap=0.0, collisions=0, position=(0.0, 0.0, 0.0))
@@ -744,12 +744,17 @@ def test_official_training_uses_frontier_reward_without_lap_bonus(tmp_path):
 
     _, lap_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
     assert info["frontier_advanced_m"] == 1.0
-    assert "lap_completion" not in info["training_reward_components"]
+    assert info["training_reward_components"]["lap_completion"] == 100.0
+    assert lap_reward == info["training_reward_components"]["total"]
     assert not terminated and not truncated
     assert info["race_laps_completed"] == 1
 
     _, collision_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
     assert info["training_reward_components"]["collision"] < -100.0
+    assert np.isclose(
+        info["training_reward_components"]["collision"],
+        -(100.0 + env._positive_episode_return * 0.5),
+    )
     assert collision_reward == info["training_reward_components"]["total"]
     assert info["race_collisions"] == 1
     assert terminated and not truncated
@@ -807,7 +812,7 @@ def test_official_training_time_cost_uses_elapsed_action_interval(tmp_path):
     _, reward, _, _, info = env.step(np.zeros(2, dtype=np.float32))
 
     assert info["training_reward_components"]["time_cost"] == -15.0
-    assert "lap_completion" not in info["training_reward_components"]
+    assert info["training_reward_components"]["lap_completion"] == 100.0
     assert reward == info["training_reward_components"]["total"]
 
 
