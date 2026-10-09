@@ -21,6 +21,19 @@ $process = Get-Process -Id $ProcessId
 if ($process.ProcessName -ne "AutoDRIVE Simulator") {
     throw "PID $ProcessId is '$($process.ProcessName)', not AutoDRIVE Simulator."
 }
+
+# The official player accepts -ip/-port on startup and can connect before its
+# Unity canvas has opened the Menu Panel. Check the bridge first: a live
+# simulator must not be reported as a startup failure just because the optional
+# UI form is collapsed or unavailable.
+$existingConnection = Get-NetTCPConnection -OwningProcess $ProcessId -State Established -ErrorAction SilentlyContinue |
+    Where-Object { $_.RemotePort -eq $Port } |
+    Select-Object -First 1
+if ($existingConnection) {
+    Write-Output "Simulator PID $ProcessId already has an established connection to port $Port; skipped the connection panel."
+    exit 0
+}
+
 if ($process.MainWindowHandle -eq 0) {
     throw "AutoDRIVE Simulator PID $ProcessId does not have a targetable window."
 }
@@ -163,16 +176,6 @@ if (-not $panelOpen) {
 }
 if (-not $panelOpen) {
     throw "The simulator connection panel did not open. No connection click was sent."
-}
-
-# A live TCP connection to the selected port means this simulator is already
-# connected. This keeps repeated startup checks from toggling or disturbing it.
-$existingConnection = Get-NetTCPConnection -OwningProcess $ProcessId -State Established -ErrorAction SilentlyContinue |
-    Where-Object { $_.RemotePort -eq $Port } |
-    Select-Object -First 1
-if ($existingConnection) {
-    Write-Output "Simulator PID $ProcessId already has an established connection to port $Port."
-    exit 0
 }
 
 [void][AutoDriveWindowInput]::SetForegroundWindow($window)
