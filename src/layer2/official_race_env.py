@@ -56,7 +56,7 @@ class OfficialRaceEnv(gym.Env):
         observation_profile: str = "official_sensors",
         training_mode: bool = False,
         training_timeout_s: float = 600.0,
-        training_time_cost_per_simulated_second: float = 5.0,
+        training_time_cost_per_simulated_second: float = 0.0,
         training_collision_penalty_magnitude: float = 100.0,
         training_collision_reward_percent: float = 100.0,
         training_lap_completion_reward: float = 0.0,

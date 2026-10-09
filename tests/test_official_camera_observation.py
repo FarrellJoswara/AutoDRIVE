@@ -170,6 +170,7 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
     env.race_laps = 10
     env.warmup_laps = 0
     env.training_mode = True
+    env.stop_on_collision = False
     env._training_elapsed_s = 4.9
     env.training_frontier_stagnation_s = 5.0
     env.training_timeout_s = 600.0
@@ -259,6 +260,7 @@ def test_official_training_collision_ends_life_penalizes_and_resets_to_spawn():
     env._frontier_last_push_s = 0.0
     env._last_training_steering = 0.0
     env.training_mode = True
+    env.stop_on_collision = False
     env._frontier_spawn_xy = (1.0, 2.0)
     env.route_progress = None
     env.race_laps = 10

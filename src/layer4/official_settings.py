@@ -48,7 +48,7 @@ class OfficialTrainSettings(BaseModel):
     frontier_stagnation_s: float = Field(default=5.0, ge=0)
     race_laps: int = Field(default=10, ge=1, le=100)
     warmup_laps: int = Field(default=0, ge=0, le=20)
-    time_cost_per_simulated_second: float = Field(default=5.0, ge=0)
+    time_cost_per_simulated_second: float = Field(default=0.0, ge=0)
     collision_penalty_magnitude: float = Field(default=100.0, ge=0)
     collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
     lap_completion_reward: float = Field(default=0.0, ge=0)
@@ -132,7 +132,7 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
         if legacy_reward_schema:
             raw.update({
                 "warmup_laps": 0,
-                "time_cost_per_simulated_second": 5.0,
+                "time_cost_per_simulated_second": 0.0,
                 "collision_penalty_magnitude": 100.0,
                 "collision_reward_percent": 100.0,
                 "failed_episode_penalty": 100.0,

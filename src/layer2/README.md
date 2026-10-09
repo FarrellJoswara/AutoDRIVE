@@ -97,13 +97,15 @@ r -= steer_jerk_penalty * |Δsteer|   # default 0
 
 `@dataclass` on `RewardConfig` only auto-builds a simple weight bag.
 
-The official Layer 4 training path intentionally overrides these generic
+The official Layer 4 lap-learning path intentionally overrides these generic
 defaults: it uses a fixed 10 reward units per new frontier metre (pace bonus
-disabled), no lap-completion bonus, and 100% clawback of positive frontier
-return plus the fixed 100-unit collision cost. A collision ends and resets
-that training life. Thus a collision always returns less reward than the life
-earned before it; the generic `RewardConfig` formula below remains available
-for the custom simulator path.
+and time cost disabled), no lap-completion bonus, and 100% clawback of positive
+frontier return plus the fixed 100-unit collision or failure cost. A collision
+or five-second frontier stall ends and resets that training life. Thus slow
+continued frontier progress earns reward, while a collision or stall erases
+the life’s progress and is always negative. The generic `RewardConfig` formula
+below remains available for the custom simulator path; a time cost can be
+reintroduced after clean laps are reliable to optimize lap time.
 
 On mapped tracks, Layer 2 projects each pose onto the route. Only a new
 high-water frontier advance earns positive per-step reward; recovering or

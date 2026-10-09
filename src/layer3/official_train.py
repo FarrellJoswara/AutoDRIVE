@@ -228,7 +228,7 @@ def train_official(
     training_timeout_s: float = 600.0,
     race_laps: int = 10,
     warmup_laps: int = 0,
-    time_cost_per_simulated_second: float = 5.0,
+    time_cost_per_simulated_second: float = 0.0,
     collision_penalty_magnitude: float = 100.0,
     collision_reward_percent: float = 100.0,
     lap_completion_reward: float = 0.0,
@@ -618,7 +618,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--training-timeout-s", type=float, default=600.0)
     parser.add_argument("--race-laps", type=int, default=10)
     parser.add_argument("--warmup-laps", type=int, default=0)
-    parser.add_argument("--time-cost-per-simulated-second", type=float, default=5.0)
+    parser.add_argument("--time-cost-per-simulated-second", type=float, default=0.0)
     parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
     parser.add_argument("--collision-reward-percent", type=float, default=100.0)
     parser.add_argument("--lap-completion-reward", type=float, default=0.0)

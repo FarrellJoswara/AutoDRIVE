@@ -324,7 +324,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Maximum wall-clock duration (hours)" help="Optional overall run limit. Set to 0 to disable; the simulator's per-episode timeout is configured separately.">
                 <input type="number" min={0} step="any" value={form.max_duration_hours} onChange={(event) => setNumber("max_duration_hours", event.target.value)} />
               </Field>
-              <Field label="Time cost per simulator-clock second" help="The life pays this cost for each simulated second. Official training gives a fixed reward per new frontier metre, with no pace multiplier or lap bonus, so a collision cannot turn a fast crash into a positive life.">
+              <Field label="Time cost per simulator-clock second" help="Set to zero while learning to complete safe laps: each new frontier metre earns the same reward at any speed, while collisions and five-second stalls erase the life’s progress. Add a time cost later to optimize lap times after clean laps are consistent.">
                 <input type="number" min={0} step="any" value={form.time_cost_per_simulated_second} onChange={(event) => setNumber("time_cost_per_simulated_second", event.target.value)} />
               </Field>
               <Field label="End a stalled life after (simulated seconds)" help="When the car makes no new frontier progress for this long, the training environment ends its life and resets it to spawn. This applies only to training; official lap evaluations keep running.">

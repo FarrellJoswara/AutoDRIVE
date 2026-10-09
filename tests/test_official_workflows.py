@@ -617,6 +617,8 @@ def test_official_settings_bound_worker_count():
     assert environment["AICAR_TRAIN_N_ENVS"] == "2"
     assert settings.frontier_stagnation_s == 5.0
     assert environment["AICAR_TRAIN_FRONTIER_STAGNATION_S"] == "5.0"
+    assert settings.time_cost_per_simulated_second == 0.0
+    assert environment["AICAR_TRAIN_TIME_COST"] == "0.0"
     assert settings.lap_completion_reward == 0.0
     assert environment["AICAR_TRAIN_LAP_COMPLETION_REWARD"] == "0.0"
     assert settings.collision_reward_percent == 100.0

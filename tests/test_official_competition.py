@@ -851,7 +851,7 @@ def test_official_training_watchdog_charges_failure_penalty(tmp_path):
 
     _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
-    assert reward == -110.0
+    assert reward == -100.0
     assert not terminated and truncated
     assert info["termination_reason"] == "training_watchdog_timeout"
     assert info["training_elapsed_s"] == 2.0
@@ -877,7 +877,8 @@ def test_official_training_time_cost_uses_elapsed_action_interval(tmp_path):
     route.write_text("0,0,1.5,1.5\n1,0,1.5,1.5\n1,1,1.5,1.5\n0,1,1.5,1.5\n0,0,1.5,1.5\n")
     (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [0.0, 0.0]}')
     env = OfficialRaceEnv(
-        racer=DelayedTrainingRacer(), training_mode=True, training_timeout_s=0.0, frontier_path=route
+        racer=DelayedTrainingRacer(), training_mode=True, training_timeout_s=0.0,
+        training_time_cost_per_simulated_second=5.0, frontier_path=route
     )
     env.reset()
     _, reward, _, _, info = env.step(np.zeros(2, dtype=np.float32))
