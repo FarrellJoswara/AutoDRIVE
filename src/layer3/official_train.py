@@ -447,7 +447,7 @@ def train_official(
             "episode": {
                 "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,
-                "collision_behavior": "apply collision penalty; continue the training life through official last-checkpoint recovery",
+                "collision_behavior": "apply collision penalty; terminate the episode and reset through the official training API to the configured spawn",
                 "training_watchdog_s": training_timeout_s,
                 "laps": "diagnostics only; do not terminate or reward lap crossings",
             },
