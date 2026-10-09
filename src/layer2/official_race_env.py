@@ -79,11 +79,11 @@ class OfficialRaceEnv(gym.Env):
 
         self.training_mode = bool(training_mode)
         if self.training_mode and (
-            float(training_collision_penalty_magnitude) <= 100.0
-            or float(training_failure_penalty) <= 100.0
+            float(training_collision_penalty_magnitude) <= 120.0
+            or float(training_failure_penalty) <= 120.0
         ):
             raise ValueError(
-                "official training terminal penalties must exceed the 100-point frontier reward cap"
+                "official terminal penalties must exceed the 120-point progress and centerline reward cap"
             )
         if self.training_mode and float(training_lap_completion_reward) != 0.0:
             raise ValueError(
@@ -156,6 +156,7 @@ class OfficialRaceEnv(gym.Env):
         # most 100 points. A 200-point terminal penalty therefore keeps every
         # collision/stall life negative while making each safe metre valuable.
         self.training_frontier_reward_cap = 100.0
+        self.training_centerline_potential_cap = 20.0
         target_frontier_m = (
             self.route_progress.length_m * self.race_laps
             if self.training_mode and self.route_progress is not None else 0.0
@@ -255,7 +256,10 @@ class OfficialRaceEnv(gym.Env):
                 lateral_ratio = min(
                     1.0, initial_lateral / self.route_progress.max_lateral_m
                 )
-                self._centerline_potential = -5.0 * lateral_ratio * lateral_ratio
+                self._centerline_potential = (
+                    -getattr(self, "training_centerline_potential_cap", 20.0)
+                    * lateral_ratio * lateral_ratio
+                )
         self._last_snap = snap
         initial_obs = self._observation_builder.reset(snap)
         info = self._build_info(snap, metrics, collision_event=False)
@@ -403,7 +407,10 @@ class OfficialRaceEnv(gym.Env):
                     lateral_ratio = min(
                         1.0, lateral / self.route_progress.max_lateral_m
                     )
-                    next_potential = -5.0 * lateral_ratio * lateral_ratio
+                    next_potential = (
+                        -getattr(self, "training_centerline_potential_cap", 20.0)
+                        * lateral_ratio * lateral_ratio
+                    )
                     centerline_shaping = next_potential - self._centerline_potential
                     self._centerline_potential = next_potential
             frontier_advanced = max(0.0, float((progress or {}).get("advanced_m", 0.0)))
@@ -512,6 +519,9 @@ class OfficialRaceEnv(gym.Env):
             info["training_frontier_reward_per_m"] = reward_per_m
             info["training_frontier_reward_cap"] = reward_cap
             info["training_centerline_shaping"] = centerline_shaping
+            info["training_centerline_potential_cap"] = (
+                getattr(self, "training_centerline_potential_cap", 20.0)
+            )
             info["training_success"] = training_goal_reached
             info["training_frontier_projection_valid"] = (
                 bool(progress.get("current_projection_valid")) if progress is not None else False

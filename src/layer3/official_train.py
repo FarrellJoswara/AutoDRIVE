@@ -257,8 +257,8 @@ def train_official(
         raise ValueError("plateau_window_episodes must be >= 2 and plateau_patience >= 1")
     if min(plateau_min_timesteps, max_duration_hours) < 0:
         raise ValueError("plateau_min_timesteps and max_duration_hours must be non-negative")
-    if collision_penalty_magnitude <= 100 or failed_episode_penalty <= 100:
-        raise ValueError("official terminal penalties must exceed the 100-point frontier reward cap")
+    if collision_penalty_magnitude <= 120 or failed_episode_penalty <= 120:
+        raise ValueError("official terminal penalties must exceed the 120-point progress and centerline reward cap")
     if lap_completion_reward != 0:
         raise ValueError("official lap-learning reward uses verified lap completion as a terminal goal, not a lap bonus")
 
@@ -493,13 +493,15 @@ def train_official(
                 "positive_reward": "new high-water route frontier distance; normalized to a 100-point cap at the configured lap target; no pace multiplier or lap bonus",
                 "frontier_progress_per_m": "100 / (frontier_route_length_m * race_laps)",
                 "frontier_reward_cap": 100.0,
+                "centerline_potential_cap": 20.0,
+                "maximum_shaped_progress_return": 120.0,
                 "pace_target_mps": 6.0,
                 "pace_bonus_strength": 0.0,
                 "pace_source": "disabled; each new frontier metre has fixed reward",
                 "backward_speed_penalty_per_m": backward_speed_penalty_scale,
                 "backward_speed_deadband_mps": 0.1,
-                "collision_cost": f"{collision_penalty_magnitude:g} fixed; no frontier clawback; maximum capped progress return is 100",
-                "non_collision_failure_cost": f"{failed_episode_penalty:g} fixed; no frontier clawback; maximum capped progress return is 100",
+                "collision_cost": f"{collision_penalty_magnitude:g} fixed; no frontier clawback; maximum shaped progress return is 120",
+                "non_collision_failure_cost": f"{failed_episode_penalty:g} fixed; no frontier clawback; maximum shaped progress return is 120",
                 "frontier_stall": f"end and reset life after {frontier_stagnation_s:g} seconds without frontier progress; apply the configured fixed non-collision failure penalty",
                 "slip_penalty": 0.0,
                 "steering_change_penalty": 0.0,

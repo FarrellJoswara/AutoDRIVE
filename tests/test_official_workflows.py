@@ -639,6 +639,10 @@ def test_official_settings_bound_worker_count():
     with pytest.raises(ValueError):
         OfficialTrainSettings(collision_penalty_magnitude=100.0)
     with pytest.raises(ValueError):
+        OfficialTrainSettings(collision_penalty_magnitude=120.0)
+    with pytest.raises(ValueError):
+        OfficialTrainSettings(failed_episode_penalty=120.0)
+    with pytest.raises(ValueError):
         OfficialTrainSettings(lap_completion_reward=1.0)
 
 
