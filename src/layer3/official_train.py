@@ -229,12 +229,12 @@ def train_official(
     race_laps: int = 10,
     warmup_laps: int = 0,
     time_cost_per_simulated_second: float = 0.0,
-    collision_penalty_magnitude: float = 100.0,
-    collision_reward_percent: float = 100.0,
+    collision_penalty_magnitude: float = 200.0,
+    collision_reward_percent: float = 0.0,
     lap_completion_reward: float = 0.0,
-    failed_episode_penalty: float = 100.0,
+    failed_episode_penalty: float = 200.0,
     backward_speed_penalty_scale: float = 10.0,
-    episode_failure_reward_percent: float = 100.0,
+    episode_failure_reward_percent: float = 0.0,
     frontier_stagnation_s: float = 5.0,
     observation_profile: str = "official_sensors_camera",
     steering_action_scale: float = 1.0,
@@ -257,6 +257,10 @@ def train_official(
         raise ValueError("plateau_window_episodes must be >= 2 and plateau_patience >= 1")
     if min(plateau_min_timesteps, max_duration_hours) < 0:
         raise ValueError("plateau_min_timesteps and max_duration_hours must be non-negative")
+    if collision_penalty_magnitude <= 100 or failed_episode_penalty <= 100:
+        raise ValueError("official terminal penalties must exceed the 100-point frontier reward cap")
+    if lap_completion_reward != 0:
+        raise ValueError("official lap-learning reward uses verified lap completion as a terminal goal, not a lap bonus")
 
     from stable_baselines3.common.callbacks import CheckpointCallback
     from stable_baselines3.common.logger import configure
@@ -470,9 +474,9 @@ def train_official(
             "episode": {
                 "frontier_source": "restricted official IPS position; Porto practice-track mesh-aligned centerline",
                 "frontier_stagnation_s": frontier_stagnation_s,
-                "collision_behavior": "apply collision penalty; terminate the episode and reset through the official training API to the configured spawn",
+                "collision_behavior": "apply a fixed penalty; terminate the episode and reset through the official training API to the configured spawn",
                 "training_watchdog_s": training_timeout_s,
-                "laps": "official lap-counter increases earn the configured training milestone reward; they do not terminate an episode",
+                "laps": "end successfully after the configured official lap count when route-frontier distance also confirms at least 95% of the target distance",
             },
             "observation_profile": observation_profile,
             "actions": {
@@ -486,16 +490,17 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
-                "positive_reward": "new high-water route frontier distance; no pace multiplier or lap bonus",
-                "frontier_progress_per_m": 10.0,
+                "positive_reward": "new high-water route frontier distance; normalized to a 100-point cap at the configured lap target; no pace multiplier or lap bonus",
+                "frontier_progress_per_m": "100 / (frontier_route_length_m * race_laps)",
+                "frontier_reward_cap": 100.0,
                 "pace_target_mps": 6.0,
                 "pace_bonus_strength": 0.0,
                 "pace_source": "disabled; each new frontier metre has fixed reward",
                 "backward_speed_penalty_per_m": backward_speed_penalty_scale,
                 "backward_speed_deadband_mps": 0.1,
-                "collision_cost": f"{collision_penalty_magnitude:g} + {collision_reward_percent:g}% of positive frontier return",
-                "non_collision_failure_cost": f"{failed_episode_penalty:g} + {episode_failure_reward_percent:g}% of positive frontier return",
-                "frontier_stall": f"end and reset life after {frontier_stagnation_s:g} seconds without frontier progress; apply the configured non-collision failure penalty and clawback",
+                "collision_cost": f"{collision_penalty_magnitude:g} fixed; no frontier clawback; maximum capped progress return is 100",
+                "non_collision_failure_cost": f"{failed_episode_penalty:g} fixed; no frontier clawback; maximum capped progress return is 100",
+                "frontier_stall": f"end and reset life after {frontier_stagnation_s:g} seconds without frontier progress; apply the configured fixed non-collision failure penalty",
                 "slip_penalty": 0.0,
                 "steering_change_penalty": 0.0,
                 "lap_completion_bonus": lap_completion_reward,
@@ -619,12 +624,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--race-laps", type=int, default=10)
     parser.add_argument("--warmup-laps", type=int, default=0)
     parser.add_argument("--time-cost-per-simulated-second", type=float, default=0.0)
-    parser.add_argument("--collision-penalty-magnitude", type=float, default=100.0)
-    parser.add_argument("--collision-reward-percent", type=float, default=100.0)
+    parser.add_argument("--collision-penalty-magnitude", type=float, default=200.0)
+    parser.add_argument("--collision-reward-percent", type=float, default=0.0)
     parser.add_argument("--lap-completion-reward", type=float, default=0.0)
-    parser.add_argument("--failed-episode-penalty", type=float, default=100.0)
+    parser.add_argument("--failed-episode-penalty", type=float, default=200.0)
     parser.add_argument("--backward-speed-penalty-scale", type=float, default=10.0)
-    parser.add_argument("--episode-failure-reward-percent", type=float, default=100.0)
+    parser.add_argument("--episode-failure-reward-percent", type=float, default=0.0)
     parser.add_argument("--frontier-stagnation-s", type=float, default=5.0)
     parser.add_argument(
         "--observation-profile",

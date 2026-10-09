@@ -9,7 +9,7 @@ from src.layer4.hub.official_run_manager import OfficialRunManager
 from src.layer4.hub.official_models import checkpoint_settings, list_official_models
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
-from src.layer4.official_settings import OfficialTrainSettings
+from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
 
 
 @pytest.fixture
@@ -621,17 +621,46 @@ def test_official_settings_bound_worker_count():
     assert environment["AICAR_TRAIN_TIME_COST"] == "0.0"
     assert settings.lap_completion_reward == 0.0
     assert environment["AICAR_TRAIN_LAP_COMPLETION_REWARD"] == "0.0"
-    assert settings.collision_reward_percent == 100.0
-    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "100.0"
+    assert settings.collision_penalty_magnitude == 200.0
+    assert settings.collision_reward_percent == 0.0
+    assert environment["AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE"] == "200.0"
+    assert environment["AICAR_TRAIN_COLLISION_REWARD_PERCENT"] == "0.0"
     assert settings.backward_speed_penalty_scale == 10.0
     assert environment["AICAR_TRAIN_BACKWARD_SPEED_PENALTY_SCALE"] == "10.0"
-    assert environment["AICAR_TRAIN_FAILURE_REWARD_PERCENT"] == "100.0"
+    assert settings.failed_episode_penalty == 200.0
+    assert environment["AICAR_TRAIN_FAILURE_REWARD_PERCENT"] == "0.0"
+    assert environment["AICAR_TRAIN_FAILURE_PENALTY"] == "200.0"
     with pytest.raises(ValueError):
         OfficialTrainSettings(n_envs=9)
     assert OfficialTrainSettings(device="cuda").to_container_env(hub_url="http://hub", run_id="r")["AICAR_PPO_DEVICE"] == "cuda"
     assert environment["AICAR_AUTO_EVALUATION_ENABLED"] == "1"
     assert environment["AICAR_AUTO_EVALUATION_TRIGGER"] == "steps"
     assert environment["AICAR_AUTO_EVALUATION_INTERVAL"] == "50000"
+    with pytest.raises(ValueError):
+        OfficialTrainSettings(collision_penalty_magnitude=100.0)
+    with pytest.raises(ValueError):
+        OfficialTrainSettings(lap_completion_reward=1.0)
+
+
+def test_old_reward_settings_migrate_to_safe_lap_learning(tmp_path):
+    path = tmp_path / "official-settings.json"
+    path.write_text(json.dumps({
+        "time_cost_per_simulated_second": 5.0,
+        "collision_penalty_magnitude": 100.0,
+        "collision_reward_percent": 100.0,
+        "lap_completion_reward": 100.0,
+        "failed_episode_penalty": 100.0,
+        "episode_failure_reward_percent": 100.0,
+    }))
+
+    settings = load_official_train_settings(path)
+
+    assert settings.time_cost_per_simulated_second == 0.0
+    assert settings.collision_penalty_magnitude == 200.0
+    assert settings.collision_reward_percent == 0.0
+    assert settings.lap_completion_reward == 0.0
+    assert settings.failed_episode_penalty == 200.0
+    assert settings.episode_failure_reward_percent == 0.0
 
 
 def test_automatic_evaluation_schedule_counts_run_relative_steps_and_vector_episodes():

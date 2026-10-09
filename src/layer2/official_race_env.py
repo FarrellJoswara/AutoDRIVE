@@ -57,12 +57,12 @@ class OfficialRaceEnv(gym.Env):
         training_mode: bool = False,
         training_timeout_s: float = 600.0,
         training_time_cost_per_simulated_second: float = 0.0,
-        training_collision_penalty_magnitude: float = 100.0,
-        training_collision_reward_percent: float = 100.0,
+        training_collision_penalty_magnitude: float = 200.0,
+        training_collision_reward_percent: float = 0.0,
         training_lap_completion_reward: float = 0.0,
-        training_failure_penalty: float = 100.0,
+        training_failure_penalty: float = 200.0,
         training_backward_speed_penalty_scale: float = 10.0,
-        training_failure_reward_percent: float = 100.0,
+        training_failure_reward_percent: float = 0.0,
         training_frontier_stagnation_s: float = 5.0,
         stop_on_collision: bool = False,
         frontier_path: Optional[Path] = None,
@@ -78,6 +78,17 @@ class OfficialRaceEnv(gym.Env):
             raise ValueError("straight_throttle_steering_threshold must be in [0, 1]")
 
         self.training_mode = bool(training_mode)
+        if self.training_mode and (
+            float(training_collision_penalty_magnitude) <= 100.0
+            or float(training_failure_penalty) <= 100.0
+        ):
+            raise ValueError(
+                "official training terminal penalties must exceed the 100-point frontier reward cap"
+            )
+        if self.training_mode and float(training_lap_completion_reward) != 0.0:
+            raise ValueError(
+                "official lap learning disables lap bonuses; verified lap completion ends the life successfully"
+            )
         if observation_profile not in (
             "official_sensors", "official_sensors_history", "official_sensors_camera"
         ):
@@ -140,6 +151,18 @@ class OfficialRaceEnv(gym.Env):
         )
         self.warmup_laps = int(warmup_laps)
         self.race_laps = int(race_laps)
+        # Normalize per-metre reward so the full configured lap target pays at
+        # most 100 points. A 200-point terminal penalty therefore keeps every
+        # collision/stall life negative while making each safe metre valuable.
+        self.training_frontier_reward_cap = 100.0
+        target_frontier_m = (
+            self.route_progress.length_m * self.race_laps
+            if self.training_mode and self.route_progress is not None else 0.0
+        )
+        self.training_frontier_reward_per_m = (
+            self.training_frontier_reward_cap / target_frontier_m
+            if target_frontier_m > 0 else 0.0
+        )
         self.steering_action_scale = float(steering_action_scale)
         self.straight_throttle_gain = float(straight_throttle_gain)
         self.straight_throttle_steering_threshold = float(straight_throttle_steering_threshold)
@@ -345,6 +368,15 @@ class OfficialRaceEnv(gym.Env):
         truncated = False
         if self.training_mode:
             self._training_elapsed_s += step_duration_s
+            route_length_m = max(
+                0.0, float(getattr(self.route_progress, "length_m", 0.0))
+            )
+            target_frontier_m = route_length_m * self.race_laps
+            reward_per_m = getattr(
+                self, "training_frontier_reward_per_m",
+                100.0 / target_frontier_m if target_frontier_m > 0 else 0.0,
+            )
+            reward_cap = getattr(self, "training_frontier_reward_cap", 100.0)
             position = metrics.position
             progress = None
             if self.route_progress is not None and position is not None:
@@ -352,6 +384,10 @@ class OfficialRaceEnv(gym.Env):
                     float(position[0]), float(position[1]), now=self._training_elapsed_s
                 )
             frontier_advanced = max(0.0, float((progress or {}).get("advanced_m", 0.0)))
+            rewardable_frontier_advanced = min(
+                frontier_advanced,
+                max(0.0, target_frontier_m - self._episode_frontier_distance_m),
+            )
             self._episode_frontier_distance_m += frontier_advanced
             if frontier_advanced > 0:
                 self._frontier_last_push_s = self._training_elapsed_s
@@ -363,29 +399,34 @@ class OfficialRaceEnv(gym.Env):
                 self.training_frontier_stagnation_s > 0
                 and self._training_elapsed_s - self._frontier_last_push_s >= self.training_frontier_stagnation_s
             )
-            # Match the verified fastest-champion training procedure: a
-            # collision ends the episode, receives its collision penalty, and
-            # the next reset uses the official training reset at the spawn.
-            # Continuing through simulator checkpoint recovery produced long
-            # episodes with repeated collisions and little useful progress.
-            terminated = bool(collision_event or frontier_stalled)
+            training_goal_reached = bool(
+                not collision_event
+                and self._race_laps_count >= self.race_laps
+                and self._episode_frontier_distance_m >= target_frontier_m * 0.95
+            )
+            # A clean official lap target ends successfully only when the
+            # simulator counter and route frontier agree. Collision and stall
+            # still end the life immediately.
+            terminated = bool(collision_event or frontier_stalled or training_goal_reached)
             truncated = bool(
                 not terminated and self.training_timeout_s > 0
                 and self._training_elapsed_s >= self.training_timeout_s
             )
             reason = (
                 "collision" if collision_event
+                else "training_goal_reached" if training_goal_reached
                 else "frontier_stagnation" if frontier_stalled
                 else None
             )
             # A frontier stall is a terminal training failure just like the
-            # watchdog timeout. Keep it out of the collision branch, which has
-            # its own configured penalty and positive-return clawback.
-            episode_failure = bool(frontier_stalled or truncated)
+            # watchdog timeout. Successful target completion has no failure cost.
+            episode_failure = bool(
+                not training_goal_reached and (frontier_stalled or truncated)
+            )
             components = compute_reward_components(
                 v_long=float(snap.v_long),
                 step_duration_s=step_duration_s,
-                frontier_advanced_m=frontier_advanced,
+                frontier_advanced_m=rewardable_frontier_advanced,
                 frontier_average_speed_mps=average_frontier_speed,
                 frontier_current_speed_mps=(frontier_advanced / step_duration_s if step_duration_s > 0 else 0.0),
                 positive_episode_return=self._positive_episode_return,
@@ -395,11 +436,10 @@ class OfficialRaceEnv(gym.Env):
                 prev_steering=self._last_training_steering,
                 steering=float(steering),
                 cfg=RewardConfig(
-                    route_progress_scale=10.0,
+                    route_progress_scale=reward_per_m,
                     frontier_pace_target_mps=6.0,
-                    # Official training rewards safe frontier distance, not
-                    # raw pace. Pace multiplication let a fast crash bank a
-                    # large positive return before its partial clawback.
+                    # Fixed distance reward and a bounded life budget make
+                    # surviving farther better than an early terminal crash.
                     frontier_pace_bonus_strength=0.0,
                     frontier_pace_source="episode_average",
                     time_penalty_per_second=self.training_time_cost_per_simulated_second,
@@ -445,6 +485,9 @@ class OfficialRaceEnv(gym.Env):
             )
             info["training_positive_frontier_return"] = self._positive_episode_return
             info["training_frontier_distance_m"] = self._episode_frontier_distance_m
+            info["training_frontier_reward_per_m"] = reward_per_m
+            info["training_frontier_reward_cap"] = reward_cap
+            info["training_success"] = training_goal_reached
             info["training_frontier_projection_valid"] = (
                 bool(progress.get("current_projection_valid")) if progress is not None else False
             )

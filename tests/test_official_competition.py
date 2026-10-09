@@ -807,7 +807,7 @@ def test_official_training_rewards_frontier_and_completed_laps(tmp_path):
     assert info["current_progress_line"] is not None
     assert info["route_projection_valid"] is True
     assert info["reward_components"] == info["training_reward_components"]
-    assert info["training_reward_components"]["route_progress"] == 10.0
+    assert info["training_reward_components"]["route_progress"] == 2.5
     assert progress_reward == info["training_reward_components"]["total"]
     assert progress_reward > 0.0
     assert not terminated and not truncated
@@ -820,13 +820,11 @@ def test_official_training_rewards_frontier_and_completed_laps(tmp_path):
     assert info["race_laps_completed"] == 1
 
     _, collision_reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
-    assert info["training_reward_components"]["collision"] < -100.0
-    assert np.isclose(
-        info["training_reward_components"]["collision"],
-        -(100.0 + env._positive_episode_return),
-    )
+    assert info["training_reward_components"]["collision"] == -200.0
     assert collision_reward == info["training_reward_components"]["total"]
     assert collision_reward < 0.0
+    assert progress_reward + lap_reward + collision_reward > -200.0
+    assert progress_reward + lap_reward + collision_reward < 0.0
     assert info["race_collisions"] == 1
     assert terminated and not truncated
     assert info["termination_reason"] == "collision"
@@ -851,7 +849,7 @@ def test_official_training_watchdog_charges_failure_penalty(tmp_path):
 
     _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
-    assert reward == -100.0
+    assert reward == -200.0
     assert not terminated and truncated
     assert info["termination_reason"] == "training_watchdog_timeout"
     assert info["training_elapsed_s"] == 2.0
@@ -886,6 +884,53 @@ def test_official_training_time_cost_uses_elapsed_action_interval(tmp_path):
     assert info["training_reward_components"]["time_cost"] == -15.0
     assert info["training_reward_components"]["lap_completion"] == 0.0
     assert reward == info["training_reward_components"]["total"]
+
+
+def test_official_training_requires_lap_counter_and_route_frontier_for_success(tmp_path):
+    class TrainingRacer(FakeRacer):
+        def reset_simulation_for_training(self, **kwargs):
+            self.telemetry = _snapshot(lap=0, last_lap=0.0, collisions=0)
+            return self.telemetry
+
+    racer = TrainingRacer([
+        _snapshot(lap=0, last_lap=0.0, collisions=0, position=(0.0, 0.0, 0.0)),
+        # An early counter increment must not end this life until route
+        # frontier distance confirms that the lap geometry was covered.
+        _snapshot(lap=1, last_lap=12.0, collisions=0, position=(1.0, 0.0, 0.0)),
+        _snapshot(lap=1, last_lap=12.0, collisions=0, position=(1.0, 1.0, 0.0)),
+        _snapshot(lap=1, last_lap=12.0, collisions=0, position=(0.0, 1.0, 0.0)),
+        _snapshot(lap=1, last_lap=12.0, collisions=0, position=(0.0, 0.0, 0.0)),
+    ])
+    route = tmp_path / "centerline.csv"
+    route.write_text("0,0,1.5,1.5\n1,0,1.5,1.5\n1,1,1.5,1.5\n0,1,1.5,1.5\n0,0,1.5,1.5\n")
+    (tmp_path / "official_frontier.json").write_text('{"spawn_xy": [0.0, 0.0]}')
+    env = OfficialRaceEnv(
+        racer=racer, training_mode=True, training_timeout_s=0.0,
+        warmup_laps=0, race_laps=1,
+        frontier_path=route,
+    )
+    env.reset()
+
+    terminated = False
+    for index in range(4):
+        _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
+        assert not truncated
+        if index < 3:
+            assert not terminated
+    assert terminated, {
+        "race_laps_completed": info.get("race_laps_completed"),
+        "official_lap_count": info.get("official_lap_count"),
+        "last_lap_count": env._last_lap_count,
+        "initial_lap_count": env._initial_lap_count,
+        "frontier_distance": info.get("training_frontier_distance_m"),
+        "frontier_progress": info.get("frontier_progress_m"),
+        "success": info.get("training_success"),
+    }
+    assert info["training_success"] is True
+    assert info["termination_reason"] == "training_goal_reached"
+    assert info["training_frontier_distance_m"] >= 4.0 * 0.95
+    assert info["training_frontier_reward_cap"] == 100.0
+    assert np.isclose(reward + sum([25.0, 25.0, 25.0]), 100.0)
 
 
 def test_official_policy_transport_cannot_reset_the_simulator():

@@ -49,12 +49,12 @@ class OfficialTrainSettings(BaseModel):
     race_laps: int = Field(default=10, ge=1, le=100)
     warmup_laps: int = Field(default=0, ge=0, le=20)
     time_cost_per_simulated_second: float = Field(default=0.0, ge=0)
-    collision_penalty_magnitude: float = Field(default=100.0, ge=0)
-    collision_reward_percent: float = Field(default=100.0, ge=0, le=100)
-    lap_completion_reward: float = Field(default=0.0, ge=0)
-    failed_episode_penalty: float = Field(default=100.0, ge=0)
+    collision_penalty_magnitude: float = Field(default=200.0, ge=101)
+    collision_reward_percent: float = Field(default=0.0, ge=0, le=100)
+    lap_completion_reward: float = Field(default=0.0, ge=0, le=0)
+    failed_episode_penalty: float = Field(default=200.0, ge=101)
     backward_speed_penalty_scale: float = Field(default=10.0, ge=0)
-    episode_failure_reward_percent: float = Field(default=100.0, ge=0, le=100)
+    episode_failure_reward_percent: float = Field(default=0.0, ge=0, le=100)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
     ] = "official_sensors_camera"
@@ -133,13 +133,32 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
             raw.update({
                 "warmup_laps": 0,
                 "time_cost_per_simulated_second": 0.0,
-                "collision_penalty_magnitude": 100.0,
-                "collision_reward_percent": 100.0,
-                "failed_episode_penalty": 100.0,
+                "collision_penalty_magnitude": 200.0,
+                "collision_reward_percent": 0.0,
+                "failed_episode_penalty": 200.0,
                 "backward_speed_penalty_scale": 10.0,
-                "episode_failure_reward_percent": 100.0,
+                "episode_failure_reward_percent": 0.0,
                 "frontier_stagnation_s": 5.0,
             })
+        incompatible_reward_settings = (
+            float(raw.get("collision_penalty_magnitude", 200.0)) <= 100.0
+            or float(raw.get("failed_episode_penalty", 200.0)) <= 100.0
+            or float(raw.get("collision_reward_percent", 0.0)) > 0.0
+            or float(raw.get("episode_failure_reward_percent", 0.0)) > 0.0
+            or float(raw.get("lap_completion_reward", 0.0)) > 0.0
+        )
+        # A previous run config can carry 100-point penalties and 100% return
+        # clawback. The current safe-progress objective needs a fixed cost above
+        # its bounded 100-point progress budget, with progress left credited.
+        if float(raw.get("collision_penalty_magnitude", 200.0)) <= 100.0:
+            raw["collision_penalty_magnitude"] = 200.0
+        if float(raw.get("failed_episode_penalty", 200.0)) <= 100.0:
+            raw["failed_episode_penalty"] = 200.0
+        if incompatible_reward_settings:
+            raw["time_cost_per_simulated_second"] = 0.0
+            raw["collision_reward_percent"] = 0.0
+            raw["episode_failure_reward_percent"] = 0.0
+            raw["lap_completion_reward"] = 0.0
     return OfficialTrainSettings.model_validate(raw)
 
 
