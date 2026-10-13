@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,7 @@ from src.layer3.behavior_cloning import (
     assess_teacher_collection,
     behavior_clone_actor,
     collect_policy_demonstrations,
+    collect_centerline_demonstrations,
     initialize_behavior_cloned_action_std,
     save_behavior_cloned_checkpoint,
 )
@@ -41,6 +43,59 @@ class _SensorEnv(gym.Env):
 
 
 class BehaviorCloningTests(unittest.TestCase):
+    def test_teacher_trace_keeps_privileged_diagnostics_outside_training_archive(self) -> None:
+        info = {
+            "position": [1.0, 2.0, 0.0], "yaw": 0.5,
+            "current_progress_m": 3.0, "true_speed": 0.2,
+            "frontier_speed_mps": 0.1,
+            "lidar_range_min": 0.06, "lidar_range_max": 10.0,
+        }
+        observations = {
+            "lidar": np.ones((1, LIDAR_BEAMS), np.float32),
+            "state": np.zeros((1, STATE_DIM), np.float32),
+        }
+
+        class Env:
+            num_envs = 1
+
+            def reset(self):
+                return observations
+
+            def env_method(self, name):
+                return [info]
+
+            def step(self, actions):
+                return observations, np.zeros(1), np.zeros(1, dtype=bool), [info]
+
+        class Expert:
+            def action_batch(self, infos, obs):
+                return np.asarray([[0.1, -0.2]], np.float32)
+
+        with TemporaryDirectory() as directory:
+            archive = Path(directory) / "demonstrations.npz"
+            phases = []
+            _, summary = collect_centerline_demonstrations(
+                Env(), Expert(), steps=2, output_path=archive,
+                progress_callback=lambda *values: phases.append(values),
+            )
+
+            with np.load(archive) as saved:
+                saved_files = set(saved.files)
+            trace = [json.loads(line) for line in archive.with_name("teacher_trace.jsonl").read_text().splitlines()]
+
+        self.assertEqual(len(trace), 2)
+        self.assertEqual(trace[0]["position_xy_m"], [1.0, 2.0])
+        self.assertEqual(summary["latest_teacher_poses"], [{
+            "env_id": 0, "pose": [1.0, 2.0], "yaw": 0.5, "speed": 0.2,
+        }])
+        np.testing.assert_allclose(trace[0]["teacher_action"], [0.1, -0.2])
+        self.assertNotIn("position", saved_files)
+        self.assertNotIn("yaw", saved_files)
+        self.assertEqual(phases[-1][3], [{
+            "env_id": 0, "pose": [1.0, 2.0], "yaw": 0.5, "speed": 0.2,
+            "route_progress_m": 3.0,
+        }])
+
     def test_teacher_collection_gate_accepts_only_clean_collision_free_episode(self) -> None:
         clean = assess_teacher_collection({
             "completed_episodes": 1,
@@ -62,6 +117,13 @@ class BehaviorCloningTests(unittest.TestCase):
         self.assertIn("teacher_collection_collision_detected", collided["reason"])
         self.assertIn("teacher_collection_failed_episode", collided["reason"])
 
+        stalled = assess_teacher_collection({
+            "completed_episodes": 0,
+            "successful_episodes": 0,
+            "stagnation_detected": True,
+        })
+        self.assertIn("teacher_collection_stalled", stalled["reason"])
+
     def test_teacher_collection_gate_rejects_missing_clean_episode(self) -> None:
         result = assess_teacher_collection({
             "completed_episodes": 0,
@@ -78,7 +140,8 @@ class BehaviorCloningTests(unittest.TestCase):
             route, lambda phase, **details: phases.append((phase, details))
         )
 
-        publish(4, 10, [2.5])
+        teacher_poses = [{"env_id": 0, "pose": [1.25, 2.5], "yaw": 0.5, "speed": 0.2}]
+        publish(4, 10, [2.5], teacher_poses)
 
         self.assertEqual(phases, [(
             "demonstration_collection",
@@ -87,6 +150,7 @@ class BehaviorCloningTests(unittest.TestCase):
                 "target_steps_per_env": 10,
                 "route_progress_m": [2.5],
                 "route_length_m": 31.1,
+                "teacher_poses": teacher_poses,
             },
         )])
 
@@ -285,8 +349,9 @@ class BehaviorCloningTests(unittest.TestCase):
                 return self.reset(), np.zeros(1), np.zeros(1, dtype=bool), [{}]
 
         class Expert:
-            def action_batch(self, infos):
+            def action_batch(self, infos, observations=None):
                 assert infos[0]["position"] == [1.0, 2.0]
+                assert observations is not None and "lidar" in observations
                 return np.asarray([[0.2, -0.1]], dtype=np.float32)
 
         with TemporaryDirectory() as directory:
@@ -294,11 +359,15 @@ class BehaviorCloningTests(unittest.TestCase):
             progress_updates = []
             dataset, summary = collect_centerline_demonstrations(
                 FakeVecEnv(), Expert(), steps=2, output_path=path,
-                progress_callback=lambda completed, target, stations: progress_updates.append(
-                    (completed, target, stations)
+                progress_callback=lambda completed, target, stations, poses: progress_updates.append(
+                    (completed, target, stations, poses)
                 ),
             )
             self.assertEqual(summary["transitions"], 2)
+            self.assertEqual(progress_updates[-1][3], [{
+                "env_id": 0, "pose": [1.0, 2.0], "yaw": 0.25, "speed": None,
+                "route_progress_m": 3.0,
+            }])
             self.assertEqual(
                 summary["route_direction_diagnostics"],
                 [{
@@ -313,7 +382,7 @@ class BehaviorCloningTests(unittest.TestCase):
                 }],
             )
             self.assertEqual(set(dataset), {"lidar", "state", "camera", "actions"})
-            self.assertEqual(progress_updates[-1], (2, 2, [3.0]))
+            self.assertEqual(progress_updates[-1][:3], (2, 2, [3.0]))
             with np.load(path) as saved:
                 self.assertEqual(set(saved.files), {"lidar", "state", "camera", "actions"})
                 self.assertEqual(saved["camera"].dtype, np.uint8)
@@ -360,15 +429,17 @@ class BehaviorCloningTests(unittest.TestCase):
                 }]
 
         class Expert:
-            def action_batch(self, infos):
+            def action_batch(self, infos, observations=None):
                 return np.zeros((1, 2), dtype=np.float32)
 
         with TemporaryDirectory() as directory:
-            _, summary = collect_centerline_demonstrations(
+            dataset, summary = collect_centerline_demonstrations(
                 FakeVecEnv(), Expert(), steps=2,
                 output_path=Path(directory) / "episodes.npz",
             )
 
+        self.assertEqual(summary["transitions"], 1)
+        self.assertEqual(dataset["actions"].shape, (1, 2))
         episode = summary["route_episode_diagnostics"][0]
         self.assertEqual(episode["reason"], "collision")
         self.assertEqual(episode["start_progress_m"], 10.0)
@@ -386,6 +457,83 @@ class BehaviorCloningTests(unittest.TestCase):
         self.assertEqual(len(trace["preceding_steps"]), 1)
         self.assertEqual(trace["preceding_steps"][0]["teacher_action"], [0.0, 0.0])
         self.assertAlmostEqual(trace["preceding_steps"][0]["front_min_lidar_m"], 10.0)
+
+    def test_teacher_collection_stops_after_five_seconds_without_frontier_progress(self) -> None:
+        from src.layer3.behavior_cloning import collect_centerline_demonstrations
+
+        class FakeVecEnv:
+            num_envs = 1
+
+            def reset(self):
+                return {
+                    "lidar": np.ones((1, LIDAR_BEAMS), np.float32),
+                    "state": np.zeros((1, STATE_DIM), np.float32),
+                }
+
+            def env_method(self, method):
+                assert method == "get_current_info"
+                return [{
+                    "current_progress_m": 3.0,
+                    "time_since_push_s": 5.0,
+                }]
+
+            def step(self, actions):
+                raise AssertionError("stalled teacher must stop before issuing a step")
+
+        class Expert:
+            def action_batch(self, infos, observations=None):
+                raise AssertionError("stalled teacher must stop before computing an action")
+
+        with TemporaryDirectory() as directory:
+            dataset, summary = collect_centerline_demonstrations(
+                FakeVecEnv(), Expert(), steps=100,
+                output_path=Path(directory) / "stalled.npz",
+            )
+
+        self.assertEqual(summary["transitions"], 0)
+        self.assertTrue(summary["stagnation_detected"])
+        self.assertEqual(summary["stagnation_env_id"], 0)
+        gate = assess_teacher_collection(summary)
+        self.assertFalse(gate["ready"])
+        self.assertIn("teacher_collection_stalled", gate["reason"])
+        self.assertEqual(dataset["actions"].shape, (0, 2))
+
+    def test_teacher_collection_stops_after_successful_target_episode(self) -> None:
+        class FakeVecEnv:
+            num_envs = 1
+
+            def reset(self):
+                return {
+                    "lidar": np.ones((1, LIDAR_BEAMS), np.float32),
+                    "state": np.zeros((1, STATE_DIM), np.float32),
+                }
+
+            def env_method(self, method):
+                return [{"position": [0.0, 0.0], "yaw": 0.0}]
+
+            def step(self, actions):
+                return self.reset(), np.zeros(1), np.ones(1, dtype=bool), [{
+                    "episode_won": True,
+                    "termination_reason": "training_goal_reached",
+                    "current_progress_m": 10.0,
+                    "frontier_progress_m": 311.2,
+                    "lap_count": 10,
+                }]
+
+        class Expert:
+            def action_batch(self, infos, observations=None):
+                return np.asarray([[0.05, 0.0]], dtype=np.float32)
+
+        with TemporaryDirectory() as directory:
+            dataset, summary = collect_centerline_demonstrations(
+                FakeVecEnv(), Expert(), steps=100,
+                output_path=Path(directory) / "ten-lap-demo.npz",
+            )
+
+        self.assertEqual(summary["transitions"], 1)
+        self.assertEqual(summary["successful_episodes"], 1)
+        self.assertEqual(summary["route_episode_diagnostics"][0]["reason"], "training_goal_reached")
+        self.assertEqual(dataset["actions"].shape, (1, 2))
 
 
 if __name__ == "__main__":

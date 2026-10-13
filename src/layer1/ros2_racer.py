@@ -12,13 +12,17 @@ import threading
 import time
 import math
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .telemetry import TelemetrySnapshot
 
 
 class OfficialRosTransportError(RuntimeError):
     """A fatal or timed-out official ROS transport operation."""
+
+
+class OfficialTrainingResetCancelled(OfficialRosTransportError):
+    """Training reset exited promptly because the run was asked to stop."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,7 @@ class RaceMetrics:
     best_lap_time: float = 0.0
     collision_count: int = 0
     position: Optional[tuple[float, float, float]] = None
+    position_received_at: float = 0.0
 
 
 def _xyz(value: Any) -> str:
@@ -113,6 +118,12 @@ def ros_messages_to_bridge_payload(
         "V1 Linear Acceleration": _xyz(imu.linear_acceleration),
         "V1 Encoder Angles": f"{float(left)} {float(right)}",
         "V1 LIDAR Range Array": list(scan.ranges),
+        # Keep LaserScan geometry with the ranges. Layer 1 must not guess scan
+        # handedness from the payload source: ROS defines beam i at
+        # angle_min + i * angle_increment.
+        "V1 LIDAR Angle Min": float(scan.angle_min) if hasattr(scan, "angle_min") else None,
+        "V1 LIDAR Angle Increment": float(scan.angle_increment) if hasattr(scan, "angle_increment") else None,
+        "V1 LIDAR Angle Max": float(scan.angle_max) if hasattr(scan, "angle_max") else None,
         "V1 LIDAR Scan Rate": (
             1.0 / float(scan.scan_time) if float(scan.scan_time) > 0 else 40.0
         ),
@@ -245,6 +256,8 @@ class RacerRos2:
         self._last_scan_interval_source = "receipt_clock"
         self._last_control_scan_receipt = 0.0
         self._last_action_time = 0.0
+        self._command_expired = False
+        self.command_expiry_count = 0
         self._last_control_interval_s = 0.0
         self._last_control_wall_interval_s = 0.0
         self._sim_time = 0.0
@@ -304,6 +317,7 @@ class RacerRos2:
         try:
             while not self._closed and self._rclpy is not None and self._rclpy.ok():
                 self._rclpy.spin_once(self.node, timeout_sec=0.05)
+                self._expire_stale_command()
             if not self._closed:
                 self._fail_transport("ROS context stopped while the racer was active")
         except Exception as exc:
@@ -320,6 +334,24 @@ class RacerRos2:
         finally:
             if self._spin_state != "failed":
                 self._spin_state = "closed" if self._closed else "stopped"
+
+    def _expire_stale_command(self) -> None:
+        """Release latched throttle if the policy stops issuing commands.
+
+        Run on the ROS receive thread, independently of policy/preview work.
+        Preserve steering while coasting: straightening during a turn is unsafe.
+        This cannot protect against suspension of the entire host or ROS process.
+        """
+        with self._condition:
+            if (not self._publishers or not self._last_action_time
+                    or self._command_expired
+                    or time.monotonic() - self._last_action_time <= 0.25):
+                return
+            message = self._msg_types["Float32"]()
+            message.data = 0.0
+            self._publishers["throttle"].publish(message)
+            self._command_expired = True
+            self.command_expiry_count += 1
 
     def _fail_transport(self, message: str, cause: Optional[BaseException] = None) -> None:
         with self._condition:
@@ -364,6 +396,15 @@ class RacerRos2:
             if self.require_camera:
                 required.append("camera")
             camera_max_age = min(self.frame_timeout_s, 0.5)
+            topic_age_s = {
+                name: (None if name not in self._raw_receipts else max(0.0, now - self._raw_receipts[name]))
+                for name in required
+            }
+            fresh = all(
+                age is not None
+                and age <= (camera_max_age if name == "camera" else self.frame_timeout_s)
+                for name, age in topic_age_s.items()
+            )
             return {
                 "spin_state": self._spin_state,
                 "spin_error": None if self._spin_error is None else str(self._spin_error),
@@ -372,10 +413,38 @@ class RacerRos2:
                 "last_scan_age_s": (
                     None if not self._last_scan_receipt else max(0.0, now - self._last_scan_receipt)
                 ),
-                "topic_age_s": {
-                    name: (None if name not in self._raw_receipts else max(0.0, now - self._raw_receipts[name]))
-                    for name in required
-                },
+                "topic_age_s": topic_age_s,
+                "topic_fresh": fresh,
+                "required_topics": required,
+            }
+
+    def request_pause_neutral(self) -> Dict[str, Any]:
+        """Publish a bounded neutral actuator command at a learner pause point.
+
+        This confirms only that the ROS publisher accepted the calls; the
+        transport does not expose a physical-actuator acknowledgement.
+        """
+        with self._condition:
+            self._check_wait_state()
+            throttle_publisher = self._publishers.get("throttle")
+            steering_publisher = self._publishers.get("steering")
+            if throttle_publisher is None or steering_publisher is None or self._msg_types is None:
+                raise OfficialRosTransportError("official ROS actuator publishers are unavailable")
+            throttle = self._msg_types["Float32"]()
+            throttle.data = 0.0
+            steering = self._msg_types["Float32"]()
+            steering.data = 0.0
+            throttle_publisher.publish(throttle)
+            steering_publisher.publish(steering)
+            self._last_action_time = time.monotonic()
+            self._command_expired = True
+            self.command_expiry_count += 1
+            status = self.transport_status()
+            return {
+                "published": True,
+                "command": {"throttle": 0.0, "steering": 0.0},
+                "transport_acknowledged": False,
+                **status,
             }
 
     def _check_wait_state(self) -> None:
@@ -407,6 +476,7 @@ class RacerRos2:
                 self._race_metrics = replace(
                     self._race_metrics,
                     position=(float(message.x), float(message.y), float(message.z)),
+                    position_received_at=now,
                 )
                 self._race_metrics_received.add(field)
                 self._position_update_count += 1
@@ -509,12 +579,14 @@ class RacerRos2:
                 self._condition.notify_all()
 
     def _wait_for_scan_after(
-        self, previous_step: int, *, timeout_s: Optional[float] = None
+        self, previous_step: int, *, timeout_s: Optional[float] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> TelemetrySnapshot:
         wait_s = self.frame_timeout_s if timeout_s is None else float(timeout_s)
         deadline = time.monotonic() + wait_s
         with self._condition:
             while self._step_counter <= previous_step and not self._closed:
+                self._raise_if_training_reset_cancelled(cancel_check)
                 self._check_wait_state()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -524,7 +596,17 @@ class RacerRos2:
                     )
                 self._condition.wait(min(remaining, 0.1))
             self._check_wait_state()
+            self._raise_if_training_reset_cancelled(cancel_check)
             return self._telemetry
+
+    @staticmethod
+    def _raise_if_training_reset_cancelled(
+        cancel_check: Optional[Callable[[], bool]],
+    ) -> None:
+        if cancel_check is not None and cancel_check():
+            raise OfficialTrainingResetCancelled(
+                "official training simulator reset was cancelled by the run stop request"
+            )
 
     def _wait_for_control_frame(
         self, previous_step: int, *, command_time: float, earliest_time: float
@@ -557,11 +639,15 @@ class RacerRos2:
                 self._condition.wait(min(remaining, 0.1))
             self._check_wait_state()
 
-    def wait_until_ready(self) -> TelemetrySnapshot:
+    def wait_until_ready(
+        self, *, cancel_check: Optional[Callable[[], bool]] = None
+    ) -> TelemetrySnapshot:
         # Initial discovery can take longer than an ordinary policy step.
-        return self._wait_for_scan_after(0, timeout_s=self.timeout_s)
+        return self._wait_for_scan_after(0, timeout_s=self.timeout_s, cancel_check=cancel_check)
 
-    def wait_for_race_metrics(self) -> RaceMetrics:
+    def wait_for_race_metrics(
+        self, *, cancel_check: Optional[Callable[[], bool]] = None
+    ) -> RaceMetrics:
         if not self.include_race_metrics:
             raise RuntimeError("Race metrics are disabled for the policy transport")
         required = {
@@ -571,6 +657,7 @@ class RacerRos2:
         deadline = time.monotonic() + self.timeout_s
         with self._condition:
             while not required.issubset(self._race_metrics_received):
+                self._raise_if_training_reset_cancelled(cancel_check)
                 self._check_wait_state()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -580,6 +667,7 @@ class RacerRos2:
                     )
                 self._condition.wait(min(remaining, 0.1))
             self._check_wait_state()
+            self._raise_if_training_reset_cancelled(cancel_check)
             return self._race_metrics
 
     def reset_simulation_for_training(
@@ -588,6 +676,7 @@ class RacerRos2:
         expected_position: Optional[tuple[float, float]] = None,
         position_tolerance_m: float = 0.75,
         reset_attempts: int = 3,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> TelemetrySnapshot:
         """Reset the official simulator through its documented training API.
 
@@ -607,8 +696,13 @@ class RacerRos2:
             raise ValueError("reset_attempts must be positive")
         if position_tolerance_m <= 0:
             raise ValueError("position_tolerance_m must be positive")
-        snap = self.wait_until_ready()
+        snap = (
+            self.wait_until_ready()
+            if cancel_check is None
+            else self.wait_until_ready(cancel_check=cancel_check)
+        )
         for attempt in range(reset_attempts):
+            self._raise_if_training_reset_cancelled(cancel_check)
             with self._condition:
                 previous_step = self._step_counter
                 previous_position_update = self._position_update_count
@@ -618,13 +712,20 @@ class RacerRos2:
             # The official simulator samples this command during its update
             # loop. Hold it across several 40 Hz ticks, then deassert it.
             deadline = time.monotonic() + 0.1
-            while time.monotonic() < deadline:
-                with self._condition:
-                    self._check_wait_state()
-                    self._condition.wait(min(0.02, deadline - time.monotonic()))
-            reset_msg.data = False
-            publisher.publish(reset_msg)
-            snap = self._wait_for_scan_after(previous_step)
+            try:
+                while time.monotonic() < deadline:
+                    self._raise_if_training_reset_cancelled(cancel_check)
+                    with self._condition:
+                        self._check_wait_state()
+                        self._condition.wait(min(0.02, deadline - time.monotonic()))
+            finally:
+                reset_msg.data = False
+                publisher.publish(reset_msg)
+            snap = (
+                self._wait_for_scan_after(previous_step)
+                if cancel_check is None
+                else self._wait_for_scan_after(previous_step, cancel_check=cancel_check)
+            )
 
             if expected_position is None or not self.include_race_metrics:
                 break
@@ -633,6 +734,7 @@ class RacerRos2:
             reached_spawn = False
             with self._condition:
                 while True:
+                    self._raise_if_training_reset_cancelled(cancel_check)
                     self._check_wait_state()
                     position = self._race_metrics.position
                     is_fresh = self._position_update_count > previous_position_update
@@ -683,6 +785,7 @@ class RacerRos2:
                 self._telemetry.lidar_scan_rate,
             )
             self._last_action_time = command_time
+            self._command_expired = False
         if self._publishers:
             throttle_msg = self._msg_types["Float32"]()
             throttle_msg.data = float(throttle)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from src.layer4.hub.app import _watch_snapshot_age_ms
+from src.layer4.hub.watch_utils import watch_snapshot_age_ms as _watch_snapshot_age_ms
 
 
 class WatchSnapshotAgeTests(unittest.TestCase):

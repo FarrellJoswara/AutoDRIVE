@@ -15,11 +15,46 @@ from statistics import median
 from typing import Any
 
 from src.layer4.hub.official_models import checkpoint_settings
+from src.layer4.hub.campaign_deadline import assert_campaign_allows
 from src.layer4.settings import ROOT
+from src.layer3.bc_artifact import (
+    verify_bc_checkpoint,
+    verify_ppo_lineage_checkpoint,
+    verify_training_probe_checkpoint,
+)
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _evaluation_child_settings(
+    settings: dict[str, Any], model_path: str, *, race_laps: int,
+) -> dict[str, Any]:
+    """Build a fresh evaluation run config from a trainer/checkpoint config.
+
+    The validation protocol is carried separately in ``evaluation_options``.
+    An evaluation child never launches its own automatic evaluations, so it
+    must not inherit the parent's ``training_probe`` auto-evaluation mode.
+    """
+    return {
+        **settings,
+        "resume": model_path,
+        "n_envs": 1,
+        "warmup_laps": 1,
+        "race_laps": race_laps,
+        "total_timesteps": 0,
+        "automatic_evaluation_enabled": False,
+        "automatic_evaluation_mode": "competitive",
+    }
+
+
+def _competitive_route_monitor_options() -> dict[str, Any]:
+    """Attach route telemetry to competitive reports without changing scoring."""
+    return {
+        "route_monitor_only": True,
+        "frontier_path": str(ROOT / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv"),
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -212,14 +247,41 @@ class OfficialEvaluationService:
         trigger_step: int | None = None,
         trigger_episode: int | None = None,
         trace_steps: int = 0,
+        validation_mode: str | None = None,
     ) -> dict[str, Any]:
         if source not in {"automatic", "manual"}:
             raise ValueError("evaluation source must be automatic or manual")
+        # Reject new queued evaluations at the hard deadline, not only when
+        # their simulator run eventually reaches the manager.
+        assert_campaign_allows("evaluation")
         model_path = Path(model_path).resolve()
         if not model_path.is_file() or model_path.suffix.lower() != ".zip":
             raise ValueError("evaluation checkpoint must be an existing .zip file")
         if isinstance(trace_steps, bool) or not 0 <= trace_steps <= 500:
             raise ValueError("trace_steps must be between 0 and 500")
+        if validation_mode not in {None, "bc_diagnostic", "training_probe"}:
+            raise ValueError("validation_mode must be bc_diagnostic or training_probe when provided")
+        if validation_mode == "training_probe" and source == "automatic" and not parent_run_id:
+            raise ValueError("automatic training_probe requires its parent training run")
+        if validation_mode == "bc_diagnostic":
+            verified = verify_bc_checkpoint(model_path)
+            if verified is None:
+                raise ValueError(
+                    "BC diagnostic requires a checkpoint authenticated by its adjacent ready summary, canonical path, and SHA-256"
+                )
+        elif validation_mode == "training_probe":
+            if source == "automatic":
+                verified = verify_training_probe_checkpoint(model_path)
+            else:
+                # Manual probes are used for explicitly evaluating a completed
+                # PPO update when its source training run had auto-evaluation
+                # disabled. Require the generic immutable PPO lineage proof,
+                # which binds the checkpoint to its authenticated BC ancestor.
+                verified = verify_ppo_lineage_checkpoint(model_path)
+            if verified is None:
+                raise ValueError(
+                    "training probe requires an authenticated PPO checkpoint with an approved BC parent"
+                )
         settings = checkpoint_settings(model_path)
         digest = _sha256(model_path)
         job = {
@@ -228,6 +290,8 @@ class OfficialEvaluationService:
             "trigger_step": trigger_step, "trigger_episode": trigger_episode,
             "model_path": str(model_path), "model_sha256": digest,
             "settings": settings, "trace_steps": trace_steps,
+            "validation_mode": validation_mode,
+            "attempts_required": 1 if validation_mode in {"bc_diagnostic", "training_probe"} else self.ATTEMPTS,
             "state": "queued", "attempts": [], "current_run_id": None,
             "created_utc": _utc_now(), "updated_utc": _utc_now(), "error": None,
         }
@@ -259,9 +323,10 @@ class OfficialEvaluationService:
         return {
             "state": job["state"],
             "evaluation_id": job.get("evaluation_id"), "source": job.get("source"),
+            "validation_mode": job.get("validation_mode"),
             "parent_run_id": job.get("parent_run_id"), "trigger": job.get("trigger"),
             "trigger_step": job.get("trigger_step"), "trigger_episode": job.get("trigger_episode"),
-            "attempts_completed": len(job.get("attempts", [])), "attempts_required": OfficialEvaluationService.ATTEMPTS,
+            "attempts_completed": len(job.get("attempts", [])), "attempts_required": job.get("attempts_required", OfficialEvaluationService.ATTEMPTS),
             "run_id": job.get("current_run_id") or job.get("last_run_id"),
             "model": job.get("model_path"), "evaluation": job.get("result"),
             "error": job.get("error"), "updated_utc": job.get("updated_utc"),
@@ -372,17 +437,35 @@ class OfficialEvaluationService:
                 self._publish_parent_status(job)
 
     def _run_batch(self, job: dict[str, Any]) -> None:
-        config = {**job["settings"], "resume": job["model_path"], "n_envs": 1,
-                  "warmup_laps": 1, "race_laps": 10, "total_timesteps": 0,
-                  "automatic_evaluation_enabled": False}
+        probe = job.get("validation_mode") == "training_probe"
+        noncompetitive = job.get("validation_mode") in {"bc_diagnostic", "training_probe"}
+        race_laps = 3 if probe else 10
+        config = _evaluation_child_settings(
+            job["settings"], job["model_path"], race_laps=race_laps,
+        )
         scores: list[float] = []
         for attempt_index in range(1, self.ATTEMPTS + 1):
+            attempts_required = int(job.get("attempts_required", self.ATTEMPTS))
+            if attempt_index > attempts_required:
+                break
             if job.get("stop_requested") or self._worker_stop:
                 job["state"] = "stopped"
                 break
+            if job.get("validation_mode") == "bc_diagnostic":
+                run_name = f"BC diagnostic evaluation {attempt_index}/1"
+            elif probe:
+                run_name = f"Training probe {attempt_index}/1"
+            else:
+                run_name = f"{job['source'].title()} evaluation {attempt_index}/3"
             row = self.manager.create_run(
-                config, f"{job['source'].title()} evaluation {attempt_index}/3",
+                config, run_name,
                 kind="evaluation", evaluation_trace_steps=job["trace_steps"],
+                evaluation_options=(
+                    {"validation_mode": job["validation_mode"], "lap_progress_timeout_s": 240,
+                     "lap_progress_wall_timeout_s": 240, "frontier_stall_after_s": 5,
+                     "frontier_path": str(ROOT / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv")}
+                    if noncompetitive else _competitive_route_monitor_options()
+                ),
             )
             job["current_run_id"] = row["run_id"]
             job["last_run_id"] = row["run_id"]
@@ -420,11 +503,45 @@ class OfficialEvaluationService:
                 "adjusted_race_time_s": attempt.get("adjusted_race_time_s"),
                 "race_time_s": attempt.get("race_time_s"),
                 "race_lap_times_s": attempt.get("race_lap_times_s", []),
+                "warmup_lap_times_s": attempt.get("warmup_lap_times_s", []),
                 "race_collisions": attempt.get("race_collisions"),
                 "collision_count": _attempt_collision_count(attempt),
                 "stop_reason": attempt.get("stop_reason"),
+                "wall_duration_s": attempt.get("wall_duration_s"),
+                "frontier_progress_m": attempt.get("frontier_progress_m"),
+                "frontier_progress_fraction": attempt.get("frontier_progress_fraction"),
+                "frontier_lateral_offset_m": attempt.get("frontier_lateral_offset_m"),
+                "frontier_projection_valid": attempt.get("frontier_projection_valid"),
+                "route_projection_valid": attempt.get("route_projection_valid"),
+                "route_monitor": attempt.get("route_monitor"),
+                "official_scene_sha256": attempt.get("official_scene_sha256"),
+                "route_sha256": attempt.get("route_sha256"),
+                "official_scene_path": attempt.get("official_scene_path"),
+                "route_path": attempt.get("route_path"),
+                "track_profile": attempt.get("track_profile"),
+                "route_monitor_only": attempt.get("route_monitor_only"),
+                "simulator_identity": attempt.get("simulator_identity"),
+                "camera_sample_count": attempt.get("camera_sample_count"),
+                "camera_fresh_sample_count": attempt.get("camera_fresh_sample_count"),
+                "camera_stale_sample_count": attempt.get("camera_stale_sample_count"),
+                "camera_missing_sample_count": attempt.get("camera_missing_sample_count"),
+                "camera_freshness_unknown_count": attempt.get("camera_freshness_unknown_count"),
+                "camera_age_s": attempt.get("camera_age_s"),
+                "policy_inference_latency_s": attempt.get("policy_inference_latency_s"),
                 "evaluation_report": str(output_dir / "evaluation.json") if report else None,
+                "warmup_laps": int(attempt.get("warmup_laps_completed", len(attempt.get("warmup_lap_times_s", []))) or 0),
+                "race_laps_completed": len(attempt.get("race_lap_times_s", [])),
+                "race_laps_required": race_laps,
             }
+            if noncompetitive:
+                attempt_record["valid_for_comparison"] = False
+                attempt_record["readiness_passed"] = (
+                    attempt_record["stop_reason"] == "race_complete"
+                    and attempt_record["warmup_laps"] >= 1
+                    and attempt_record["race_laps_completed"] >= race_laps
+                    and attempt_record["collision_count"] == 0
+                    and attempt_record["frontier_projection_valid"] is True
+                )
             job["attempts"].append(attempt_record)
             job["current_run_id"] = None
             job["updated_utc"] = _utc_now()
@@ -434,13 +551,27 @@ class OfficialEvaluationService:
             if job["state"] == "stopped":
                 break
 
-        valid_batch = len(scores) == self.ATTEMPTS and len(job["attempts"]) == self.ATTEMPTS
+        attempts_required = int(job.get("attempts_required", self.ATTEMPTS))
+        valid_batch = len(scores) == attempts_required and len(job["attempts"]) == attempts_required
+        diagnostic = job.get("validation_mode") in {"bc_diagnostic", "training_probe"}
+        protocol = "official_training_probe_1_plus_3" if probe else (
+            "official_bc_diagnostic_1_plus_10" if job.get("validation_mode") == "bc_diagnostic"
+            else "official_10_lap_race"
+        )
+        readiness_passed = diagnostic and len(job["attempts"]) == 1 and job["attempts"][0].get("readiness_passed") is True
         raw_times = [float(item["race_time_s"]) for item in job["attempts"]
                      if item.get("valid_for_comparison") and isinstance(item.get("race_time_s"), (int, float))]
         result = {
-            "protocol": "official_10_lap_race",
-            "completed_attempts": len(scores), "attempts_required": self.ATTEMPTS,
-            "valid": valid_batch, "median_adjusted_race_time_s": median(scores) if valid_batch else None,
+            "protocol": protocol,
+            # Diagnostic runs are deliberately excluded from competitive
+            # scores, but they still count as completed driving attempts.
+            "completed_attempts": len(job["attempts"]) if diagnostic else len(scores),
+            "competitive_attempts": len(scores), "attempts_required": attempts_required,
+            "valid": valid_batch and not diagnostic, "readiness_passed": readiness_passed,
+            "validation_mode": job.get("validation_mode"),
+            "race_laps_required": race_laps,
+            "competitive_score_valid": not diagnostic and valid_batch,
+            "median_adjusted_race_time_s": median(scores) if valid_batch and not diagnostic else None,
             "best_adjusted_race_time_s": min(scores) if scores else None,
             "best_10_lap_time_s": median(raw_times) if len(raw_times) == self.ATTEMPTS else None,
             "laps_observed": min((len(item.get("race_lap_times_s", [])) for item in job["attempts"]), default=0),
@@ -451,8 +582,8 @@ class OfficialEvaluationService:
         }
         job["result"] = result
         if job["state"] != "stopped":
-            job["state"] = "complete" if valid_batch else "incomplete"
-        if valid_batch:
+            job["state"] = "complete" if valid_batch or readiness_passed else "incomplete"
+        if valid_batch and not diagnostic:
             self._consider_champion(job, result)
 
     def _consider_champion(self, job: dict[str, Any], result: dict[str, Any]) -> None:

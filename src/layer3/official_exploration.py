@@ -6,7 +6,7 @@ import json
 import math
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 
@@ -24,15 +24,35 @@ class OfficialExplorationSchedule:
         model: Any,
         run_dir: Path,
         *,
-        std_min: float = 0.2,
-        std_max: float = 0.8,
+        std_min: float | Sequence[float] = 0.2,
+        std_max: float | Sequence[float] = 0.8,
         improvement_scale: float = 0.9,
         stale_scale: float = 1.1,
         stale_patience: int = 3,
         poll_interval_steps: int = 128,
     ) -> None:
-        if not (0 < std_min <= std_max):
-            raise ValueError("exploration std bounds must be positive and ordered")
+        log_std = getattr(model.policy, "log_std", None)
+        if not torch.is_tensor(log_std) or log_std.ndim != 1 or log_std.numel() < 1:
+            raise ValueError("official PPO exploration requires a one-dimensional policy log_std")
+
+        def expand_bounds(value: float | Sequence[float], name: str) -> tuple[float, ...]:
+            if isinstance(value, (int, float)):
+                values = (float(value),) * int(log_std.numel())
+            else:
+                values = tuple(float(item) for item in value)
+                if len(values) != int(log_std.numel()):
+                    raise ValueError(
+                        f"{name} must contain one value per action dimension "
+                        f"({int(log_std.numel())}), got {len(values)}"
+                    )
+            if any(not math.isfinite(item) or item <= 0 for item in values):
+                raise ValueError(f"{name} values must be finite and positive")
+            return values
+
+        self.std_min = expand_bounds(std_min, "std_min")
+        self.std_max = expand_bounds(std_max, "std_max")
+        if any(lower > upper for lower, upper in zip(self.std_min, self.std_max)):
+            raise ValueError("exploration std bounds must be positive and ordered per action")
         if improvement_scale <= 0 or improvement_scale > 1:
             raise ValueError("improvement_scale must be in (0, 1]")
         if stale_scale < 1 or stale_patience < 1 or poll_interval_steps < 1:
@@ -41,24 +61,29 @@ class OfficialExplorationSchedule:
         self.run_dir = Path(run_dir)
         self.status_path = self.run_dir / "evaluation_status.json"
         self.history_path = self.run_dir / "exploration_adaptation.jsonl"
-        self.std_min = float(std_min)
-        self.std_max = float(std_max)
         self.improvement_scale = float(improvement_scale)
         self.stale_scale = float(stale_scale)
         self.stale_patience = int(stale_patience)
         self.poll_interval_steps = int(poll_interval_steps)
-        self.target_log_std = float(model.policy.log_std.detach().mean().cpu())
+        self.target_log_std = tuple(
+            float(value) for value in model.policy.log_std.detach().cpu().tolist()
+        )
         self.best_valid_time_s: float | None = None
         self.stale_evaluations = 0
         self.last_status_key: tuple[str, int] | None = None
         self.last_poll_steps = -1
 
     def _clamp(self) -> None:
-        self.target_log_std = min(
-            math.log(self.std_max), max(math.log(self.std_min), self.target_log_std)
+        self.target_log_std = tuple(
+            min(math.log(upper), max(math.log(lower), value))
+            for value, lower, upper in zip(self.target_log_std, self.std_min, self.std_max)
         )
         with torch.no_grad():
-            self.model.policy.log_std.fill_(self.target_log_std)
+            self.model.policy.log_std.copy_(torch.as_tensor(
+                self.target_log_std,
+                device=self.model.policy.log_std.device,
+                dtype=self.model.policy.log_std.dtype,
+            ))
 
     def on_rollout_start(self) -> None:
         self._clamp()
@@ -71,6 +96,10 @@ class OfficialExplorationSchedule:
         try:
             status = json.loads(self.status_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            return None
+        if status.get("validation_mode") in {"bc_diagnostic", "training_probe"}:
+            # Short safety checks are intentionally non-ranking and do not
+            # provide a valid ten-lap score for adapting exploration noise.
             return None
         if status.get("state") not in {"complete", "incomplete"}:
             return None
@@ -89,13 +118,19 @@ class OfficialExplorationSchedule:
         if improved:
             self.best_valid_time_s = float(score)
             self.stale_evaluations = 0
-            self.target_log_std += math.log(self.improvement_scale)
+            self.target_log_std = tuple(
+                value + math.log(self.improvement_scale)
+                for value in self.target_log_std
+            )
             reason = "better_valid_ten_lap_score"
         else:
             self.stale_evaluations += 1
             reason = "stale_official_evaluation"
             if self.stale_evaluations >= self.stale_patience:
-                self.target_log_std += math.log(self.stale_scale)
+                self.target_log_std = tuple(
+                    value + math.log(self.stale_scale)
+                    for value in self.target_log_std
+                )
                 reason = "increased_exploration_after_stale_evaluations"
                 self.stale_evaluations = 0
         self._clamp()
@@ -108,6 +143,10 @@ class OfficialExplorationSchedule:
             "stale_evaluations": self.stale_evaluations,
             "reason": reason,
             "action_std": float(self.model.policy.log_std.detach().exp().mean().cpu()),
+            "action_std_by_action": [
+                float(value)
+                for value in self.model.policy.log_std.detach().exp().cpu().tolist()
+            ],
             "observed_at": time.time(),
         }
         self.history_path.parent.mkdir(parents=True, exist_ok=True)

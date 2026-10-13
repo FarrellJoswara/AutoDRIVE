@@ -183,9 +183,19 @@ class RouteProgressTracker:
             "advanced_m": 0.0,
         }
 
-    def project_pose(self, x: float, z: float) -> Optional[float]:
-        """Return a pose's nearest centerline distance without changing progress."""
-        candidate = self._project(float(x), float(z), None)
+    def project_pose(
+        self, x: float, z: float, *, enforce_corridor: bool = True
+    ) -> Optional[float]:
+        """Return a pose's nearest route coordinate without changing progress.
+
+        ``enforce_corridor=False`` is for recovery controllers that need a
+        direction back to the route after the normal progress projection has
+        rejected an off-track pose. It still selects the geometrically nearest
+        centerline segment and never mutates this tracker's progress state.
+        """
+        candidate = self._project(
+            float(x), float(z), None, enforce_corridor=enforce_corridor
+        )
         return None if candidate is None else float(candidate[0])
 
     def gate_line_at(self, route_s: float):

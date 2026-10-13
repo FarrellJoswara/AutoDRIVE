@@ -91,9 +91,8 @@ class CenterlineExpertTests(unittest.TestCase):
             "current_progress_m": station,
             "true_speed": 0.5,
         })
-        # This is the right-hand bend leading into station 24.25. The previous
-        # short preview produced only about -0.04 steering here; a useful
-        # anticipatory command should already be visible before the entrance.
+        # This is the right-hand bend leading into station 24.25. The teacher
+        # must already be steering before the entrance.
         self.assertLess(float(action[1]), -0.08)
 
     def test_missing_pose_returns_safe_neutral_action(self) -> None:
@@ -124,16 +123,18 @@ class CenterlineExpertTests(unittest.TestCase):
                     output_path=Path(directory) / "demonstrations.npz",
                 )
 
-    def test_teacher_coasts_on_total_speed_instead_of_commanding_reverse(self) -> None:
+    def test_teacher_ignores_route_progress_speed_and_never_commands_reverse(self) -> None:
         point, _ = self.route.point_and_tangent_at(0.0)
         action = self.expert.action({
             "position": (float(point[0]), float(point[1]), 0.0),
             "yaw": 0.0,
             "current_progress_m": 0.0,
-            "true_speed": 4.0,
-            "v_long": 0.1,
-        })
-        self.assertEqual(float(action[0]), 0.0)
+            "true_speed": 0.0,
+            "v_long": 0.0,
+            "step": 1,
+            "frontier_speed_mps": 8.0,
+        }, state=np.zeros(9, dtype=np.float32))
+        self.assertGreater(float(action[0]), 0.0)
         self.assertGreaterEqual(float(action[0]), 0.0)
 
 

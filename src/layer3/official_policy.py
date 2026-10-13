@@ -121,9 +121,15 @@ def resume_ppo_checkpoint(
     n_epochs: int,
     gamma: float,
     gae_lambda: float,
+    target_kl: Optional[float] = None,
     seed: int,
     device: str = "cpu",
     tensorboard_log: Optional[str] = None,
+    batch_size: int = 64,
+    clip_range: float = 0.2,
+    ent_coef: float = 0.01,
+    vf_coef: float = 0.5,
+    max_grad_norm: float = 0.5,
 ) -> Any:
     """Rebuild PPO from authoritative settings and copy only checkpoint weights.
 
@@ -189,7 +195,13 @@ def resume_ppo_checkpoint(
         n_steps=int(n_steps),
         gamma=float(gamma),
         gae_lambda=float(gae_lambda),
+        target_kl=target_kl,
         policy_architecture=architecture,
+        batch_size=batch_size,
+        clip_range=clip_range,
+        ent_coef=ent_coef,
+        vf_coef=vf_coef,
+        max_grad_norm=max_grad_norm,
     )
     fresh_model.policy.load_state_dict(saved_parameters["policy"], strict=True)
     fresh_model.num_timesteps = int(data["num_timesteps"])

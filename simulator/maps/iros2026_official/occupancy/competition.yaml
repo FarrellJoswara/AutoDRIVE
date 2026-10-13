@@ -1,0 +1,6 @@
+image: competition.pgm
+resolution: 0.025
+origin: [-3.975, -17.4130654, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

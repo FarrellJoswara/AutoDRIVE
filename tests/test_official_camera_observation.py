@@ -113,24 +113,28 @@ def test_new_training_defaults_use_camera_for_local_and_official_simulators():
     assert OfficialTrainSettings().observation_profile == "official_sensors_camera"
 
 
-def test_official_frontier_stall_is_charged_as_episode_failure():
+@pytest.mark.parametrize("moving", [False, True])
+def test_official_frontier_stall_requires_the_car_to_stop_physically(moving):
     snap = TelemetrySnapshot(
         lidar_ranges=np.full(1081, 10.0, dtype=np.float32),
         lidar_valid=True,
     )
 
     class FakeRacer:
-        race_metrics = SimpleNamespace(
-            collision_count=0, lap_count=0, last_lap_time=0.0,
-            position=(0.0, 0.0, 0.0),
-        )
-        last_step_duration_s = 0.1
-        last_control_interval_s = 0.1
-        last_control_wall_interval_s = 0.1
-        control_interval_source = "test"
-        scan_interval_source = "test"
+        def __init__(self):
+            self.race_metrics = SimpleNamespace(
+                collision_count=0, lap_count=0, last_lap_time=0.0,
+                position=(0.0, 0.0, 0.0),
+            )
+            self.last_step_duration_s = 0.1
+            self.last_control_interval_s = 0.1
+            self.last_control_wall_interval_s = 0.1
+            self.control_interval_source = "test"
+            self.scan_interval_source = "test"
 
         def step(self, throttle, steering):
+            if moving:
+                self.race_metrics.position = (0.03, 0.0, 0.0)
             return snap
 
     class FakeRoute:
@@ -177,6 +181,8 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
     env.route_progress = FakeRoute()
     env._episode_frontier_distance_m = 4.0
     env._frontier_last_push_s = 0.0
+    env._training_last_motion_s = 0.0
+    env._training_last_position = (0.0, 0.0)
     env._positive_episode_return = 25.0
     env._last_training_steering = 0.0
     env.training_time_cost_per_simulated_second = 5.0
@@ -190,10 +196,15 @@ def test_official_frontier_stall_is_charged_as_episode_failure():
 
     _, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
-    assert terminated and not truncated
-    assert info["termination_reason"] == "frontier_stagnation"
-    assert info["training_reward_components"]["episode_failure"] == -112.5
-    assert reward < -112.5
+    if moving:
+        assert not terminated and not truncated
+        assert info["termination_reason"] is None
+        assert info["training_physical_motion_stalled"] is False
+    else:
+        assert terminated and not truncated
+        assert info["termination_reason"] == "frontier_stagnation"
+        assert info["training_reward_components"]["episode_failure"] == -112.5
+        assert reward < -112.5
 
 
 def test_official_training_collision_ends_life_penalizes_and_resets_to_spawn():

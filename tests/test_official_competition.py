@@ -46,6 +46,9 @@ def _ros_messages():
     return {
         "scan": SimpleNamespace(
             ranges=list(np.linspace(0.1, 9.0, 1080, dtype=np.float32)),
+            angle_min=-2.35619449,
+            angle_increment=4.71238898 / 1079,
+            angle_max=2.35619449,
             scan_time=0.025,
             range_min=0.06,
             range_max=10.0,
@@ -71,6 +74,8 @@ def test_ros2_adapter_preserves_official_signals_for_existing_bridge_parser():
     assert payload["V1 Angular Velocity"] == "7.0 8.0 9.0"
     assert payload["V1 Linear Acceleration"] == "10.0 11.0 12.0"
     assert payload["V1 LIDAR Range Array"] == messages["scan"].ranges
+    assert payload["V1 LIDAR Angle Min"] == messages["scan"].angle_min
+    assert payload["V1 LIDAR Angle Increment"] == messages["scan"].angle_increment
     assert payload["V1 Encoder Angles"] == "13.0 14.0"
 
     snapshot = TelemetrySnapshot.from_raw_dict(payload)
@@ -79,6 +84,36 @@ def test_ros2_adapter_preserves_official_signals_for_existing_bridge_parser():
     assert snapshot.v_lat == 0.0
     assert snapshot.lidar_ranges.size == 1080
     assert snapshot.lidar_ranges[0] == messages["scan"].ranges[-1]
+
+
+def test_layer1_lidar_order_uses_ros_angle_increment_when_metadata_is_present():
+    increasing = {"V1 LIDAR Range Array": [1.0, 2.0, 3.0], "V1 LIDAR Angle Increment": 0.1}
+    decreasing = {"V1 LIDAR Range Array": [3.0, 2.0, 1.0], "V1 LIDAR Angle Increment": -0.1}
+
+    increasing_snapshot = TelemetrySnapshot.from_raw_dict(increasing)
+    decreasing_snapshot = TelemetrySnapshot.from_raw_dict(decreasing)
+
+    assert increasing_snapshot.lidar_ranges.tolist() == [3.0, 2.0, 1.0]
+    assert decreasing_snapshot.lidar_ranges.tolist() == [3.0, 2.0, 1.0]
+
+
+def test_watch_lidar_clearance_reads_layer1_ranges_in_meters_and_correct_sides():
+    scan = np.full(1081, 5.0, dtype=np.float32)
+    angles = np.linspace(135.0, -135.0, scan.size)
+    scan[(angles >= -110.0) & (angles <= -70.0)] = 0.7
+    scan[(angles >= 70.0) & (angles <= 110.0)] = 2.4
+    snap = TelemetrySnapshot(
+        lidar_ranges=scan,
+        lidar_valid=True,
+        lidar_range_min=0.06,
+        lidar_range_max=10.0,
+    )
+
+    left = OfficialRaceEnv._lidar_sector_clearance(snap, 70.0, 110.0)
+    right = OfficialRaceEnv._lidar_sector_clearance(snap, -110.0, -70.0)
+
+    assert np.isclose(left, 2.4)
+    assert np.isclose(right, 0.7)
 
 
 def test_official_collision_penalties_are_cumulative_steps():

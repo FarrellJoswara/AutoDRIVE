@@ -1,0 +1,43 @@
+{
+  "source": "Official SRL 2026 IROS Track mesh centerline; active Windows competition scene verified with UnityPy",
+  "simulator_image": "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
+  "active_gameobject": "SRL 2026 IROS Track",
+  "transform_to_ips": "race_x = mesh_local_z + 10.525 - 14; race_y = -(mesh_local_x + 4 - 10) + 0.1583; mesh extractor exports -local_x, so race_y = exported_x + 6.1583",
+  "spawn_xy": [
+    0.8,
+    3.1583
+  ],
+  "loop_length_m": 45.80209158004757,
+  "route_points": 198,
+  "wall_clearance_m": {
+    "min": 0.5492249727249146,
+    "median": 0.6500000357627869,
+    "p10": 0.5793799757957458
+  },
+  "route_length_m": 45.80209158004757,
+  "scene_sha256": "a5d11e435857e2ead32ec0eb065dbbd011c41fa80d1bf8a187177014e014b674",
+  "verified_scene_active": {
+    "SRL 2026 IROS Track": true,
+    "Porto Track": false
+  },
+  "verification_status": "geometry verified; official ten-lap test pending",
+  "historical_alignment_probe": {
+    "captured_steps": 500,
+    "spawn_distance_m": 0.0747690092220803,
+    "initial_heading_error_deg": 0.3847561664783015,
+    "car_to_route_distance_m": {
+      "median": 0.18011330574524367,
+      "p90": 0.3979782147253748,
+      "max": 0.9252155559430828
+    },
+    "route_to_car_distance_m": {
+      "median": 0.10574696512235579,
+      "p90": 0.30759071116342496
+    },
+    "score_status": "disqualified",
+    "captured_run_id": "0872ee7c6979"
+  },
+  "official_release_url": "https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Sim-Racing/releases/download/2026-iros/autodrive_simulator_compete_windows.zip",
+  "official_archive_sha256": "92e405864b5a939904e8599ea60dc08207d681f1984a050244642d00a1d0a4f7",
+  "map_id": "iros2026_official"
+}

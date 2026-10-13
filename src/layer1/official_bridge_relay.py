@@ -81,8 +81,16 @@ class OfficialBridgeRelay:
         self._commands_received = 0
         self._response_timeouts = 0
         self._connected_simulators: set[str] = set()
+        # Counters are scoped to each simulator Socket.IO SID. Cumulative
+        # counters alone can make a restarted simulator appear ready based on
+        # frames emitted by the retired process.
+        self._simulator_sessions: Dict[str, Dict[str, int]] = {}
         self._camera_frames = 0
         self._incomplete_frames = 0
+        # Bound shutdown latency while releasing all connected simulators.
+        # Socket.IO emit completion confirms transport enqueue/send only; it
+        # is not an application-level actuator acknowledgement.
+        self.shutdown_neutral_timeout_s = 0.5
 
         @self.upstream.on("connect")
         async def on_devkit_connect() -> None:
@@ -116,12 +124,18 @@ class OfficialBridgeRelay:
         @self.sio.on("connect")
         async def on_simulator_connect(sid: str, environ: Dict[str, Any], auth: Any = None) -> bool:
             self._connected_simulators.add(sid)
+            self._simulator_sessions[sid] = {
+                "complete_frames": 0,
+                "camera_frames": 0,
+                "devkit_commands": 0,
+            }
             print(json.dumps({"event": "simulator_connected", "sid": sid}), flush=True)
             return True
 
         @self.sio.on("disconnect")
         async def on_simulator_disconnect(sid: str, reason: Any = None) -> None:
             self._connected_simulators.discard(sid)
+            self._simulator_sessions.pop(sid, None)
             self.pending.pop(sid, None)
             print(json.dumps({"event": "simulator_disconnected", "sid": sid}), flush=True)
 
@@ -149,6 +163,12 @@ class OfficialBridgeRelay:
                 self._forwarded_frames += 1
                 if isinstance(payload, dict) and payload.get("V1 Front Camera Image") is not None:
                     self._camera_frames += 1
+                    session = self._simulator_sessions.get(sid)
+                    if session is not None:
+                        session["camera_frames"] += 1
+                session = self._simulator_sessions.get(sid)
+                if session is not None:
+                    session["complete_frames"] += 1
                 if self._forwarded_frames == 1:
                     print(json.dumps({
                         "event": "first_complete_frame_forwarded",
@@ -162,6 +182,9 @@ class OfficialBridgeRelay:
                 command = await asyncio.wait_for(response, timeout=self.response_timeout_s)
                 if isinstance(command, dict):
                     await self.sio.emit("Bridge", data=command, to=sid)
+                    session = self._simulator_sessions.get(sid)
+                    if session is not None:
+                        session["devkit_commands"] += 1
                     return
                 raise TypeError(f"official Devkit returned non-dictionary command: {type(command).__name__}")
             except asyncio.TimeoutError:
@@ -227,6 +250,43 @@ class OfficialBridgeRelay:
         if inspect.isawaitable(result):
             await result
 
+    async def _release_simulators_on_shutdown(self) -> None:
+        """Send neutral controls to connected simulators before relay teardown."""
+        simulator_sids = tuple(self._connected_simulators)
+
+        async def send_neutral(sid: str) -> bool:
+            try:
+                await asyncio.wait_for(
+                    self.sio.emit("Bridge", data=NEUTRAL_COMMAND, to=sid),
+                    timeout=self.shutdown_neutral_timeout_s,
+                )
+            except Exception as exc:
+                print(json.dumps({
+                    "event": "shutdown_neutral_command_failed",
+                    "sid": sid,
+                    "timeout_s": self.shutdown_neutral_timeout_s,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }), flush=True)
+                return False
+            print(json.dumps({
+                "event": "shutdown_neutral_command_sent",
+                "sid": sid,
+                "command": NEUTRAL_COMMAND,
+            }), flush=True)
+            return True
+
+        # Emit concurrently so shutdown stays bounded by one timeout, even if
+        # multiple simulator sockets are connected.
+        results = await asyncio.gather(*(send_neutral(sid) for sid in simulator_sids))
+        sent = sum(results)
+        print(json.dumps({
+            "event": "shutdown_neutral_release_complete",
+            "attempted": len(simulator_sids),
+            "sent": sent,
+            "failed": len(simulator_sids) - sent,
+            "transport_acknowledged": False,
+        }), flush=True)
+
     async def serve(self, host: str, port: int, devkit_url: str) -> None:
         from aiohttp import web
 
@@ -267,6 +327,10 @@ class OfficialBridgeRelay:
                 "camera_frames": self._camera_frames,
                 "incomplete_frames": self._incomplete_frames,
                 "response_timeouts": self._response_timeouts,
+                "simulator_sessions": [
+                    {"sid": sid, **counters}
+                    for sid, counters in sorted(self._simulator_sessions.items())
+                ],
             }, headers={"Cache-Control": "no-store"})
 
         app = web.Application(
@@ -290,8 +354,11 @@ class OfficialBridgeRelay:
         try:
             await stopped.wait()
         finally:
-            await self.upstream.disconnect()
-            await runner.cleanup()
+            try:
+                await self._release_simulators_on_shutdown()
+            finally:
+                await self.upstream.disconnect()
+                await runner.cleanup()
 
 
 def main() -> int:

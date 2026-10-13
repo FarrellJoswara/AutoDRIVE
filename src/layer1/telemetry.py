@@ -314,11 +314,22 @@ class TelemetrySnapshot:
             lidar_arr = np.empty(0, dtype=np.float32)
             lidar_valid = False
 
-        # Bridge serializes the planar scan clockwise (end angle → start
-        # angle), while this stack's canonical convention is CCW from
-        # angle_min. Live 74-pose comparison against Porto occupancy walls
-        # confirms reversing the Bridge scan aligns the ranges with pose+yaw.
-        lidar_arr = lidar_arr[::-1].copy()
+        # Layer 2's established canonical beam order matches the official
+        # simulator stream after reversing an increasing-angle ROS LaserScan.
+        # Use the actual ROS metadata when present (ranges[i] is at
+        # angle_min + i*angle_increment); retain the legacy Bridge reversal
+        # only for older payloads that do not carry scan geometry.
+        angle_increment = data.get("V1 LIDAR Angle Increment", data.get("lidar_angle_increment"))
+        try:
+            angle_increment = float(angle_increment)
+        except (TypeError, ValueError):
+            angle_increment = None
+        if angle_increment is None or not math.isfinite(angle_increment):
+            lidar_arr = lidar_arr[::-1].copy()
+        elif angle_increment > 0.0:
+            lidar_arr = lidar_arr[::-1].copy()
+        else:
+            lidar_arr = lidar_arr.copy()
 
         th = float(data.get("V1 Throttle", data.get("throttle", 0.0)))
         st = float(data.get("V1 Steering", data.get("steering", 0.0)))

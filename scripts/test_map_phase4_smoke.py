@@ -24,6 +24,7 @@ import argparse
 import io
 import json
 import os
+import os
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,8 @@ class HubClient:
         self.base_url = (base_url or "").rstrip("/") or None
         self._tc = None
         if self.base_url is None:
+            # Local TestClient mode must not adopt live native run manifests.
+            os.environ["AICAR_RUN_BACKEND"] = "test"
             from fastapi.testclient import TestClient
 
             from src.layer4.hub.app import app

@@ -17,6 +17,10 @@ import { setOfficialRunSelection } from "../store";
 type NumericSetting = {
   [K in keyof OfficialTrainSettings]-?: OfficialTrainSettings[K] extends number ? K : never;
 }[keyof OfficialTrainSettings];
+type OptionalExplorationSetting =
+  | "exploration_initial_std_throttle" | "exploration_initial_std_steering"
+  | "exploration_min_std_throttle" | "exploration_min_std_steering"
+  | "exploration_max_std_throttle" | "exploration_max_std_steering";
 
 export interface TrainPageHandle {
   start(): Promise<void>;
@@ -154,6 +158,16 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
   }, []);
 
   function setNumber(key: NumericSetting, value: string) {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    setForm((current) => current ? { ...current, [key]: next } : current);
+  }
+
+  function setOptionalExplorationNumber(key: OptionalExplorationSetting, value: string) {
+    if (value.trim() === "") {
+      setForm((current) => current ? { ...current, [key]: null } : current);
+      return;
+    }
     const next = Number(value);
     if (!Number.isFinite(next)) return;
     setForm((current) => current ? { ...current, [key]: next } : current);
@@ -404,9 +418,14 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Behavior-cloning learning rate" help="Optimizer step size used only while fitting the actor to the route teacher.">
                 <input type="number" min={0.000001} max={0.1} step="any" value={form.behavior_cloning_learning_rate} disabled={!form.behavior_cloning_enabled || Boolean(form.resume)} onChange={(event) => setNumber("behavior_cloning_learning_rate", event.target.value)} />
               </Field>
-              <Field label="Automatic official evaluation" help="Runs a frozen checkpoint through one warm-up lap and ten scored laps on the official simulator. Three fresh simulator attempts are required before a result can promote the shared best model.">
+              <Field label="Automatic official evaluation" help="Runs a frozen checkpoint on the official simulator. Competitive mode uses one warm-up plus ten scored laps across three fresh attempts. Training probe uses one warm-up plus three scored laps and never enters rankings.">
                 <select value={form.automatic_evaluation_enabled ? "yes" : "no"} disabled={form.behavior_cloning_only} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_enabled: event.target.value === "yes" } : current)}>
                   <option value="yes">Enabled</option><option value="no">Disabled</option>
+                </select>
+              </Field>
+              <Field label="Automatic evaluation mode" help="Training probe is a noncompetitive 1+3 lap screen. It requires a checkpoint with verified training lineage and an authenticated BC parent. The default competitive campaign remains three 1+10 attempts.">
+                <select value={form.automatic_evaluation_mode} disabled={!form.automatic_evaluation_enabled || form.behavior_cloning_only} onChange={(event) => setForm((current) => current ? { ...current, automatic_evaluation_mode: event.target.value as OfficialTrainSettings["automatic_evaluation_mode"] } : current)}>
+                  <option value="competitive">Competitive campaign</option><option value="training_probe">Training probe (1 warm-up + 3 scored)</option>
                 </select>
               </Field>
               <Field label="Evaluate every" help="Choose a run-relative transition step interval or completed episode interval. Episode counts are summed across all parallel environments.">
@@ -425,6 +444,35 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               </Field>
               <Field label="Learning rate" help="Optimizer step size used for each PPO update.">
                 <input type="number" min={0} step="any" value={form.learning_rate} onChange={(event) => setNumber("learning_rate", event.target.value)} />
+              </Field>
+              <Field label="PPO target KL (optional)" help="Stops a PPO update early when policy divergence reaches this limit. Leave blank to disable the target-KL check.">
+                <input type="number" min={0.000001} step="any" value={form.target_kl ?? ""} onChange={(event) => setForm((current) => current ? { ...current, target_kl: event.target.value === "" ? null : Number(event.target.value) } : current)} />
+              </Field>
+              <Field label="PPO exploration profile" help="Standard preserves ordinary PPO noise. BC smoke starts and stays at throttle/steering std [0.01, 0.05]. BC campaign starts there and adapts within per-action bounds [0.005, 0.02] to [0.01, 0.05]. Leave unset to inherit saved checkpoint settings on resume, or use standard for a new run.">
+                <select value={form.exploration_profile ?? ""} onChange={(event) => setForm((current) => current ? { ...current, exploration_profile: event.target.value ? event.target.value as NonNullable<OfficialTrainSettings["exploration_profile"]> : null } : current)}>
+                  <option value="">Inherit checkpoint / standard default</option>
+                  <option value="standard">Standard PPO</option>
+                  <option value="bc_smoke">BC smoke · fixed [0.01, 0.05]</option>
+                  <option value="bc_campaign">BC campaign · bounded adaptation</option>
+                </select>
+              </Field>
+              <Field label="Initial action std · throttle" help="Optional positive override for throttle exploration noise. Blank inherits the profile or saved checkpoint value.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_initial_std_throttle ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_initial_std_throttle", event.target.value)} />
+              </Field>
+              <Field label="Initial action std · steering" help="Optional positive override for steering exploration noise. Blank inherits the profile or saved checkpoint value.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_initial_std_steering ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_initial_std_steering", event.target.value)} />
+              </Field>
+              <Field label="Minimum action std · throttle" help="Optional positive lower bound for throttle exploration noise.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_min_std_throttle ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_min_std_throttle", event.target.value)} />
+              </Field>
+              <Field label="Minimum action std · steering" help="Optional positive lower bound for steering exploration noise.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_min_std_steering ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_min_std_steering", event.target.value)} />
+              </Field>
+              <Field label="Maximum action std · throttle" help="Optional positive upper bound for throttle exploration noise.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_max_std_throttle ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_max_std_throttle", event.target.value)} />
+              </Field>
+              <Field label="Maximum action std · steering" help="Optional positive upper bound for steering exploration noise.">
+                <input type="number" min={0.000001} step="any" value={form.exploration_max_std_steering ?? ""} onChange={(event) => setOptionalExplorationNumber("exploration_max_std_steering", event.target.value)} />
               </Field>
               <Field label="PPO epochs" help="Number of optimization passes over each collected rollout.">
                 <input type="number" min={1} value={form.n_epochs} onChange={(event) => setNumber("n_epochs", event.target.value)} />

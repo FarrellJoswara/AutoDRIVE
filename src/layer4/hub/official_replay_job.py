@@ -32,18 +32,22 @@ class OfficialReplayJob:
             "evaluation": result,
         }
 
-    def start(self, *, model_path, trace_steps=0, **_ignored):
+    def start(self, *, model_path, trace_steps=0, validation_mode=None, **_ignored):
         path = Path(model_path)
-        self._last_config = {"model_path": path, "trace_steps": trace_steps}
-        result = self.evaluation_service.submit(path, source="manual", trace_steps=trace_steps)
+        self._last_config = {"model_path": path, "trace_steps": trace_steps, "validation_mode": validation_mode}
+        result = self.evaluation_service.submit(
+            path, source="manual", trace_steps=trace_steps, validation_mode=validation_mode
+        )
         if self.on_status:
             self.on_status(self.status())
         return {**result, "pid": None, "argv": [], "map_id": "none", "seed": None}
 
-    def start_automatic(self, *, model_path: Path, run_id: str, trigger: str, step: int | None, episode: int | None):
+    def start_automatic(self, *, model_path: Path, run_id: str, trigger: str, step: int | None, episode: int | None,
+                        validation_mode: str | None = None):
         result = self.evaluation_service.submit(
             model_path, source="automatic", parent_run_id=run_id,
             trigger=trigger, trigger_step=step, trigger_episode=episode,
+            validation_mode=validation_mode,
         )
         if self.on_status:
             self.on_status(self.status())

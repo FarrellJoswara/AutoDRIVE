@@ -135,6 +135,24 @@ export interface TrainingPhaseTelemetry {
   target_steps_per_env?: number;
   route_progress_m?: Array<number | null>;
   route_length_m?: number;
+  /** Measured simulator pose for the BC teacher; monitoring-only, never policy input. */
+  teacher_poses?: Array<{
+    env_id: number;
+    pose: [number, number] | null;
+    yaw: number | null;
+    speed: number | null;
+    /** Same post-step Layer 1 scan/control snapshot used for BC diagnostics. */
+    lidar_left_m?: number | null;
+    lidar_front_m?: number | null;
+    lidar_right_m?: number | null;
+    throttle?: number | null;
+    steering?: number | null;
+    route_progress_m?: number | null;
+    route_projection_valid?: boolean | null;
+    centerline_lateral_m?: number | null;
+    official_lap_count?: number | null;
+    race_laps_completed?: number | null;
+  }>;
   reason?: string;
   readiness?: { ready?: boolean; reason?: string; successful_episodes?: number; collision_count?: number };
   ts: string;
@@ -208,8 +226,47 @@ export interface Settings {
 }
 
 export interface ReplayStatus {
-  evaluation?: { completed_attempts: number; attempts_required?: number; valid?: boolean; median_adjusted_race_time_s?: number | null; best_adjusted_race_time_s: number | null; runs: {stop_reason?: string; score_status?: string; adjusted_race_time_s?: number | null}[] } | null;
+  evaluation?: {
+    protocol?: string;
+    validation_mode?: "bc_diagnostic" | "training_probe" | null;
+    race_laps_required?: number;
+    readiness_passed?: boolean;
+    competitive_score_valid?: boolean;
+    completed_attempts: number;
+    competitive_attempts?: number;
+    attempts_required?: number;
+    valid?: boolean;
+    median_adjusted_race_time_s?: number | null;
+    best_adjusted_race_time_s: number | null;
+    runs: {
+      stop_reason?: string;
+      score_status?: string;
+      adjusted_race_time_s?: number | null;
+      race_time_s?: number | null;
+      wall_duration_s?: number | null;
+      warmup_laps?: number;
+      warmup_lap_times_s?: number[];
+      race_laps_completed?: number;
+      race_laps_required?: number;
+      race_lap_times_s?: number[];
+      collision_count?: number;
+      frontier_progress_m?: number | null;
+      frontier_progress_fraction?: number | null;
+      frontier_lateral_offset_m?: number | null;
+      frontier_projection_valid?: boolean | null;
+      camera_sample_count?: number;
+      camera_fresh_sample_count?: number;
+      camera_stale_sample_count?: number;
+      camera_missing_sample_count?: number;
+      camera_freshness_unknown_count?: number;
+      camera_age_s?: { count: number; min: number | null; max: number | null; mean: number | null; std: number | null };
+      policy_inference_latency_s?: { count: number; min: number | null; max: number | null; mean: number | null; std: number | null };
+      readiness_passed?: boolean;
+      valid_for_comparison?: boolean;
+    }[];
+  } | null;
   state: TrainState | "queued" | "complete" | "incomplete" | "failed" | "stopped";
+  validation_mode?: "bc_diagnostic" | "training_probe" | null;
   evaluation_id?: string | null;
   source?: "automatic" | "manual";
   parent_run_id?: string | null;
@@ -278,6 +335,7 @@ export interface OfficialTrainSettings {
   automatic_evaluation_enabled: boolean;
   automatic_evaluation_trigger: "steps" | "episodes";
   automatic_evaluation_interval: number;
+  automatic_evaluation_mode: "competitive" | "training_probe";
   behavior_cloning_enabled: boolean;
   behavior_cloning_only: boolean;
   behavior_cloning_steps_per_env: number;
@@ -287,6 +345,14 @@ export interface OfficialTrainSettings {
   behavior_teacher_max_speed_mps: number;
   n_steps: number;
   learning_rate: number;
+  target_kl: number | null;
+  exploration_profile: "standard" | "bc_smoke" | "bc_campaign" | null;
+  exploration_initial_std_throttle: number | null;
+  exploration_initial_std_steering: number | null;
+  exploration_min_std_throttle: number | null;
+  exploration_min_std_steering: number | null;
+  exploration_max_std_throttle: number | null;
+  exploration_max_std_steering: number | null;
   n_epochs: number;
   gamma: number;
   gae_lambda: number;
@@ -551,6 +617,11 @@ export interface FleetCar {
   /** Backend-computed across-track frontier segment in world (x,z) coordinates. */
   frontier_line?: [[number, number], [number, number]] | null;
   frontier_progress_m?: number | null;
+  frontier_progress_fraction?: number | null;
+  frontier_lateral_offset_m?: number | null;
+  frontier_projection_valid?: boolean | null;
+  camera_age_s?: number | null;
+  camera_fresh?: boolean | null;
   /** Full-width cross-section at the car's current projected route position. */
   current_progress_line?: [[number, number], [number, number]] | null;
   current_progress_m?: number | null;
@@ -685,7 +756,7 @@ export function fetchReplayModels(): Promise<ModelCheckpoint[]> {
   return jsonFetch("/api/replay/models");
 }
 
-export function startReplay(settings: { model_id: string; map_id: string; seed: number; device: string }): Promise<ReplayStatus> {
+export function startReplay(settings: { model_id: string; map_id: string; seed: number; device: string; validation_mode?: "bc_diagnostic" | "training_probe" }): Promise<ReplayStatus> {
   return jsonFetch("/api/replay/start", { method: "POST", body: JSON.stringify(settings) });
 }
 

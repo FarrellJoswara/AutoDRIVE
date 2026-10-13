@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -12,6 +13,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+OFFICIAL_COMPETITION_ROUTE_SHA256 = "62307684f1fd2813e50222f0c97e3545dc7c2808ef8544c1e161f7744d1ba4fb"
 
 
 def collision_penalty_seconds(collisions: int, seconds_per_collision: float = 10.0) -> float:
@@ -24,6 +28,7 @@ def summarize_attempt(
     *,
     lap_times_s: List[float],
     race_collisions: int,
+    race_laps_required: int = 10,
     disqualification_limit: int = 10,
 ) -> Dict[str, Any]:
     valid_times = [float(value) for value in lap_times_s if math.isfinite(float(value)) and float(value) > 0]
@@ -34,8 +39,10 @@ def summarize_attempt(
     )
     disqualified = int(race_collisions) > int(disqualification_limit)
     penalty = collision_penalty_seconds(race_collisions)
-    complete = len(valid_times) == 10 and len(valid_times) == len(lap_times_s)
+    required_laps = max(1, int(race_laps_required))
+    complete = len(valid_times) == required_laps and len(valid_times) == len(lap_times_s)
     return {
+        "race_laps_required": required_laps,
         "race_laps_completed": len(lap_times_s),
         "race_lap_times_s": list(lap_times_s),
         "race_time_s": race_time,
@@ -184,6 +191,114 @@ def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _route_monitor_identity(
+    *, output_path: Optional[Path], frontier_path: Path, expected_run_id: str,
+) -> Dict[str, Any]:
+    """Bind monitor-only route telemetry to the exact official native scene/run.
+
+    The route tracker is diagnostic only. This identity record lets downstream
+    validators distinguish an observed projection from a report that merely
+    names a route; it does not participate in scoring or stop behavior.
+    """
+    if output_path is None:
+        raise ValueError("route monitor requires a run-local evaluation output path")
+    route = Path(frontier_path).resolve()
+    expected_route = (
+        Path(__file__).resolve().parents[2] / "competition" / "iros2026"
+        / "tracks" / "competition" / "official_centerline.csv"
+    ).resolve()
+    if route != expected_route or not route.is_file():
+        raise ValueError("route monitor accepts only the fixed official competition centerline")
+    route_sha256 = _sha256(route)
+    if route_sha256 != OFFICIAL_COMPETITION_ROUTE_SHA256:
+        raise ValueError("official competition centerline bytes do not match the verified route")
+    manifest_path = Path(output_path).resolve().parent / "windows_simulator_processes.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"route monitor requires the run-local simulator identity manifest: {manifest_path}")
+    # Windows PowerShell writes run-local process manifests with a UTF-8 BOM.
+    # Accept that encoding while still hashing the original bytes below.
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(manifest, dict) or manifest.get("run_id") != expected_run_id:
+        raise ValueError("simulator identity manifest does not match the evaluation run")
+    records = manifest.get("records")
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise ValueError("route monitor requires exactly one run-local simulator process identity")
+    record = records[0]
+    pid = record.get("pid")
+    port = record.get("port")
+    executable = record.get("executable_path")
+    created = record.get("process_creation_utc")
+    if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+            or isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535)
+            or not isinstance(executable, str) or not executable.strip()
+            or not isinstance(created, str) or not created.strip()
+            or record.get("batch_mode") is not False):
+        raise ValueError("simulator process identity manifest is incomplete or invalid")
+    from src.layer3.official_tracks import verify_windows_scene
+    scene = verify_windows_scene(route, executable=executable)
+    return {
+        "official_scene_sha256": scene["scene_sha256"],
+        "official_scene_path": scene["scene_path"],
+        "route_sha256": route_sha256,
+        "route_path": str(route),
+        "track_profile": scene["track_profile"],
+        "route_monitor_only": True,
+        "simulator_identity": {
+            "pid": pid,
+            "process_creation_utc": created,
+            "executable_path": executable,
+            "port": port,
+            "manifest_sha256": _sha256(manifest_path),
+        },
+    }
+
+
+def _camera_topic_age_s(env: Any) -> Optional[float]:
+    """Return camera receive age from the official transport when available."""
+    racer = getattr(env, "racer", None)
+    status_getter = getattr(racer, "transport_status", None)
+    if not callable(status_getter):
+        return None
+    try:
+        status = status_getter()
+        age = (status.get("topic_age_s") or {}).get("camera")
+        age = float(age)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+    return age if math.isfinite(age) and age >= 0.0 else None
+
+
+def _valid_camera_frame(observation: Dict[str, Any]) -> Optional[np.ndarray]:
+    frame = observation.get("camera")
+    if frame is None:
+        return None
+    try:
+        array = np.asarray(frame)
+    except (TypeError, ValueError):
+        return None
+    if array.ndim != 3:
+        return None
+    if array.shape[-1] == 3 or array.shape[0] == 3:
+        return array
+    return None
+
+
+def _frontier_fraction(
+    progress_m: Optional[float], route_length_m: Optional[float], *, target_laps: int = 10
+) -> Optional[float]:
+    if progress_m is None or route_length_m is None or route_length_m <= 0.0:
+        return None
+    return min(1.0, max(0.0, float(progress_m) / (float(route_length_m) * max(1, int(target_laps)))))
+
+
 def _policy_observation_trace(observation: Dict[str, Any]) -> Dict[str, Any]:
     """Return compact diagnostics from only the observation given to the policy."""
     lidar = observation["lidar"]
@@ -220,6 +335,13 @@ def _simulator_alignment_trace(env: Any, info: Dict[str, Any]) -> Dict[str, Any]
         if heading is not None:
             result["simulator_heading_yaw_rad"] = float(heading)
     return result
+
+
+def _official_xy_position(position: Any) -> Optional[List[float]]:
+    """Extract official IPS x/y, ignoring simulator height in 3D poses."""
+    if position is None or len(position) < 2:
+        return None
+    return [float(position[0]), float(position[1])]
 
 
 def action_observation_diagnostics(
@@ -266,15 +388,30 @@ def evaluate_attempt(
     wall_timeout_s: float,
     max_steps: int,
     attempt_index: int,
+    race_laps_required: int = 10,
+    frontier_progress_target_laps: Optional[int] = None,
+    noncompetitive: bool = False,
     trace_steps: int = 0,
     motion_check_after_s: float = 3.0,
     motion_minimum_displacement_m: float = 0.25,
     motion_stall_after_s: float = 30.0,
     lap_progress_timeout_s: float = 90.0,
     lap_progress_wall_timeout_s: float = 90.0,
+    frontier_tracker: Any = None,
+    frontier_stall_after_s: float = 0.0,
+    route_monitor_only: bool = False,
+    camera_preview_writer: Any = None,
+    camera_freshness_limit_s: float = 0.5,
+    camera_preview_interval_s: float = 1.0,
     disqualification_limit: int = 10,
     on_step: Any = None,
 ) -> Dict[str, Any]:
+    if frontier_progress_target_laps is None:
+        # Normal competitive evaluations retain their historical scored-lap
+        # denominator. Diagnostic evaluations may include a warmup traversal
+        # in the route tracker's accumulated distance.
+        frontier_progress_target_laps = race_laps_required
+    frontier_progress_target_laps = max(1, int(frontier_progress_target_laps))
     obs, info = env.reset()
     started = time.monotonic()
     laps_reported = 0
@@ -289,8 +426,16 @@ def evaluate_attempt(
     policy_steering: List[float] = []
     applied_throttle: List[float] = []
     applied_steering: List[float] = []
+    policy_inference_latencies_s: List[float] = []
     observation_states: List[List[float]] = []
     normalized_lidar_minima: List[float] = []
+    camera_ages_s: List[float] = []
+    camera_sample_count = 0
+    camera_fresh_sample_count = 0
+    camera_stale_sample_count = 0
+    camera_missing_sample_count = 0
+    camera_freshness_unknown_count = 0
+    last_camera_preview_wall_s = 0.0
     action_trace: List[Dict[str, Any]] = []
     initial_position = info.get("race_position")
     position_trace: List[List[float]] = (
@@ -300,6 +445,52 @@ def evaluate_attempt(
     control_elapsed_s = 0.0
     last_motion_position = initial_position
     last_motion_elapsed_s = 0.0
+    last_frontier_elapsed_s = 0.0
+    frontier_progress_m = 0.0
+    frontier_projection_valid: Optional[bool] = None
+    frontier_route_length_m = (
+        float(getattr(frontier_tracker, "length_m"))
+        if frontier_tracker is not None and getattr(frontier_tracker, "length_m", None) is not None
+        else None
+    )
+    frontier_lateral_offset_m: Optional[float] = None
+    frontier_state: Dict[str, Any] = {}
+    diagnostic_frontier_required = frontier_stall_after_s > 0
+    frontier_telemetry_invalid = False
+    route_projection_sample_count = 0
+    route_projection_valid_sample_count = 0
+    route_projection_invalid_sample_count = 0
+    if diagnostic_frontier_required and (frontier_tracker is None or initial_position is None):
+        frontier_telemetry_invalid = True
+    if route_monitor_only and (frontier_tracker is None or initial_position is None):
+        route_projection_sample_count += 1
+        route_projection_invalid_sample_count += 1
+    if frontier_tracker is not None and initial_position is not None:
+        try:
+            initial_xy = _official_xy_position(initial_position)
+            if initial_xy is None:
+                raise ValueError("official IPS pose is missing x/y coordinates")
+            frontier_state = frontier_tracker.reset(
+                initial_xy[0], initial_xy[1], now=0.0
+            )
+            frontier_progress_m = float(frontier_state["progress_m"])
+            frontier_projection_valid = bool(frontier_state.get("current_projection_valid", True))
+            if route_monitor_only:
+                route_projection_sample_count += 1
+                route_projection_valid_sample_count += int(frontier_projection_valid)
+                route_projection_invalid_sample_count += int(not frontier_projection_valid)
+            frontier_lateral_offset_m = frontier_tracker.lateral_distance(
+                initial_xy[0], initial_xy[1]
+            )
+        except (ValueError, TypeError, IndexError):
+            if diagnostic_frontier_required:
+                frontier_telemetry_invalid = True
+            else:
+                if route_monitor_only:
+                    route_projection_sample_count += 1
+                    route_projection_invalid_sample_count += 1
+                    frontier_projection_valid = False
+                frontier_tracker = None
     motion_ever_verified = False
     motion_status = verify_vehicle_motion(
         position_trace,
@@ -321,7 +512,36 @@ def evaluate_attempt(
             if len(action_trace) < max(0, int(trace_steps))
             else {}
         )
+        camera_frame = _valid_camera_frame(obs)
+        camera_age_s = _camera_topic_age_s(env) if "camera" in obs else None
+        camera_fresh: Optional[bool] = None
+        if "camera" in obs:
+            if camera_frame is None:
+                camera_missing_sample_count += 1
+            else:
+                camera_sample_count += 1
+                if camera_age_s is None:
+                    camera_freshness_unknown_count += 1
+                else:
+                    camera_ages_s.append(camera_age_s)
+                    camera_fresh = camera_age_s <= float(camera_freshness_limit_s)
+                    if camera_fresh:
+                        camera_fresh_sample_count += 1
+                    else:
+                        camera_stale_sample_count += 1
+                now_wall = time.monotonic()
+                if (
+                    camera_preview_writer is not None
+                    and now_wall - last_camera_preview_wall_s >= camera_preview_interval_s
+                ):
+                    # PreviewWriter copies the frame and writes it on one
+                    # bounded background thread, keeping image I/O off-policy.
+                    if camera_preview_writer.submit([camera_frame]):
+                        last_camera_preview_wall_s = now_wall
+        inference_started = time.perf_counter()
         action, _ = model.predict(obs, deterministic=True)
+        inference_latency_s = max(0.0, time.perf_counter() - inference_started)
+        policy_inference_latencies_s.append(inference_latency_s)
         command = [float(v) for v in action.reshape(-1)]
         debug = getattr(model, "last_debug", {})
         policy_throttle.append(command[0])
@@ -337,6 +557,9 @@ def evaluate_attempt(
                 "policy_steering": command[1],
                 "applied_throttle": float(info.get("throttle_command", 0.0)),
                 "applied_steering": float(info.get("steering_command", 0.0)),
+                "policy_inference_latency_s": inference_latency_s,
+                "camera_age_s": camera_age_s,
+                "camera_fresh": camera_fresh,
                 "next_observation_state": next_observation_trace["observation_state"],
                 "next_lidar_min_left": next_observation_trace["lidar_min_left"],
                 "next_lidar_min_front": next_observation_trace["lidar_min_front"],
@@ -348,8 +571,6 @@ def evaluate_attempt(
         applied_throttle.append(float(info.get("throttle_command", 0.0)))
         applied_steering.append(float(info.get("steering_command", 0.0)))
         steps += 1
-        if on_step is not None:
-            on_step(steps, obs, info)
         interval = float(info.get("control_interval_s", 0.0))
         scan_rate = float(info.get("lidar_scan_rate_hz", 0.0))
         if math.isfinite(interval) and interval > 0:
@@ -370,6 +591,74 @@ def evaluate_attempt(
             if displacement >= motion_minimum_displacement_m:
                 last_motion_position = current_position
                 last_motion_elapsed_s = control_elapsed_s
+            if frontier_tracker is not None:
+                try:
+                    current_xy = _official_xy_position(current_position)
+                    if current_xy is None:
+                        raise ValueError("official IPS pose is missing x/y coordinates")
+                    progress = frontier_tracker.update(
+                        current_xy[0], current_xy[1], now=control_elapsed_s
+                    )
+                    frontier_state = progress
+                    frontier_progress_m = float(progress.get("progress_m") or frontier_progress_m)
+                    frontier_projection_valid = bool(progress.get("current_projection_valid", False))
+                    if route_monitor_only:
+                        route_projection_sample_count += 1
+                        route_projection_valid_sample_count += int(frontier_projection_valid)
+                        route_projection_invalid_sample_count += int(not frontier_projection_valid)
+                    frontier_lateral_offset_m = frontier_tracker.lateral_distance(
+                        current_xy[0], current_xy[1]
+                    )
+                    if float(progress.get("advanced_m") or 0.0) >= 0.04:
+                        last_frontier_elapsed_s = control_elapsed_s
+                    if diagnostic_frontier_required and not progress.get("current_projection_valid", False):
+                        frontier_telemetry_invalid = True
+                except (ValueError, TypeError, IndexError):
+                    if diagnostic_frontier_required:
+                        frontier_telemetry_invalid = True
+                        frontier_projection_valid = False
+                    else:
+                        if route_monitor_only:
+                            route_projection_sample_count += 1
+                            route_projection_invalid_sample_count += 1
+                            frontier_projection_valid = False
+                        frontier_tracker = None
+        elif diagnostic_frontier_required:
+            frontier_telemetry_invalid = True
+            frontier_projection_valid = False
+        elif route_monitor_only:
+            route_projection_sample_count += 1
+            route_projection_invalid_sample_count += 1
+            frontier_projection_valid = False
+        if len(action_trace) > 0 and action_trace[-1].get("step") == steps - 1:
+            action_trace[-1].update({
+                "frontier_progress_m": frontier_progress_m if frontier_tracker is not None else None,
+                "frontier_progress_fraction": _frontier_fraction(
+                    frontier_progress_m if frontier_tracker is not None else None,
+                    frontier_route_length_m,
+                    target_laps=frontier_progress_target_laps,
+                ),
+                "frontier_projection_valid": frontier_projection_valid,
+                "route_projection_valid": frontier_projection_valid,
+                "frontier_lateral_offset_m": frontier_lateral_offset_m,
+            })
+        if on_step is not None:
+            callback_info = dict(info)
+            callback_info.update({
+                "frontier_line": frontier_state.get("line"),
+                "frontier_progress_m": frontier_progress_m if frontier_tracker is not None else None,
+                "frontier_progress_fraction": _frontier_fraction(
+                    frontier_progress_m if frontier_tracker is not None else None,
+                    frontier_route_length_m,
+                    target_laps=frontier_progress_target_laps,
+                ),
+                "frontier_projection_valid": frontier_projection_valid,
+                "route_projection_valid": frontier_projection_valid,
+                "frontier_lateral_offset_m": frontier_lateral_offset_m,
+                "camera_age_s": camera_age_s,
+                "camera_fresh": camera_fresh,
+            })
+            on_step(steps, obs, callback_info)
         motion_status = verify_vehicle_motion(
             position_trace,
             time.monotonic() - started,
@@ -382,7 +671,7 @@ def evaluate_attempt(
         while laps_reported < len(lap_times):
             laps_reported += 1
             print(
-                f"attempt {attempt_index}: race lap {laps_reported}/10 "
+                f"attempt {attempt_index}: race lap {laps_reported}/{race_laps_required} "
                 f"{float(lap_times[laps_reported - 1]):.3f}s",
                 flush=True,
             )
@@ -401,6 +690,14 @@ def evaluate_attempt(
             )
         if bool(info.get("collision_event")):
             stop_reason = "collision_detected"
+            break
+        if frontier_telemetry_invalid:
+            stop_reason = "frontier_telemetry_invalid"
+            motion_status = {
+                **motion_status,
+                "frontier_telemetry_invalid": True,
+                "frontier_progress_m": frontier_progress_m,
+            }
             break
         if collisions > int(disqualification_limit):
             stop_reason = "collision_disqualification_limit"
@@ -431,7 +728,8 @@ def evaluate_attempt(
             }
             break
         if (
-            motion_ever_verified
+            not diagnostic_frontier_required
+            and motion_ever_verified
             and control_elapsed_s - last_motion_elapsed_s >= motion_stall_after_s
         ):
             stop_reason = "vehicle_motion_stalled"
@@ -442,12 +740,27 @@ def evaluate_attempt(
                 "seconds_since_motion": control_elapsed_s - last_motion_elapsed_s,
             }
             break
+        if (
+            frontier_tracker is not None
+            and frontier_stall_after_s > 0
+            and control_elapsed_s - last_frontier_elapsed_s >= frontier_stall_after_s
+        ):
+            stop_reason = "frontier_progress_stalled"
+            motion_status = {
+                **motion_status,
+                "frontier_progress_stalled": True,
+                "frontier_stall_after_s": float(frontier_stall_after_s),
+                "seconds_since_frontier_progress": control_elapsed_s - last_frontier_elapsed_s,
+                "frontier_progress_m": frontier_progress_m,
+            }
+            break
     else:
         stop_reason = "race_complete"
 
     result = summarize_attempt(
         lap_times_s=list(info.get("race_lap_times_s", [])),
         race_collisions=int(info.get("race_collisions", 0)),
+        race_laps_required=race_laps_required,
     )
     if stop_reason == "collision_detected":
         score_status = "collision_detected"
@@ -482,6 +795,32 @@ def evaluate_attempt(
         "median_reported_lidar_scan_rate_hz": (
             statistics.median(scan_rates_hz) if scan_rates_hz else None
         ),
+        "policy_inference_latency_s": _distribution(policy_inference_latencies_s),
+        "camera_sample_count": camera_sample_count,
+        "camera_fresh_sample_count": camera_fresh_sample_count,
+        "camera_stale_sample_count": camera_stale_sample_count,
+        "camera_missing_sample_count": camera_missing_sample_count,
+        "camera_freshness_unknown_count": camera_freshness_unknown_count,
+        "camera_age_s": _distribution(camera_ages_s),
+        "camera_freshness_limit_s": float(camera_freshness_limit_s),
+        "frontier_progress_m": frontier_progress_m if frontier_tracker is not None else None,
+        "frontier_progress_fraction": _frontier_fraction(
+            frontier_progress_m if frontier_tracker is not None else None,
+            frontier_route_length_m,
+            target_laps=frontier_progress_target_laps,
+        ),
+        "frontier_progress_target_laps": frontier_progress_target_laps,
+        "frontier_progress_target_m": (
+            frontier_route_length_m * frontier_progress_target_laps
+            if frontier_route_length_m is not None else None
+        ),
+        "frontier_projection_valid": frontier_projection_valid,
+        "route_projection_valid": frontier_projection_valid,
+        "route_projection_sample_count": route_projection_sample_count,
+        "route_projection_valid_sample_count": route_projection_valid_sample_count,
+        "route_projection_invalid_sample_count": route_projection_invalid_sample_count,
+        "frontier_lateral_offset_m": frontier_lateral_offset_m,
+        "frontier_line": frontier_state.get("line"),
         "action_observation_diagnostics": action_observation_diagnostics(
             policy_throttle=policy_throttle,
             policy_steering=policy_steering,
@@ -494,8 +833,11 @@ def evaluate_attempt(
         "motion_verification": motion_status,
         "position_diagnostics": summarize_evaluator_positions(position_trace),
         "score_status": score_status,
-        "valid_for_comparison": score_status == "valid",
+        "valid_for_comparison": score_status == "valid" and not noncompetitive,
+        "noncompetitive_diagnostic": bool(noncompetitive),
     })
+    if noncompetitive:
+        result["adjusted_race_time_s"] = None
     print(json.dumps(result, indent=2), flush=True)
     return result
 
@@ -518,6 +860,12 @@ def evaluate(
     controller: str = "ppo",
     trace_steps: int = 0,
     observation_profile: str = "official_sensors_camera",
+    lap_progress_timeout_s: float = 90.0,
+    lap_progress_wall_timeout_s: float = 90.0,
+    frontier_path: Optional[Path] = None,
+    frontier_stall_after_s: float = 0.0,
+    route_monitor_only: bool = False,
+    validation_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
@@ -525,24 +873,61 @@ def evaluate(
     checkpoint = Path(model_path).resolve()
     if controller == "ppo" and not checkpoint.is_file():
         raise FileNotFoundError(f"PPO checkpoint not found: {checkpoint}")
+    model_sha256 = _sha256(checkpoint) if checkpoint.is_file() else None
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     if trace_steps < 0 or trace_steps > 500:
         raise ValueError("trace_steps must be between 0 and 500")
+    if validation_mode not in {None, "bc_diagnostic", "training_probe"}:
+        raise ValueError("unsupported validation_mode")
+    if route_monitor_only and (validation_mode is not None or frontier_path is None):
+        raise ValueError("route_monitor_only requires a competitive evaluation with a verified route path")
+    if validation_mode in {"bc_diagnostic", "training_probe"}:
+        if frontier_path is None:
+            raise ValueError(f"{validation_mode} requires the verified competition frontier path")
+        if lap_progress_timeout_s < 240 or lap_progress_wall_timeout_s < 240:
+            raise ValueError(f"{validation_mode} requires at least 240-second lap-progress deadlines")
+        if frontier_stall_after_s != 5.0:
+            raise ValueError(f"{validation_mode} requires the five-second frontier-stall check")
+        if attempts != 1:
+            raise ValueError(f"{validation_mode} requires exactly one fresh attempt")
+    if validation_mode == "training_probe" and controller != "ppo":
+        raise ValueError("training_probe requires the authenticated PPO controller")
     if attempts > 1:
         raise ValueError(
             "each official attempt requires a fresh simulator process; the "
             "restricted reset command is not used by the scored path"
         )
 
+    # These are needed by route-monitor identity validation before the race
+    # starts, as well as by the optional telemetry publisher below.
+    hub_url = os.environ.get("HUB_URL", "")
+    run_id = os.environ.get("AICAR_RUN_ID", "")
+
     model = load_policy(
         checkpoint, device=device, controller=controller,
         observation_profile=observation_profile,
     )
+    route_identity_before = (
+        _route_monitor_identity(
+            output_path=output_path,
+            frontier_path=Path(frontier_path),
+            expected_run_id=run_id,
+        )
+        if route_monitor_only else None
+    )
+    frontier_tracker = None
+    if frontier_path is not None:
+        from src.layer2.route_progress import RouteProgressTracker
+        frontier_tracker = RouteProgressTracker.from_csv(Path(frontier_path), min_push_m=0.04)
+    race_laps_required = 3 if validation_mode == "training_probe" else 10
+    frontier_progress_target_laps = (
+        race_laps_required + 1 if validation_mode is not None else race_laps_required
+    )
     env = OfficialRaceEnv(
         timeout_s=timeout_s,
         warmup_laps=1,
-        race_laps=10,
+        race_laps=race_laps_required,
         steering_action_scale=steering_action_scale,
         straight_throttle_gain=straight_throttle_gain,
         straight_throttle_steering_threshold=straight_throttle_steering_threshold,
@@ -554,12 +939,16 @@ def evaluate(
     )
     runs: List[Dict[str, Any]] = []
     publisher = None
+    camera_preview_writer = None
     last_frame_at = 0.0
-    hub_url = os.environ.get("HUB_URL", "")
-    run_id = os.environ.get("AICAR_RUN_ID", "")
     if hub_url and run_id:
         from src.layer3.hub_callback import _Publisher
         publisher = _Publisher(hub_url, snapshot_path=(output_path.parent / "watch_latest.json") if output_path else None)
+        if observation_profile == "official_sensors_camera":
+            from src.layer3.preview_writer import PreviewWriter
+            preview_root = output_path.parent if output_path is not None else checkpoint.parent
+            camera_preview_writer = PreviewWriter(preview_root / "camera")
+            camera_preview_writer.__enter__()
 
     def publish_frame(step, observation, info):
         nonlocal last_frame_at
@@ -568,6 +957,7 @@ def evaluate(
         from src.layer3.hub_callback import _lap_fields, _min_pool_lidar
         last_frame_at = time.monotonic()
         position = info.get("race_position")
+        route_position = _official_xy_position(position)
         scan = observation["lidar"]
         if getattr(scan, "ndim", 1) > 1:
             scan = scan[-1]
@@ -576,12 +966,21 @@ def evaluate(
             "run_id": run_id, "step": step, "episode": 1, "map_id": "none",
             "ts": datetime.now(timezone.utc).isoformat(),
             "lidar_range_min": 0.06, "lidar_range_max": 10.0,
-            "cars": [{"env_id": 0, "pose": [position[0], position[2]] if position else None,
+            "cars": [{"env_id": 0, "pose": route_position,
                       "yaw": info.get("yaw"), "speed": info.get("watch_speed_mps"),
                       "speed_source": "lidar_estimate", "episode_return": None,
                       "collision": bool(info.get("collision_event")),
                       "collision_count": info.get("race_collisions", 0),
-                      "lidar": _min_pool_lidar(scan, 120), **_lap_fields(info)}],
+                      "lidar": _min_pool_lidar(scan, 120),
+                      "frontier_line": info.get("frontier_line"),
+                      "frontier_progress_m": info.get("frontier_progress_m"),
+                      "frontier_progress_fraction": info.get("frontier_progress_fraction"),
+                      "frontier_projection_valid": info.get("frontier_projection_valid"),
+                      "route_projection_valid": info.get("route_projection_valid"),
+                      "frontier_lateral_offset_m": info.get("frontier_lateral_offset_m"),
+                      "camera_age_s": info.get("camera_age_s"),
+                      "camera_fresh": info.get("camera_fresh"),
+                      **_lap_fields(info)}],
         })
     try:
         for attempt in range(1, attempts + 1):
@@ -591,18 +990,33 @@ def evaluate(
                 wall_timeout_s=wall_timeout_s,
                 max_steps=max_steps,
                 attempt_index=attempt,
+                race_laps_required=race_laps_required,
+                frontier_progress_target_laps=frontier_progress_target_laps,
+                noncompetitive=validation_mode is not None,
                 trace_steps=trace_steps,
+                lap_progress_timeout_s=lap_progress_timeout_s,
+                lap_progress_wall_timeout_s=lap_progress_wall_timeout_s,
+                frontier_tracker=frontier_tracker,
+                frontier_stall_after_s=frontier_stall_after_s,
+                route_monitor_only=route_monitor_only,
+                camera_preview_writer=camera_preview_writer,
                 disqualification_limit=10,
                 on_step=publish_frame,
             ))
         completed = [
             run for run in runs
-            if run.get("valid_for_comparison") is True
-            and run["adjusted_race_time_s"] is not None
+            if run.get("score_status") == "valid"
+            and run.get("complete") is True
         ]
-        adjusted = [float(run["adjusted_race_time_s"]) for run in completed]
+        competitive = validation_mode is None
+        adjusted = [
+            float(run["adjusted_race_time_s"])
+            for run in completed
+            if competitive and run.get("adjusted_race_time_s") is not None
+        ]
         result: Dict[str, Any] = {
             "model": str(checkpoint),
+            "model_sha256": model_sha256,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "competition": "RoboRacer Sim Racing League @ IROS 2026",
             "official_base_image": "autodriveecosystem/autodrive_roboracer_api:2026-iros-compete",
@@ -613,12 +1027,41 @@ def evaluate(
             "throttle_mode": throttle_mode,
             "steering_mode": steering_mode,
             "warmup_laps_ignored": 1,
-            "race_laps": 10,
+            "race_laps": race_laps_required,
+            "validation_mode": validation_mode,
+            "competitive_score_valid": competitive,
+            "noncompetitive_diagnostic": not competitive,
+            "protocol": (
+                "official_training_probe_1_plus_3" if validation_mode == "training_probe"
+                else "official_bc_diagnostic_1_plus_10" if validation_mode == "bc_diagnostic"
+                else "official_competitive_1_plus_10"
+            ),
             "runs": runs,
             "completed_attempts": len(completed),
-            "median_adjusted_race_time_s": statistics.median(adjusted) if adjusted else None,
-            "best_adjusted_race_time_s": min(adjusted) if adjusted else None,
+            "median_adjusted_race_time_s": statistics.median(adjusted) if competitive and adjusted else None,
+            "best_adjusted_race_time_s": min(adjusted) if competitive and adjusted else None,
         }
+        if route_monitor_only:
+            route_identity = _route_monitor_identity(
+                output_path=output_path,
+                frontier_path=Path(frontier_path),
+                expected_run_id=run_id,
+            )
+            if route_identity != route_identity_before:
+                raise RuntimeError("official scene, route, or simulator identity changed during route monitoring")
+            result.update(route_identity)
+            for run in runs:
+                run.update(route_identity)
+                run["route_monitor"] = {
+                    "projection_valid": (
+                        run.get("route_projection_invalid_sample_count", 0) == 0
+                        and run.get("route_projection_valid_sample_count", 0) > 0
+                    ),
+                    "projection_sample_count": run.get("route_projection_sample_count", 0),
+                    "projection_valid_sample_count": run.get("route_projection_valid_sample_count", 0),
+                    "projection_invalid_sample_count": run.get("route_projection_invalid_sample_count", 0),
+                    "scoring_or_stop_effect": False,
+                }
         target = output_path or checkpoint.parent / f"{checkpoint.stem}_iros2026_evaluation.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -631,10 +1074,14 @@ def evaluate(
         return result
     finally:
         try:
-            env.close()
+            if camera_preview_writer is not None:
+                camera_preview_writer.__exit__(None, None, None)
         finally:
-            if publisher is not None:
-                publisher.stop()
+            try:
+                env.close()
+            finally:
+                if publisher is not None:
+                    publisher.stop()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -674,6 +1121,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--trace-steps", type=int, default=0, help="Include a bounded action/sensor trace in the report")
+    parser.add_argument("--lap-progress-timeout-s", type=float, default=90.0)
+    parser.add_argument("--lap-progress-wall-timeout-s", type=float, default=90.0)
+    parser.add_argument("--frontier-path", type=Path, default=None)
+    parser.add_argument("--frontier-stall-after-s", type=float, default=0.0)
+    parser.add_argument("--route-monitor-only", action="store_true")
+    parser.add_argument("--validation-mode", choices=("bc_diagnostic", "training_probe"), default=None)
     args = parser.parse_args(argv)
     evaluate(
         args.model,
@@ -692,6 +1145,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         controller=args.controller,
         trace_steps=args.trace_steps,
         observation_profile=args.observation_profile,
+        lap_progress_timeout_s=args.lap_progress_timeout_s,
+        lap_progress_wall_timeout_s=args.lap_progress_wall_timeout_s,
+        frontier_path=args.frontier_path,
+        frontier_stall_after_s=args.frontier_stall_after_s,
+        route_monitor_only=args.route_monitor_only,
+        validation_mode=args.validation_mode,
     )
     return 0
 

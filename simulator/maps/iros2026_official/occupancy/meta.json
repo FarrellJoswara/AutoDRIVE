@@ -1,0 +1,15 @@
+{
+  "label": "IROS 2026 Competition (official)",
+  "source": "https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-iros-2026/",
+  "centerline": {
+    "status": "ready",
+    "file": "centerline.csv",
+    "closed": true
+  },
+  "official_world_alignment": {
+    "rotation_rad": 0.0,
+    "translation_x_m": 0.0,
+    "translation_z_m": 0.0,
+    "source": "Official scene mesh transformed directly to ROS IPS XY"
+  }
+}

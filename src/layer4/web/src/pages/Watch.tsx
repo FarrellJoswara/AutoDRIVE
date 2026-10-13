@@ -42,16 +42,44 @@ function formatNumber(value: number | null | undefined, digits = 2, suffix = "")
   return value == null || !Number.isFinite(value) ? "—" : `${value.toFixed(digits)}${suffix}`;
 }
 
-function mapIdForWatch(snapshotMapId: string | null | undefined, runMapId: string | null | undefined, maps: MapCatalogEntry[]): string {
+function mapIdForWatch(snapshotMapId: string | null | undefined, runMapId: string | null | undefined, maps: MapCatalogEntry[], backend?: string | null): string {
   // Older official-run telemetry serializes a missing map as "none". Resolve
   // that through the active map catalog so these runs still get their underlay.
   if (snapshotMapId && snapshotMapId !== "none") return snapshotMapId;
   if (runMapId && runMapId !== "none") return runMapId;
+  if (backend === "windows_external" && maps.some((entry) => entry.id === "iros2026_official")) return "iros2026_official";
   return maps.find((entry) => entry.active)?.id ?? "none";
 }
 
-function latestFleet(snapshot: OfficialRunTelemetry | null, run: RunSummary | null): FleetTelemetry | null {
-  return snapshot?.fleet ?? (run?.latest_telemetry && "cars" in run.latest_telemetry
+function latestFleet(
+  snapshot: OfficialRunTelemetry | null,
+  run: RunSummary | null,
+): FleetTelemetry | null {
+  const phase = snapshot?.training_phase;
+  if (phase?.teacher_poses?.length && run) {
+    return {
+      kind: "fleet",
+      runtime: "official",
+      step: phase.step,
+      episode: 0,
+      run_id: run.run_id,
+      ts: phase.ts,
+      cars: phase.teacher_poses.map((teacher) => ({
+        env_id: teacher.env_id,
+        pose: teacher.pose,
+        yaw: teacher.yaw,
+        collision: false,
+        collision_count: 0,
+        speed: teacher.speed,
+        speed_source: "lidar_estimate",
+        episode_return: null,
+        lap_count: 0,
+      })),
+    };
+  }
+  const actualFleet = snapshot?.fleet;
+  if (actualFleet) return actualFleet;
+  return (run?.latest_telemetry && "cars" in run.latest_telemetry
     ? run.latest_telemetry
     : run?.latest_fleet ?? null);
 }
@@ -75,7 +103,10 @@ function phaseLabel(phase: OfficialRunTelemetry["training_phase"]): string | nul
 }
 
 function sourceTimestamp(data: OfficialRunTelemetry | null): number | null {
-  const value = data?.fleet?.ts ?? data?.metrics?.ts ?? data?.updated_at ?? "";
+  const phaseHasTeacherPose = Boolean(data?.training_phase?.teacher_poses?.length);
+  const value = phaseHasTeacherPose
+    ? data?.training_phase?.ts ?? ""
+    : data?.fleet?.ts ?? data?.training_phase?.ts ?? data?.metrics?.ts ?? data?.updated_at ?? "";
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : null;
 }
@@ -123,6 +154,11 @@ function OverviewTile({
   const stage = phaseLabel(snapshot?.training_phase);
   const age = ageLabel(frame, fleet);
   const cars = fleet?.cars ?? [];
+  const speedLabel = cars.length > 0 && cars.every((car) => car.speed_source === "lidar_estimate")
+    ? "Avg LiDAR speed"
+    : cars.length > 0 && cars.every((car) => car.speed_source === "simulator")
+      ? "Avg simulator speed"
+      : "Avg wheel speed";
   const speeds = cars.map((car) => car.speed).filter((speed): speed is number => speed != null && Number.isFinite(speed));
   const movingSpeed = speeds.length ? speeds.reduce((sum, speed) => sum + speed, 0) / speeds.length : null;
   const lapCount = cars.reduce((max, car) => Math.max(max, car.lap_count ?? 0), 0);
@@ -131,7 +167,7 @@ function OverviewTile({
     return value != null && Number.isFinite(value) && (best == null || value < best) ? value : best;
   }, null);
   const step = Math.max(metrics?.step ?? 0, fleet?.step ?? 0);
-  const mapId = mapIdForWatch(snapshot?.map_id, run.map_id, maps);
+  const mapId = mapIdForWatch(snapshot?.map_id, run.map_id, maps, run.config.simulator_backend);
   const map = maps.find((entry) => entry.id === mapId);
   const showTeacherRoute = Boolean(run.config.behavior_cloning_enabled && map?.centerline_url);
   const canvasAge = age.stale ? STALE_AFTER_MS + 1 : 0;
@@ -191,7 +227,7 @@ function OverviewTile({
           rolloutSize={Math.max(1, fleet?.rollout_size ?? metrics?.rollout_size ?? 1)}
           showTeacherRoute={showTeacherRoute}
           teacherRouteUrl={map?.centerline_url ?? null}
-          teacherProgressMeters={snapshot?.training_phase?.route_progress_m}
+          teacherProgressMeters={snapshot?.training_phase?.teacher_poses?.length ? undefined : snapshot?.training_phase?.route_progress_m}
         />
         </> : <div className="meta" style={{ display: "grid", height: "100%", placeItems: "center" }}>Map preview loads as this card comes into view</div>}
       </div>}
@@ -201,7 +237,7 @@ function OverviewTile({
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.5rem", marginTop: "0.7rem" }}>
         <div><small className="meta">Cars</small><strong style={{ display: "block" }}>{cars.length || "—"}</strong></div>
-        <div><small className="meta">{cars.every((car) => car.speed_source === "lidar_estimate") ? "Avg LiDAR speed" : "Avg wheel speed"}</small><strong style={{ display: "block" }}>{formatNumber(movingSpeed, 2, " m/s")}</strong></div>
+        <div><small className="meta">{speedLabel}</small><strong style={{ display: "block" }}>{formatNumber(movingSpeed, 2, " m/s")}</strong></div>
         <div><small className="meta">Laps</small><strong style={{ display: "block" }}>{cars.length ? lapCount : "—"}</strong></div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", marginTop: "0.55rem", fontSize: "0.78rem" }}>
@@ -240,7 +276,7 @@ export function WatchPage() {
   const stage = phaseLabel(phase);
   const teacherPhase = phase?.phase === "demonstration_collection" || phase?.phase === "behavior_cloning";
   const cars = fleet?.cars ?? [];
-  const mapId = mapIdForWatch(snapshot?.map_id, selectedRun?.map_id, maps);
+  const mapId = mapIdForWatch(snapshot?.map_id, selectedRun?.map_id, maps, selectedRun?.config.simulator_backend);
   const selectedMap = maps.find((map) => map.id === mapId) ?? null;
   const showTeacherRoute = Boolean(selectedRun?.config.behavior_cloning_enabled && selectedMap?.centerline_url);
   const age = ageLabel(selectedFrame, fleet);
@@ -261,6 +297,7 @@ export function WatchPage() {
   const cameraEnvId = selectedEnvId != null && selectedEnvId >= 0
     ? selectedEnvId
     : cars[0]?.env_id ?? 0;
+  const teacherTelemetry = phase?.teacher_poses?.find((car) => car.env_id === cameraEnvId) ?? null;
   const hasCamera = selectedRun?.config?.observation_profile === "official_sensors_camera";
 
   useEffect(() => {
@@ -409,12 +446,14 @@ export function WatchPage() {
         <div className="fleet-layout">
           <div className="fleet-canvas-stack">
             {showTeacherRoute && <p className="meta" style={{ margin: "0 0 0.35rem" }}>
-              Cyan line: target centerline used for behavior-cloning examples. Yellow E# markers: current route station when available; no driving trace is recorded here.
+              Cyan line: target centerline. {phase?.teacher_poses?.length
+                ? "Car marker, heading, and speed show the measured simulator pose; route progress is reported separately."
+                : "Yellow E# markers show route progress when pose telemetry is unavailable."}
               {phase?.completed_steps_per_env != null && phase.target_steps_per_env != null
                 ? ` · ${phase.completed_steps_per_env.toLocaleString()} / ${phase.target_steps_per_env.toLocaleString()} steps per environment`
                 : teacherPhase ? " · waiting for the first teacher progress update" : ""}
             </p>}
-            <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} officialWorldAlignment={selectedMap?.official_world_alignment ?? null} fleetPanel={fleet} runState={selectedRun.state} phaseOverride={phase} trainingStep={currentStep} rolloutSize={rolloutSize} showTeacherRoute={showTeacherRoute} teacherRouteUrl={selectedMap?.centerline_url ?? null} teacherProgressMeters={phase?.route_progress_m} />
+          <FleetCanvas showMap={showMap} showFleet={showFleet} showFrontier={showFrontier} showCurrentProgress={showProgress} showLidar={showLidar} selectedEnvId={selectedEnvId ?? -1} mapId={mapId} mapYamlUrl={mapId === "none" ? null : selectedMap?.yaml_url ?? null} officialWorldAlignment={selectedMap?.official_world_alignment ?? null} fleetPanel={fleet} telemetryOverride={fleet} runState={selectedRun.state} phaseOverride={phase} trainingStep={currentStep} rolloutSize={rolloutSize} showTeacherRoute={showTeacherRoute} teacherRouteUrl={selectedMap?.centerline_url ?? null} teacherProgressMeters={phase?.teacher_poses?.length ? undefined : phase?.route_progress_m} />
           </div>
           <aside className="fleet-side">
             <section aria-label="Front camera" style={{ marginBottom: 16 }}>
@@ -429,15 +468,29 @@ export function WatchPage() {
                     style={{ width: "100%", height: "100%", objectFit: "contain", display: cameraReady ? "block" : "none" }}
                   />
                   {!cameraReady && <span className="meta">{active && phase?.phase === "demonstration_collection"
-                    ? "Camera frames are feeding teacher collection; the Watch preview is saved when PPO telemetry starts."
+                    ? "Waiting for the first camera frame from teacher collection…"
                     : active && phase?.phase === "behavior_cloning"
-                      ? "Teacher samples are collected; the Watch preview will appear when PPO telemetry starts."
+                      ? "Waiting for a camera frame from the cloning run…"
                       : active ? "Waiting for the first saved camera frame…" : "No saved camera frame for this environment."}</span>}
                 </div>
                 <small className="meta">{active ? "Live frame · refreshes every second" : "Last saved frame"}</small>
               </> : <p className="meta">This run was created without camera observations.</p>}
             </section>
             <h3>Run telemetry</h3>
+            {teacherTelemetry && <section aria-label="Layer 1 driving telemetry" className="training-progress-panel" style={{ marginBottom: 12 }}>
+              <h4 style={{ marginTop: 0 }}>Layer 1 sensors and controls · Env {teacherTelemetry.env_id}</h4>
+              <div className="official-metric-grid">
+                <div><span>LiDAR left</span><strong>{formatNumber(teacherTelemetry.lidar_left_m, 2, " m")}</strong></div>
+                <div><span>LiDAR front</span><strong>{formatNumber(teacherTelemetry.lidar_front_m, 2, " m")}</strong></div>
+                <div><span>LiDAR right</span><strong>{formatNumber(teacherTelemetry.lidar_right_m, 2, " m")}</strong></div>
+                <div><span>Steering command</span><strong>{formatNumber(teacherTelemetry.steering, 3)}</strong></div>
+                <div><span>Throttle command</span><strong>{formatNumber(teacherTelemetry.throttle, 3)}</strong></div>
+                <div><span>Centerline offset</span><strong>{formatNumber(teacherTelemetry.centerline_lateral_m, 2, " m")}</strong></div>
+                <div><span>Official laps</span><strong>{teacherTelemetry.official_lap_count ?? "—"}</strong></div>
+                <div><span>Race laps</span><strong>{teacherTelemetry.race_laps_completed ?? "—"}</strong></div>
+              </div>
+              <small className="meta">Post-step simulator pose and Layer 1 scan/control snapshot; route projection {teacherTelemetry.route_projection_valid == null ? "unavailable" : teacherTelemetry.route_projection_valid ? "valid" : "invalid"} · progress {formatNumber(teacherTelemetry.route_progress_m, 2, " m")}</small>
+            </section>}
             {!fleet ? <p className="meta">No car frame has arrived for this run yet. The run may still be starting.</p> : <>
               <dl className="fleet-stats">
                 <div><dt>Episode</dt><dd>{fleet.episode}</dd></div>
@@ -446,7 +499,7 @@ export function WatchPage() {
                 {selectedRun.log_path && <div><dt>Log</dt><dd title={selectedRun.log_path}>{selectedRun.log_path}</dd></div>}
               </dl>
               <div className="official-car-list">{cars.map((car) => <button type="button" key={car.env_id} onClick={() => setSelectedEnvId(car.env_id)} data-selected={selectedEnvId === car.env_id}>
-                <span>Env {car.env_id}</span><strong>{formatNumber(car.speed, 2)} m/s</strong><small>{car.speed_source === "lidar_estimate" ? "LiDAR speed estimate" : "Wheel speed estimate"} · Lap {car.lap_count ?? 0} · collisions {car.collision_count ?? (car.collision ? 1 : 0)}</small>
+                <span>Env {car.env_id}</span><strong>{formatNumber(car.speed, 2)} m/s</strong><small>{car.speed_source === "lidar_estimate" ? "LiDAR speed estimate" : car.speed_source === "simulator" ? "Simulator speed" : "Wheel speed estimate"} · Lap {car.lap_count ?? 0} · collisions {car.collision_count ?? (car.collision ? 1 : 0)}</small>
               </button>)}</div>
             </>}
           </aside>

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import json
 import math
+import hashlib
+import sys
 from os import scandir
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,16 +19,28 @@ from fastapi.staticfiles import StaticFiles
 
 from src.layer4.hub.map_activate import activate_map
 from src.layer4.hub.maps_catalog import list_maps_api, resolve_maps_root
-from src.layer4.hub.official_run_manager import OfficialRunManager
+from src.layer4.hub.official_run_manager import (
+    OfficialRunManager,
+    is_exact_campaign_maintenance_resume,
+    normalize_official_config,
+)
 from src.layer4.hub.native_official_backend import NativeOfficialBackend
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_evaluation_service import OfficialEvaluationService
+from src.layer4.hub.campaign_deadline import (
+    assert_campaign_allows,
+    assert_campaign_training_config,
+    campaign_deadline_status,
+    current_boot_id,
+)
 from src.layer4.hub.official_models import list_official_models
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
+from src.layer4.hub.watch_utils import watch_snapshot_age_ms as _watch_snapshot_age_ms
 from src.layer4.official_settings import (
     OfficialTrainSettings,
     load_official_train_settings,
     save_official_train_settings,
+    validate_bc_teacher_action_mapping,
 )
 from src.layer4.settings import ROOT, Settings, load_settings, save_settings
 
@@ -53,12 +67,18 @@ HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
 _run_backend = os.environ.get("AICAR_RUN_BACKEND", "native" if os.name != "nt" else "docker").strip().lower()
-if _run_backend == "native":
+if _run_backend == "test":
+    # Test imports must never scan or reconcile the user's persisted run root.
+    class _OfflineTestBackend:
+        is_owner = False
+
+    official_runs = OfficialRunManager(backend=_OfflineTestBackend())
+elif _run_backend == "native":
     official_runs = OfficialRunManager(backend=NativeOfficialBackend())
 elif _run_backend == "docker":
     official_runs = OfficialRunManager()
 else:
-    raise RuntimeError("AICAR_RUN_BACKEND must be 'native' or 'docker'")
+    raise RuntimeError("AICAR_RUN_BACKEND must be 'native', 'docker', or 'test'")
 official_evaluations = OfficialEvaluationService(official_runs)
 replay_job = OfficialReplayJob(
     official_runs, on_status=lambda s: bus.publish_replay_status(s),
@@ -66,6 +86,56 @@ replay_job = OfficialReplayJob(
 )
 _settings: Settings = load_settings()
 _official_train_settings: OfficialTrainSettings = load_official_train_settings()
+
+
+def _hub_runtime_identity() -> Dict[str, Any]:
+    """Expose identity for the exact hub process/build serving health checks."""
+    source_modules = (
+        "src.layer4.hub.app",
+        "src.layer4.hub.official_evaluation_service",
+        "src.layer4.hub.official_run_manager",
+        "src.layer4.hub.native_official_backend",
+        "src.layer4.hub.campaign_deadline",
+        "src.layer3.official_evaluate",
+        "src.layer2.official_race_env",
+        "src.layer1.ros2_racer",
+        "src.layer1.official_bridge_relay",
+    )
+    components: Dict[str, str] = {}
+    for name in source_modules:
+        module = sys.modules.get(name)
+        path = Path(getattr(module, "__file__", "")) if module is not None else None
+        if path is None or not path.is_file():
+            continue
+        components[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps(components, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    start_identity = f"pid:{os.getpid()}"
+    try:
+        stat = Path("/proc/self/stat").read_text(encoding="utf-8")
+        fields_after_comm = stat[stat.rfind(")") + 2:].split()
+        # /proc fields start at field 3 after the parenthesized command name;
+        # starttime is field 22 (index 19 in this suffix).
+        start_identity = f"pid:{os.getpid()}:start_ticks:{fields_after_comm[19]}"
+    except (OSError, IndexError, ValueError):
+        pass
+    identity = {
+        "pid": os.getpid(),
+        "process_start_identity": start_identity,
+        "boot_id": current_boot_id(),
+        "executable": str(Path(sys.executable).resolve()),
+        "argv": [str(argument) for argument in sys.argv],
+        "source_sha256": fingerprint,
+    }
+    return {
+        "hub_pid": os.getpid(),
+        "hub_start_identity": start_identity,
+        "source_fingerprint": fingerprint,
+        "source_files_sha256": components,
+        "hub_identity": identity,
+    }
+
+
+HUB_RUNTIME_IDENTITY = _hub_runtime_identity()
 
 
 @asynccontextmanager
@@ -117,9 +187,13 @@ app.add_middleware(
 )
 
 
+def _campaign_status() -> Dict[str, Any]:
+    return campaign_deadline_status()
+
+
 @app.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok"}
+async def health() -> Dict[str, Any]:
+    return {"status": "ok", "campaign": _campaign_status(), **HUB_RUNTIME_IDENTITY}
 
 
 @app.post("/api/shutdown")
@@ -593,7 +667,7 @@ def _run_output_dir(run_id: str) -> Path:
 
 @app.get("/train/runs/{run_id}/camera/{env_id}")
 async def get_official_run_camera(run_id: str, env_id: int) -> FileResponse:
-    """Serve the latest bounded JPEG written by the official training callback."""
+    """Serve the latest bounded JPEG written during official training or cloning."""
     if not 0 <= env_id < 8:
         raise HTTPException(status_code=404, detail="camera frame not found")
     try:
@@ -634,16 +708,45 @@ async def create_official_run(request: Request) -> Dict[str, Any]:
         raw = await request.json()
         if not isinstance(raw, dict):
             raise ValueError("request body must be an object")
-        config = OfficialTrainSettings.model_validate(raw.get("config", raw))
+        raw_config = raw.get("config", raw)
+        if not isinstance(raw_config, dict):
+            raise ValueError("config must be an object")
+        # Keep the request's explicit field set before Pydantic fills in UI defaults.
+        # Authenticated PPO resumes inherit saved effective settings for omitted keys.
+        effective_config = normalize_official_config(raw_config, explicit_fields=set(raw_config))
+        config = OfficialTrainSettings.model_validate(effective_config)
+        validate_bc_teacher_action_mapping(
+            behavior_cloning_enabled=config.behavior_cloning_enabled,
+            resume=config.resume,
+            throttle_mode=config.throttle_mode,
+            negative_throttle_mode=config.negative_throttle_mode,
+            steering_mode=config.steering_mode,
+            steering_action_scale=config.steering_action_scale,
+            straight_throttle_gain=config.straight_throttle_gain,
+        )
         if config.observation_profile != "official_sensors_camera":
             raise ValueError("new official training runs require camera, LiDAR, and state observations")
+        maintenance_context = {
+            "normalized_config": config.model_dump(mode="json"),
+            "new_hub_identity": dict(HUB_RUNTIME_IDENTITY["hub_identity"]),
+        }
+        # Pre-save is a non-consuming admission check. The manager repeats
+        # this against its normalized settings and atomically claims the
+        # maintenance resume at the final run-creation boundary.
+        assert_campaign_allows("training", maintenance_resume=maintenance_context)
+        effective_config = config.model_dump(mode="json")
+        if not is_exact_campaign_maintenance_resume(
+            effective_config, maintenance_context["new_hub_identity"]
+        ):
+            assert_campaign_training_config(effective_config)
         save_official_train_settings(config)
         _official_train_settings = config
         display_name = raw.get("display_name")
         if display_name is not None and not isinstance(display_name, str):
             raise ValueError("display_name must be a string")
         return await __import__("asyncio").to_thread(
-            official_runs.create_run, config.model_dump(mode="json"), display_name
+            official_runs.create_run, config.model_dump(mode="json"), display_name,
+            maintenance_resume=maintenance_context,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -708,10 +811,14 @@ async def queue_automatic_evaluation(run_id: str, request: Request) -> Dict[str,
         candidate.relative_to(output)
         if candidate.parent.name != "checkpoints" or not candidate.name.startswith("automatic_evaluation_"):
             raise ValueError("snapshot must be an automatic evaluator checkpoint in this run's checkpoints directory")
+        automatic_mode = run.get("config", {}).get("automatic_evaluation_mode", "competitive")
+        if automatic_mode not in {"competitive", "training_probe"}:
+            raise ValueError("training run has an unsupported automatic evaluation mode")
         return replay_job.start_automatic(
             model_path=candidate, run_id=run_id, trigger=trigger,
             step=step if trigger == "steps" else None,
             episode=episode if trigger == "episodes" else None,
+            validation_mode="training_probe" if automatic_mode == "training_probe" else None,
         )
     except (ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -786,24 +893,6 @@ async def official_run_ppo_diagnostics(run_id: str) -> Dict[str, Any]:
     except ImportError as exc:
         raise HTTPException(status_code=503, detail="TensorBoard is unavailable") from exc
     return {"run_id": run_id, "updates": updates}
-
-
-def _watch_snapshot_age_ms(payload: Optional[Dict[str, Any]]) -> Optional[int]:
-    """Age of the source frame, not how recently the hub served it."""
-    if not isinstance(payload, dict):
-        return None
-    timestamp = payload.get("ts")
-    if not isinstance(timestamp, str):
-        return None
-    try:
-        from datetime import datetime, timezone
-
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return max(0, int((datetime.now(timezone.utc) - parsed).total_seconds() * 1000))
-    except (TypeError, ValueError, OverflowError):
-        return None
 
 
 def _read_watch_snapshot(path: Path) -> Optional[Dict[str, Any]]:
@@ -958,12 +1047,18 @@ async def replay_start(request: Request) -> Dict[str, Any]:
         seed = int(body.get("seed", 0))
         device = str(body.get("device", "auto"))
         trace_steps = int(body.get("trace_steps", 0))
+        validation_mode = body.get("validation_mode")
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid replay settings") from exc
     if device not in {"auto", "cpu", "cuda"}:
         raise HTTPException(status_code=400, detail="device must be auto, cpu, or cuda")
     if not 0 <= trace_steps <= 500:
         raise HTTPException(status_code=400, detail="trace_steps must be between 0 and 500")
+    if validation_mode is not None and validation_mode not in {"bc_diagnostic", "training_probe"}:
+        raise HTTPException(
+            status_code=400,
+            detail="validation_mode must be bc_diagnostic or training_probe when provided",
+        )
     models_root = (ROOT / "logs" / "rl").resolve()
     model_path = (models_root / model_id).resolve()
     try:
@@ -976,7 +1071,8 @@ async def replay_start(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="Official replay uses its image track and CPU policy runtime")
     try:
         return await asyncio.to_thread(
-            replay_job.start, model_path=model_path, trace_steps=trace_steps
+            replay_job.start, model_path=model_path, trace_steps=trace_steps,
+            validation_mode=validation_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1149,7 +1245,7 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run(
-        "src.layer4.hub.app:app",
+        app,
         host=HUB_HOST,
         port=HUB_PORT,
         reload=False,

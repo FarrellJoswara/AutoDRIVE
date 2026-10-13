@@ -34,6 +34,40 @@ if (-not (Test-Path -LiteralPath $connectHelper -PathType Leaf)) {
     throw "The official simulator connection helper is missing: $connectHelper"
 }
 $processes = @()
+$runDirectory = (Resolve-Path -LiteralPath (Split-Path -Parent $PidFile)).Path
+if ([string]::Compare((Split-Path -Leaf $runDirectory), "official_run_$RunId", $true) -ne 0 -or
+    [string]::Compare([IO.Path]::GetFullPath($PidFile), [IO.Path]::GetFullPath((Join-Path $runDirectory 'windows_simulator_pids.txt')), $true) -ne 0) {
+    throw "Run identity and simulator PID file must resolve inside logs/rl/official_run_$RunId."
+}
+if ([string]::Compare([IO.Path]::GetFullPath($PauseFile), [IO.Path]::GetFullPath((Join-Path $runDirectory 'evaluation_pause.flag')), $true) -ne 0 -or
+    [string]::Compare([IO.Path]::GetFullPath($PortsFile), [IO.Path]::GetFullPath((Join-Path $runDirectory 'windows_simulator_ports.csv')), $true) -ne 0) {
+    throw "Pause and port manifests must resolve inside logs/rl/official_run_$RunId."
+}
+$IdentityManifestPath = Join-Path $runDirectory "windows_simulator_processes.json"
+$identityManifest = [ordered]@{
+    schema_version = 1
+    run_id = $RunId
+    simulator_exe_path = $SimulatorExePath
+    bridge_ip = $BridgeIpAddress
+    ports = @($Ports)
+    records = @()
+}
+if (Test-Path -LiteralPath $IdentityManifestPath -PathType Leaf) {
+    $existingManifest = Get-Content -LiteralPath $IdentityManifestPath -Raw | ConvertFrom-Json
+    if ($existingManifest.run_id -ne $RunId -or
+        [string]::Compare([string]$existingManifest.simulator_exe_path, $SimulatorExePath, $true) -ne 0 -or
+        $existingManifest.bridge_ip -ne $BridgeIpAddress -or
+        (@($existingManifest.ports) -join ',') -ne (@($Ports) -join ',')) {
+        throw "Existing simulator identity manifest does not match this run and executable."
+    }
+    $identityManifest.records = @($existingManifest.records)
+}
+
+function Save-IdentityManifest {
+    $temporaryPath = "$IdentityManifestPath.tmp"
+    $identityManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+    Move-Item -LiteralPath $temporaryPath -Destination $IdentityManifestPath -Force
+}
 
 function Stop-SimulatorFleet {
     foreach ($process in $script:processes) {
@@ -68,6 +102,25 @@ function Start-SimulatorFleet {
         }
         $process = Start-Process -FilePath $SimulatorExePath -ArgumentList $arguments -PassThru
         $script:processes += $process
+        $process.Refresh()
+        $cimProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($process.Id)"
+        if (-not $cimProcess -or [string]::Compare([string]$cimProcess.ExecutablePath, $SimulatorExePath, $true) -ne 0) {
+            throw "Could not verify the launched official simulator PID $($process.Id) against its executable path."
+        }
+        $identityManifest.records += [ordered]@{
+            pid = [int]$process.Id
+            environment = [int]$environment
+            port = [int]$port
+            bridge_ip = $BridgeIpAddress
+            executable_path = [string]$cimProcess.ExecutablePath
+            command_line = [string]$cimProcess.CommandLine
+            parent_pid = [int]$cimProcess.ParentProcessId
+            process_creation_utc = $process.StartTime.ToUniversalTime().ToString("o")
+            process_creation_cim = [string]$cimProcess.CreationDate
+            launched_utc = [DateTime]::UtcNow.ToString("o")
+            batch_mode = [bool]$BatchMode
+        }
+        Save-IdentityManifest
         $script:processes.Id | Set-Content -LiteralPath $PidFile -Encoding Ascii
         Write-Output "Started official simulator PID $($process.Id) for environment $environment on port $port."
         if (-not $BatchMode) {

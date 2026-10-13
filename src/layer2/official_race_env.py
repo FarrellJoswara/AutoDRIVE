@@ -8,6 +8,7 @@ the documented reset topic; neither capability is enabled for policy runtime.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -78,6 +79,7 @@ class OfficialRaceEnv(gym.Env):
             raise ValueError("straight_throttle_steering_threshold must be in [0, 1]")
 
         self.training_mode = bool(training_mode)
+        self._pause_cancel_event = None
         if self.training_mode and (
             float(training_collision_penalty_magnitude) <= 120.0
             or float(training_failure_penalty) <= 120.0
@@ -136,6 +138,8 @@ class OfficialRaceEnv(gym.Env):
         self._positive_episode_return = 0.0
         self._episode_frontier_distance_m = 0.0
         self._frontier_last_push_s = 0.0
+        self._training_last_motion_s = 0.0
+        self._training_last_position: Optional[Tuple[float, float]] = None
         self._last_training_steering = 0.0
         self._centerline_potential = 0.0
         self.racer = racer or RacerRos2(
@@ -194,6 +198,8 @@ class OfficialRaceEnv(gym.Env):
         self._positive_episode_return = 0.0
         self._episode_frontier_distance_m = 0.0
         self._frontier_last_push_s = 0.0
+        self._training_last_motion_s = 0.0
+        self._training_last_position = None
         self._last_training_steering = 0.0
         self._last_snap = TelemetrySnapshot(lidar_valid=False)
         self._teacher_info: Dict[str, Any] = {}
@@ -205,18 +211,26 @@ class OfficialRaceEnv(gym.Env):
         options: Optional[dict] = None,
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
         super().reset(seed=seed)
+        pause_cancel_event = getattr(self, "_pause_cancel_event", None)
+        cancel_check = pause_cancel_event.is_set if pause_cancel_event is not None else None
         if self.training_mode:
             reset_for_training = getattr(self.racer, "reset_simulation_for_training", None)
             if not callable(reset_for_training):
                 raise RuntimeError("training mode requires a training-reset-capable official racer")
-            snap = reset_for_training(
-                expected_position=self._frontier_spawn_xy,
-                position_tolerance_m=0.75,
-                reset_attempts=3,
-            )
+            reset_kwargs = {
+                "expected_position": self._frontier_spawn_xy,
+                "position_tolerance_m": 0.75,
+                "reset_attempts": 3,
+            }
+            if cancel_check is not None:
+                reset_kwargs["cancel_check"] = cancel_check
+            snap = reset_for_training(**reset_kwargs)
         else:
             snap = self.racer.wait_until_ready()
-        metrics = self.racer.wait_for_race_metrics()
+        if cancel_check is None:
+            metrics = self.racer.wait_for_race_metrics()
+        else:
+            metrics = self.racer.wait_for_race_metrics(cancel_check=cancel_check)
         self._initial_lap_count = int(metrics.lap_count)
         self._last_lap_count = self._initial_lap_count
         self._last_collision_count = int(metrics.collision_count)
@@ -233,6 +247,11 @@ class OfficialRaceEnv(gym.Env):
         self._positive_episode_return = 0.0
         self._episode_frontier_distance_m = 0.0
         self._frontier_last_push_s = 0.0
+        self._training_last_motion_s = 0.0
+        self._training_last_position = (
+            None if metrics.position is None
+            else (float(metrics.position[0]), float(metrics.position[1]))
+        )
         self._last_training_steering = 0.0
         self._centerline_potential = 0.0
         if self.route_progress is not None:
@@ -277,6 +296,29 @@ class OfficialRaceEnv(gym.Env):
         if not self.training_mode:
             raise RuntimeError("privileged teacher state is available only during training")
         return dict(self._teacher_info)
+
+    def request_pause_neutral(self) -> Dict[str, Any]:
+        """Release both actuators at a safe training rollout boundary."""
+        if not self.training_mode:
+            raise RuntimeError("pause-neutral actuation is available only during training")
+        return self.racer.request_pause_neutral()
+
+    def set_pause_cancel_event(self, event: Any) -> None:
+        """Install the run-local stop sentinel used to bound training reset waits.
+
+        Campaign/smoke mode uses DummyVecEnv with one environment, so the
+        process-local threading.Event remains shared with the trainer callback.
+        Subprocess vector environments must not pass this threading.Event.
+        """
+        if not self.training_mode:
+            raise RuntimeError("pause cancellation is available only during training")
+        if event is not None and not callable(getattr(event, "is_set", None)):
+            raise TypeError("pause cancellation sentinel must provide is_set()")
+        self._pause_cancel_event = event
+
+    def get_transport_status(self) -> Dict[str, Any]:
+        """Expose read-only sensor freshness for supervised pause handshakes."""
+        return self.racer.transport_status()
 
     def step(self, action: np.ndarray):
         throttle, steering = transform_policy_action(
@@ -375,6 +417,7 @@ class OfficialRaceEnv(gym.Env):
             "control_interval_wall_s": float(
                 getattr(self.racer, "last_control_wall_interval_s", 0.0)
             ),
+            "command_expiry_count": int(getattr(self.racer, "command_expiry_count", 0)),
         })
         observation = self._observation_builder.observe(
             snap,
@@ -402,6 +445,18 @@ class OfficialRaceEnv(gym.Env):
             )
             reward_cap = getattr(self, "training_frontier_reward_cap", 100.0)
             position = metrics.position
+            # Route projection can stop advancing when a moving car leaves the
+            # centerline corridor. That is a bad route estimate, not evidence
+            # that the vehicle is stuck. Only terminate for stagnation when
+            # both route progress and measured IPS position have stopped.
+            if position is not None and len(position) >= 2:
+                current_xy = (float(position[0]), float(position[1]))
+                previous_xy = getattr(self, "_training_last_position", None)
+                if previous_xy is None:
+                    self._training_last_position = current_xy
+                elif float(np.linalg.norm(np.asarray(current_xy) - np.asarray(previous_xy))) >= 0.02:
+                    self._training_last_position = current_xy
+                    self._training_last_motion_s = self._training_elapsed_s
             progress = None
             if self.route_progress is not None and position is not None:
                 progress = self.route_progress.update(
@@ -423,6 +478,7 @@ class OfficialRaceEnv(gym.Env):
                     )
                     centerline_shaping = next_potential - self._centerline_potential
                     self._centerline_potential = next_potential
+                    info["centerline_lateral_distance_m"] = float(lateral)
             frontier_advanced = max(0.0, float((progress or {}).get("advanced_m", 0.0)))
             rewardable_frontier_advanced = min(
                 frontier_advanced,
@@ -438,6 +494,8 @@ class OfficialRaceEnv(gym.Env):
             frontier_stalled = (
                 self.training_frontier_stagnation_s > 0
                 and self._training_elapsed_s - self._frontier_last_push_s >= self.training_frontier_stagnation_s
+                and self._training_elapsed_s - getattr(self, "_training_last_motion_s", 0.0)
+                >= self.training_frontier_stagnation_s
             )
             training_goal_reached = bool(
                 not collision_event
@@ -533,10 +591,15 @@ class OfficialRaceEnv(gym.Env):
                 getattr(self, "training_centerline_potential_cap", 20.0)
             )
             info["training_success"] = training_goal_reached
+            info["episode_won"] = training_goal_reached
             info["training_frontier_projection_valid"] = (
                 bool(progress.get("current_projection_valid")) if progress is not None else False
             )
             info["training_frontier_stagnated"] = frontier_stalled
+            info["training_physical_motion_stalled"] = (
+                self._training_elapsed_s - getattr(self, "_training_last_motion_s", 0.0)
+                >= self.training_frontier_stagnation_s
+            )
             info["training_elapsed_s"] = self._training_elapsed_s
             info["termination_reason"] = reason or ("training_watchdog_timeout" if truncated else None)
         # The official scoring harness is deterministic evaluation, not PPO
@@ -564,6 +627,10 @@ class OfficialRaceEnv(gym.Env):
             # Watch may render the restricted training/evaluation position;
             # this field is not read by the policy observation builder.
             "position": metrics.position,
+            "position_age_s": (
+                max(0.0, time.monotonic() - float(getattr(metrics, "position_received_at", 0.0)))
+                if getattr(metrics, "position_received_at", 0.0) else None
+            ),
             "yaw": float(snap.heading_yaw),
             "v_long": float(snap.v_long),
             "true_speed": float(snap.true_speed),
@@ -581,7 +648,31 @@ class OfficialRaceEnv(gym.Env):
             "lidar_range_min": float(snap.lidar_range_min),
             "lidar_range_max": float(snap.lidar_range_max),
             "lidar_beams": int(snap.lidar_ranges.size),
+            # Monitoring-only Layer 1 sensor values. They let Watch show the
+            # measurements the teacher actually used without exposing pose or
+            # route labels to the student policy.
+            "lidar_left_clearance_m": self._lidar_sector_clearance(snap, 70.0, 110.0),
+            "lidar_front_clearance_m": self._lidar_sector_clearance(snap, -12.0, 12.0),
+            "lidar_right_clearance_m": self._lidar_sector_clearance(snap, -110.0, -70.0),
         }
+
+    @staticmethod
+    def _lidar_sector_clearance(
+        snap: TelemetrySnapshot, angle_low_deg: float, angle_high_deg: float
+    ) -> Optional[float]:
+        values = np.asarray(snap.lidar_ranges, dtype=np.float32).reshape(-1)
+        if values.size != 1081 or np.isnan(values).any() or np.isneginf(values).any():
+            return None
+        values = np.where(np.isposinf(values), float(snap.lidar_range_max), values)
+        values = np.clip(values, float(snap.lidar_range_min), float(snap.lidar_range_max))
+        # Layer 1 canonicalizes an increasing ROS scan by reversing it, so
+        # beam index zero is +135 degrees. Positive angles point to vehicle
+        # left in the official AutoDRIVE frame.
+        angles = np.linspace(135.0, -135.0, values.size)
+        selected = values[(angles >= angle_low_deg) & (angles <= angle_high_deg)]
+        if not selected.size:
+            return None
+        return float(np.percentile(selected, 8.0))
 
     def close(self) -> None:
         if self._owns_racer:

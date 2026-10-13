@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal, Optional
 import json
 from pathlib import Path
@@ -33,6 +34,12 @@ class OfficialTrainSettings(BaseModel):
     plateau_patience: int = Field(default=5, ge=1, le=100)
     plateau_min_improvement_pct: float = Field(default=1.0, ge=0, le=100)
     max_duration_hours: float = Field(default=0.0, ge=0)
+    # Campaign experiment metadata is validated against the append-only campaign
+    # ledger by the hub. These tags do not change trainer behavior; the actual
+    # effective settings below remain the submitted experiment configuration.
+    campaign_experiment_id: Optional[str] = None
+    campaign_experiment_phase: Optional[str] = None
+    campaign_experiment_config_sha256: Optional[str] = None
     seed: int = Field(default=0, ge=0, le=2**31 - 1)
     device: Literal["cpu", "cuda"] = "cpu"
     resume: Optional[str] = None
@@ -40,6 +47,7 @@ class OfficialTrainSettings(BaseModel):
     automatic_evaluation_enabled: bool = True
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
+    automatic_evaluation_mode: Literal["competitive", "training_probe"] = "competitive"
     behavior_cloning_enabled: bool = True
     behavior_cloning_only: bool = False
     behavior_cloning_steps_per_env: int = Field(default=4000, ge=2, le=100_000)
@@ -49,6 +57,14 @@ class OfficialTrainSettings(BaseModel):
     behavior_teacher_max_speed_mps: float = Field(default=0.3, ge=0.2, le=10.0)
     n_steps: int = Field(default=2048, ge=64, multiple_of=64)
     learning_rate: float = Field(default=1e-4, gt=0, le=0.01)
+    target_kl: Optional[float] = Field(default=None, gt=0)
+    exploration_profile: Optional[Literal["standard", "bc_smoke", "bc_campaign"]] = None
+    exploration_initial_std_throttle: Optional[float] = Field(default=None, gt=0)
+    exploration_initial_std_steering: Optional[float] = Field(default=None, gt=0)
+    exploration_min_std_throttle: Optional[float] = Field(default=None, gt=0)
+    exploration_min_std_steering: Optional[float] = Field(default=None, gt=0)
+    exploration_max_std_throttle: Optional[float] = Field(default=None, gt=0)
+    exploration_max_std_steering: Optional[float] = Field(default=None, gt=0)
     n_epochs: int = Field(default=4, ge=1, le=20)
     gamma: float = Field(default=0.9995, gt=0, le=1)
     gae_lambda: float = Field(default=0.95, ge=0, le=1)
@@ -96,6 +112,7 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_AUTO_EVALUATION_ENABLED": "1" if self.automatic_evaluation_enabled else "0",
             "AICAR_AUTO_EVALUATION_TRIGGER": self.automatic_evaluation_trigger,
             "AICAR_AUTO_EVALUATION_INTERVAL": str(self.automatic_evaluation_interval),
+            "AICAR_AUTO_EVALUATION_MODE": self.automatic_evaluation_mode,
             "AICAR_BEHAVIOR_CLONING_ENABLED": "1" if self.behavior_cloning_enabled else "0",
             "AICAR_BEHAVIOR_CLONING_ONLY": "1" if self.behavior_cloning_only else "0",
             "AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV": str(self.behavior_cloning_steps_per_env),
@@ -128,10 +145,53 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_NEGATIVE_THROTTLE_MODE": self.negative_throttle_mode,
             "AICAR_STEERING_MODE": self.steering_mode,
         }
+        if self.target_kl is not None:
+            values["AICAR_PPO_TARGET_KL"] = str(self.target_kl)
+        if self.exploration_profile is not None:
+            values["AICAR_PPO_EXPLORATION_PROFILE"] = self.exploration_profile
+        for field_name, env_name in (
+            ("exploration_initial_std_throttle", "AICAR_PPO_EXPLORATION_INITIAL_STD_THROTTLE"),
+            ("exploration_initial_std_steering", "AICAR_PPO_EXPLORATION_INITIAL_STD_STEERING"),
+            ("exploration_min_std_throttle", "AICAR_PPO_EXPLORATION_MIN_STD_THROTTLE"),
+            ("exploration_min_std_steering", "AICAR_PPO_EXPLORATION_MIN_STD_STEERING"),
+            ("exploration_max_std_throttle", "AICAR_PPO_EXPLORATION_MAX_STD_THROTTLE"),
+            ("exploration_max_std_steering", "AICAR_PPO_EXPLORATION_MAX_STD_STEERING"),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                values[env_name] = str(value)
         if self.resume:
             values["AICAR_TRAIN_RESUME"] = self.resume
         return values
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+def validate_bc_teacher_action_mapping(
+    *,
+    behavior_cloning_enabled: bool,
+    resume: Optional[str],
+    throttle_mode: str,
+    negative_throttle_mode: str,
+    steering_mode: str,
+    steering_action_scale: float,
+    straight_throttle_gain: float,
+) -> None:
+    """Require identity actuator mapping while raw teacher actions are labels."""
+    if not behavior_cloning_enabled or resume is not None:
+        return
+    identity = (
+        throttle_mode == "bidirectional"
+        and negative_throttle_mode == "allow"
+        and steering_mode == "normal"
+        and math.isclose(float(steering_action_scale), 1.0, rel_tol=0.0, abs_tol=1e-12)
+        and math.isclose(float(straight_throttle_gain), 1.0, rel_tol=0.0, abs_tol=1e-12)
+    )
+    if not identity:
+        raise ValueError(
+            "behavior cloning requires identity action transforms so teacher labels "
+            "match executed controls; use bidirectional throttle, allow negative "
+            "throttle, normal steering, steering scale 1, and straight throttle gain 1"
+        )
 
 
 def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> OfficialTrainSettings:

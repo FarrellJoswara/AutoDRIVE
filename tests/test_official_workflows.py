@@ -1,5 +1,6 @@
 """Focused checks for official orchestration; FakeDocker is not simulator proof."""
 import json
+import hashlib
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -10,8 +11,17 @@ from src.layer4.hub.official_models import checkpoint_settings, list_official_mo
 from src.layer4.hub.official_replay_job import OfficialReplayJob
 from src.layer4.hub.official_evaluation_service import OfficialEvaluationService, _attempt_collision_count
 from src.layer4.hub.native_official_backend import _windows_simulator_mode_args
-from src.layer4.official_settings import OfficialTrainSettings, load_official_train_settings
+from src.layer4.official_settings import (
+    OfficialTrainSettings,
+    load_official_train_settings,
+    validate_bc_teacher_action_mapping,
+)
 from src.layer3.official_train import train_official
+from src.layer3.official_train import (
+    _make_training_exploration_schedule,
+    _verified_ready_bc_resume_sha256,
+)
+from src.layer4.hub.official_run_manager import normalize_official_config
 
 
 @pytest.fixture
@@ -43,6 +53,77 @@ def test_bc_only_trainer_rejects_disabled_cloning_and_resume(tmp_path):
             behavior_cloning_only=True, behavior_cloning_enabled=True,
             resume=tmp_path / "checkpoint.zip",
         )
+
+
+@pytest.mark.parametrize("override", [
+    {"throttle_mode": "forward_only"},
+    {"negative_throttle_mode": "zero"},
+    {"steering_mode": "invert"},
+    {"steering_action_scale": 0.5},
+    {"straight_throttle_gain": 1.2},
+])
+def test_new_bc_run_rejects_nonidentity_teacher_action_mapping(tmp_path, override):
+    with pytest.raises(ValueError, match="behavior cloning requires identity action transforms"):
+        train_official(
+            out_dir=tmp_path / "run", total_timesteps=1, **override,
+        )
+
+
+def test_teacher_action_mapping_guard_only_applies_to_new_bc_runs(tmp_path):
+    settings = {
+        "throttle_mode": "forward_only",
+        "negative_throttle_mode": "zero",
+        "steering_mode": "invert",
+        "steering_action_scale": 0.5,
+        "straight_throttle_gain": 1.2,
+    }
+    validate_bc_teacher_action_mapping(
+        behavior_cloning_enabled=False, resume=None, **settings,
+    )
+    validate_bc_teacher_action_mapping(
+        behavior_cloning_enabled=True, resume=str(tmp_path / "existing.zip"), **settings,
+    )
+
+
+def test_run_manager_rejects_incompatible_bc_mapping_before_startup():
+    with pytest.raises(ValueError, match="behavior cloning requires identity action transforms"):
+        normalize_official_config({"steering_mode": "invert"})
+    assert normalize_official_config({"behavior_cloning_enabled": False, "steering_mode": "invert"})[
+        "steering_mode"
+    ] == "invert"
+
+
+def test_only_hash_verified_ready_bc_checkpoint_gets_lower_noise_bounds(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "behavior_cloned_policy.zip"
+    checkpoint.write_bytes(b"ready cloned checkpoint")
+    summary = {
+        "status": "ready",
+        "usable": True,
+        "readiness": {"ready": True},
+        "checkpoint": str(checkpoint.resolve()),
+        "checkpoint_sha256": __import__("hashlib").sha256(checkpoint.read_bytes()).hexdigest(),
+    }
+    summary_path = tmp_path / "behavior_cloning_summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    assert _verified_ready_bc_resume_sha256(checkpoint) == summary["checkpoint_sha256"]
+
+    calls = []
+    class Schedule:
+        def __init__(self, model, run_dir, **kwargs):
+            calls.append((model, run_dir, kwargs))
+    monkeypatch.setattr("src.layer3.official_exploration.OfficialExplorationSchedule", Schedule)
+    model = object()
+    _make_training_exploration_schedule(
+        model, tmp_path / "run", initial_std=None, std_min=(0.01, 0.05), std_max=(0.8, 0.8)
+    )
+    _make_training_exploration_schedule(
+        model, tmp_path / "ordinary", initial_std=None, std_min=(0.2, 0.2), std_max=(0.8, 0.8)
+    )
+    assert calls[0][2] == {"std_min": (0.01, 0.05), "std_max": (0.8, 0.8)}
+    assert calls[1][2] == {"std_min": (0.2, 0.2), "std_max": (0.8, 0.8)}
+
+    checkpoint.write_bytes(b"replaced by a different checkpoint")
+    assert _verified_ready_bc_resume_sha256(checkpoint) is None
 
 
 def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
@@ -159,17 +240,23 @@ def test_evaluation_worker_brackets_manual_evaluation_with_training_pause(manage
 
 
 def test_native_training_pause_stops_sims_before_eval_and_resumes_after_fresh_camera_frames(tmp_path):
-    import signal
     import threading
     from types import SimpleNamespace
     from src.layer4.hub.native_official_backend import NativeOfficialBackend
 
     backend = object.__new__(NativeOfficialBackend)
     backend._lock = threading.RLock()
+    backend.backend_instance_id = "backend-instance-test"
+    backend.hub_pid = 999
     run_id = "a1b2c3d4e5f6"
     run_dir = tmp_path / f"official_run_{run_id}"
     run_dir.mkdir()
-    (run_dir / "windows_simulator_pids.txt").write_text("", encoding="ascii")
+    pid_file = run_dir / "windows_simulator_pids.txt"
+    pid_file.write_text("2345", encoding="ascii")
+    checkpoint_path = run_dir / "checkpoints" / "post_optimizer_update_00000001_steps_000000002048.zip"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_bytes(b"authenticated-test-checkpoint")
+    checkpoint_sha = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
     process = SimpleNamespace(pid=101, poll=lambda: None)
     group = {
         "Labels": {"aicar.run_id": run_id, "aicar.role": "api"},
@@ -179,22 +266,82 @@ def test_native_training_pause_stops_sims_before_eval_and_resumes_after_fresh_ca
     connections = [{"environment": 0, "port": 53001}]
     backend._run_dir_for_id = lambda _run_id: run_dir
     backend._read_simulator_health = lambda _port: {
-        "complete_frames": 10, "camera_frames": 9,
+        "simulator_clients": 1, "complete_frames": 10, "camera_frames": 9,
+        "simulator_sessions": [{
+            "sid": "fresh-sid", "complete_frames": 1, "camera_frames": 1,
+            "devkit_commands": 1,
+        }],
     }
     wait_args = []
     backend._wait_for_simulator_streams = lambda _connections, _run_dir, **kwargs: wait_args.append(kwargs)
+    backend._wait_for_simulator_sessions_disconnected = lambda _connections: None
+    (run_dir / "watch_latest.json").write_text(json.dumps({"step": 1}), encoding="utf-8")
+    resume_ack_args = []
+    handshake_phases = []
+
+    def trainer_handshake(*, path, request_id, phase, **kwargs):
+        handshake_phases.append(phase)
+        request_name = (
+            "evaluation_pause.request.json" if phase == "pause"
+            else "evaluation_resume.request.json"
+        )
+        request = json.loads((run_dir / request_name).read_text(encoding="utf-8"))
+        assert request["request_id"] == request_id
+        if phase == "pause":
+            # The backend may retire the simulator only after this post-update
+            # callback ACK, never while the trainer is in an env.step.
+            pid_file.write_text("", encoding="ascii")
+            payload = {
+                "run_id": run_id, "request_id": request_id,
+                "status": "paused",
+                "num_timesteps": 2048, "optimizer_updates": 1,
+                "checkpoint": {
+                    "path": str(checkpoint_path), "sha256": checkpoint_sha,
+                    "post_optimizer_update": True,
+                },
+                "transport_status": {"spin_state": "running"},
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            return payload
+        payload = {
+            "run_id": run_id, "request_id": request_id,
+            "status": "resumed",
+            "num_timesteps": 2048,
+            "transport_status": {"spin_state": "running"},
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        resume_ack_args.append(kwargs)
+        return payload
+
+    backend.startup_timeout_s = 1
+    backend._wait_for_training_handshake = trainer_handshake
+    backend._wait_for_training_observation_after_resume = lambda **kwargs: (
+        resume_ack_args.append(kwargs) or 2
+    )
 
     with patch("src.layer4.hub.native_official_backend.os.killpg", create=True) as killpg:
         backend.pause_training_for_evaluation(run_id=run_id, connections=connections, hub_url="http://hub")
+        pause_request = json.loads((run_dir / "evaluation_pause.request.json").read_text())
         assert (run_dir / "evaluation_pause.flag").is_file()
-        assert killpg.call_args_list[-1].args == (101, getattr(signal, "SIGSTOP", 19))
+        assert pause_request["protocol"] == "cooperative_post_optimizer_rollout_boundary_v1"
+        assert group["evaluation_pause_request_id"] == pause_request["request_id"]
+        assert group["evaluation_pause_ack"]["checkpoint"]["sha256"] == checkpoint_sha
 
         backend.resume_training_after_evaluation(
             run_id=run_id, connections=connections, hub_url="http://hub",
         )
         assert not (run_dir / "evaluation_pause.flag").exists()
-        assert wait_args == [{"minimum_frames": {0: (11, 10)}}]
-        assert killpg.call_args_list[-1].args == (101, getattr(signal, "SIGCONT", 18))
+        assert not (run_dir / "evaluation_pause.request.json").exists()
+        assert not (run_dir / "evaluation_resume.request.json").exists()
+        assert wait_args == [{"minimum_frames": {0: (1, 1)}}]
+        assert handshake_phases == ["pause", "resume"]
+        assert resume_ack_args[0]["run_id"] == run_id
+        event = json.loads((run_dir / "evaluation_resume_events.jsonl").read_text().splitlines()[0])
+        assert event["previous_watch_step"] == 1
+        assert event["resumed_watch_step"] == 2
+        assert event["cooperative_pause_ack"]["status"] == "paused"
+        assert event["resume_ack"]["status"] == "resumed"
+        assert killpg.call_count == 0
         assert "evaluation_frame_baselines" not in group
 
 
@@ -217,9 +364,9 @@ def test_native_backend_maps_container_log_paths_to_workspace_logs(tmp_path):
 
 
 def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_path):
-    import shlex
     import threading
     from types import SimpleNamespace
+    from unittest.mock import MagicMock
     from src.layer4.hub.native_official_backend import NativeOfficialBackend
 
     backend = object.__new__(NativeOfficialBackend)
@@ -231,21 +378,20 @@ def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_pa
     backend._reserved_devkit_ports = set()
     backend._allocate_ros_domain = lambda: 7
     backend._allocate_devkit_port = lambda: 4577
-    bridge_domains = []
-    backend._start_bridge_pair = lambda _records, _run_id, _index, env, _run_dir, **kwargs: (
-        bridge_domains.append((env.get("ROS_DOMAIN_ID"), kwargs["ros_domain"]))
-    )
+    backend.startup_timeout_s = 1
     backend._evaluation_command = lambda _env: ["evaluate"]
     backend._persist_group = lambda _group: None
-    spawned_env = {}
-    spawned_command = []
+    spawned_envs = []
+    spawned_commands = []
 
     def fake_popen(command, *, env, **_kwargs):
-        spawned_command.extend(command)
-        spawned_env.update(env)
-        return SimpleNamespace(pid=1234, poll=lambda: None)
+        spawned_commands.append(list(command))
+        spawned_envs.append(dict(env))
+        return SimpleNamespace(pid=1200 + len(spawned_commands), args=list(command), poll=lambda: None)
 
-    with patch("src.layer4.hub.native_official_backend.subprocess.Popen", side_effect=fake_popen):
+    (tmp_path / "logs" / "rl" / "official_run_a1b2c3d4e5f6").mkdir(parents=True)
+    with patch("src.layer4.hub.native_official_backend.subprocess.Popen", side_effect=fake_popen), \
+         patch("src.layer4.hub.native_official_backend.socket.create_connection", return_value=MagicMock()):
         backend.create_official_run_container(
             run_id="a1b2c3d4e5f6", role="api", image="unused", network_name="unused",
             env=["AICAR_MODE=evaluate"], metadata_labels={
@@ -254,12 +400,203 @@ def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_pa
             },
         )
 
-    assert spawned_env["ROS_DOMAIN_ID"] == "7"
-    assert bridge_domains == [("7", 7)]
-    assert spawned_command[:2] == ["bash", "-lc"]
-    assert "source /opt/ros/jazzy/setup.bash" in spawned_command[2]
-    assert shlex.quote(str(backend.ros_workspace / "install" / "setup.bash")) in spawned_command[2]
-    assert spawned_command[3:] == ["aicar-native-policy", "evaluate"]
+    assert [env["ROS_DOMAIN_ID"] for env in spawned_envs] == ["7", "7", "7"]
+    assert spawned_commands[0][:2] == ["bash", "-lc"]
+    assert "source /opt/ros/jazzy/setup.bash" in spawned_commands[0][2]
+    assert "ros_ws/install/setup.bash" in spawned_commands[0][2].replace("\\", "/")
+    assert spawned_commands[2][:2] == ["bash", "-lc"]
+    assert spawned_commands[2][3:] == ["aicar-native-policy", "evaluate"]
+    assert all(
+        record["original_process_handle_class"].endswith("SimpleNamespace")
+        for record in backend._groups[next(iter(backend._groups))]["records"]
+    )
+
+
+def test_native_exit_snapshot_persists_each_process_exit_and_log_tail(tmp_path):
+    import threading
+    from types import SimpleNamespace
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._lock = threading.RLock()
+    run_id = "a1b2c3d4e5f6"
+    run_dir = tmp_path / f"official_run_{run_id}"
+    run_dir.mkdir()
+    log_path = run_dir / "hub_train.log"
+    log_path.write_text("trainer traceback: connection reset\n", encoding="utf-8")
+    manifest = run_dir / "native_group_api.json"
+    manifest.write_text(json.dumps({"Id": "native-run-api-1234", "records": [{"pid": 321}]}))
+    log = log_path.open("ab")
+    process = SimpleNamespace(pid=321, returncode=17, poll=lambda: 17)
+    group = {
+        "Id": "native-run-api-1234",
+        "Labels": {"aicar.run_id": run_id, "aicar.role": "api"},
+        "backend_instance_id": "backend-instance-test",
+        "hub_pid": 999,
+        "created_at_unix_s": 123.0,
+        "manifest": manifest,
+        "records": [{
+            "role": "trainer", "process": process, "log": log,
+            "handle_origin": "created_by_popen", "launch_parent_pid": 999,
+            "launch_command": ["python", "-u", "-m", "src.layer3.official_evaluate"],
+            "process_starttime_ticks": 456,
+        }],
+    }
+    backend._groups = {group["Id"]: group}
+    backend._run_dir_for_id = lambda _run_id: run_dir
+
+    item = backend.list_official_run_containers(run_id)[0]
+    persisted = json.loads((run_dir / "native_terminal_context.json").read_text(encoding="utf-8"))
+    role = item["TerminalContext"]["records"][0]
+    assert item["State"] == "exited"
+    assert role == persisted["records"][0]
+    assert role["role"] == "trainer"
+    assert role["pid"] == 321
+    assert role["returncode"] == 17
+    assert role["returncode_known"] is True
+    assert role["handle_origin"] == "created_by_popen"
+    assert role["handle_class"].endswith("SimpleNamespace")
+    assert role["launch_parent_pid"] == 999
+    assert role["launch_command"][1] == "-u"
+    assert role["process_starttime_ticks"] == 456
+    assert persisted["backend_instance_id"] == "backend-instance-test"
+    assert persisted["hub_pid"] == 999
+    assert persisted["group_manifest_snapshot"]["Id"] == group["Id"]
+    assert "connection reset" in role["log_tail"]
+    log.close()
+
+
+def test_native_first_exit_snapshot_survives_manager_cleanup_sigterm(tmp_path):
+    import threading
+    from types import SimpleNamespace
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._lock = threading.RLock()
+    run_id = "a1b2c3d4e5f6"
+    run_dir = tmp_path / f"official_run_{run_id}"
+    run_dir.mkdir()
+    records = []
+    for role, status in (("devkit-0", -15), ("relay-0", None), ("trainer", None)):
+        log_path = run_dir / f"{role}.log"
+        log_path.write_text(f"{role} started\n", encoding="utf-8")
+        records.append({
+            "role": role,
+            "process": SimpleNamespace(pid=100 + len(records), returncode=status,
+                                       poll=lambda process=None: process.returncode),
+            "log": log_path.open("ab"),
+        })
+    # Bind each callable to its process; the devkit launch group is the first
+    # role observed dead, while the policy is still doing useful work.
+    for item in records:
+        process = item["process"]
+        process.poll = lambda process=process: process.returncode
+    group = {
+        "Id": "native-run-api-1234",
+        "Labels": {"aicar.run_id": run_id, "aicar.role": "api"},
+        "records": records,
+    }
+    backend._groups = {group["Id"]: group}
+    backend._run_dir_for_id = lambda _run_id: run_dir
+
+    first = backend.list_official_run_containers(run_id)[0]["TerminalContext"]
+    saved_first = json.loads((run_dir / "native_terminal_context.json").read_text(encoding="utf-8"))
+    assert saved_first == first
+    first_trainer = next(row for row in first["records"] if row["role"] == "trainer")
+    assert first["triggering_roles"] == ["devkit-0"]
+    assert first_trainer["status"] == "running"
+    assert first_trainer["returncode"] is None
+
+    # Cleanup's SIGTERM changes the trainer's Popen return code, but must not
+    # overwrite the initiating bridge-exit snapshot.
+    records[2]["process"].returncode = -15
+    second = backend.list_official_run_containers(run_id)[0]["TerminalContext"]
+    saved = json.loads((run_dir / "native_terminal_context.json").read_text(encoding="utf-8"))
+    assert second == first == saved
+    assert next(row for row in second["records"] if row["role"] == "trainer")["status"] == "running"
+    for item in records:
+        item["log"].close()
+
+
+def test_recovered_process_does_not_treat_procfs_read_failure_as_exit(monkeypatch):
+    from src.layer4.hub.native_official_backend import _RecoveredProcess, NativeOfficialBackend
+
+    process = _RecoveredProcess(321, process_group_id=321, process_starttime_ticks=100)
+    monkeypatch.setattr(
+        NativeOfficialBackend, "_read_process_identity",
+        staticmethod(lambda _pid: None),
+    )
+    with patch("src.layer4.hub.native_official_backend.os.kill"):
+        assert process.poll() is None
+    with patch("src.layer4.hub.native_official_backend.os.kill", side_effect=ProcessLookupError):
+        assert process.poll() == 0
+
+
+def test_recovered_process_rejects_reused_pid_by_starttime(monkeypatch):
+    from src.layer4.hub.native_official_backend import _RecoveredProcess, NativeOfficialBackend
+
+    process = _RecoveredProcess(321, process_group_id=321, process_starttime_ticks=100)
+    monkeypatch.setattr(
+        NativeOfficialBackend, "_read_process_identity",
+        staticmethod(lambda _pid: {"state": "S", "starttime_ticks": 101}),
+    )
+    assert process.poll() == 0
+
+
+def test_native_cleanup_keeps_manifest_terminal_copy(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    import src.layer4.hub.native_official_backend as native_backend_module
+    from src.layer4.hub.native_official_backend import NativeOfficialBackend
+
+    backend = object.__new__(NativeOfficialBackend)
+    backend._lock = threading.RLock()
+    run_dir = tmp_path / "official_run_a1b2c3d4e5f6"
+    run_dir.mkdir()
+    manifest = run_dir / "native_group_api.json"
+    manifest.write_text(json.dumps({"Id": "native-run-api", "source": "fresh-popen"}))
+    log = (run_dir / "hub_train.log").open("ab")
+    process = SimpleNamespace(pid=321, poll=lambda: 0, wait=lambda timeout: 0)
+    group = {
+        "Id": "native-run-api",
+        "Labels": {"aicar.run_id": "a1b2c3d4e5f6", "aicar.role": "api"},
+        "records": [{"role": "trainer", "process": process, "log": log}],
+        "manifest": manifest,
+    }
+    backend._groups = {group["Id"]: group}
+    monkeypatch.setattr(
+        native_backend_module,
+        "_signal_process_group",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(native_backend_module.signal, "SIGKILL", 9, raising=False)
+    backend.remove_official_run_container(group["Id"])
+
+    copy = run_dir / "native_terminal_manifest_api.json"
+    assert not manifest.exists()
+    assert json.loads(copy.read_text(encoding="utf-8"))["source"] == "fresh-popen"
+    log.close()
+
+
+def test_reconcile_exposes_native_terminal_context_and_trainer_exit_code(manager):
+    run = manager.create_run({"simulator_backend": "windows_external", "n_envs": 1})
+    api = next(item for item in manager.backend.containers.values()
+               if item["Labels"].get("aicar.run_id") == run["run_id"]
+               and item["Labels"].get("aicar.role") == "api")
+    api["State"] = "exited"
+    api["TerminalContext"] = {
+        "run_id": run["run_id"],
+        "records": [{"role": "trainer", "pid": 456, "returncode": -9,
+                     "returncode_known": True, "log_tail": "killed by signal"}],
+    }
+
+    manager.reconcile(run["run_id"])
+
+    failed = manager.get_run(run["run_id"])
+    assert failed["state"] == "failed"
+    assert failed["exit_code"] == -9
+    assert failed["terminal_context"]["records"][0]["pid"] == 456
+    assert "exit code -9" in failed["error"]
 
 
 def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
@@ -332,7 +669,8 @@ def test_native_backend_translates_run_settings_to_native_trainer_arguments():
         "AICAR_TRAIN_STOP_ON_PLATEAU": "0",
         "AICAR_BEHAVIOR_CLONING_ONLY": "1",
     })
-    args = dict(zip(command[3::2], command[4::2]))
+    assert command[1:3] == ["-u", "-m"]
+    args = dict(zip(command[4::2], command[5::2]))
     assert args["--out"] == "/tmp/run-output"
     assert args["--n-envs"] == "4"
     assert args["--total-timesteps"] == "256"
@@ -542,6 +880,9 @@ def test_evaluation_batch_counts_warmup_collision_when_race_counter_is_zero():
 
 def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, tmp_path):
     path = official_checkpoint(tmp_path)
+    official_frontier = tmp_path / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv"
+    official_frontier.parent.mkdir(parents=True)
+    official_frontier.write_text("x,y\n0,0\n1,1\n", encoding="utf-8")
     service = OfficialEvaluationService(
         manager, registry_path=tmp_path / "official-evaluations.json",
         champion_dir=tmp_path / "best_official_model",
@@ -566,7 +907,8 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
         Path(row["output_dir"], "evaluation.json").write_text(json.dumps({"runs": [result]}))
         return row
 
-    with patch("src.layer4.hub.official_run_manager.ROOT", tmp_path):
+    with (patch("src.layer4.hub.official_run_manager.ROOT", tmp_path),
+          patch("src.layer4.hub.official_evaluation_service.ROOT", tmp_path)):
         manager.create_run = complete_evaluation
         status = replay.start(model_path=path, trace_steps=500)
         assert status["state"] == "queued"
@@ -596,7 +938,8 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
         assert env["AICAR_THROTTLE_MODE"] == "forward_only"
         assert env["AICAR_EVALUATION_TRACE_STEPS"] == "500"
     assert not manager.backend.containers
-    with patch("src.layer4.hub.official_run_manager.ROOT", tmp_path):
+    with (patch("src.layer4.hub.official_run_manager.ROOT", tmp_path),
+          patch("src.layer4.hub.official_evaluation_service.ROOT", tmp_path)):
         restarted = replay.reset()
     assert restarted["state"] == "queued"
     replay.stop()

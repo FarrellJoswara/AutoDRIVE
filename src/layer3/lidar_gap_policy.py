@@ -1,7 +1,7 @@
 """Deterministic LiDAR gap-following baseline for the official sensor path.
 
 This controller is a Layer 3 diagnostic and demonstration source. It consumes
-only canonical Layer 2 LiDAR and encoder-derived forward speed, and emits the
+only canonical Layer 2 LiDAR and LiDAR-odometry forward speed, and emits the
 same normalized throttle/steering action as PPO.
 """
 
@@ -92,6 +92,7 @@ class LidarGapPolicy:
         smooth[np.abs(sector_angles - sector_angles[nearest]) <= bubble_half_angle] = 0.0
 
         target_idx = self._widest_gap_center_index(smooth, self.minimum_gap_m)
+        safe_gap_found = target_idx is not None
         if target_idx is None:
             scores = smooth - 0.5 * np.abs(sector_angles)
             target_idx = int(np.argmax(scores))
@@ -120,6 +121,10 @@ class LidarGapPolicy:
         # the nominal speed limit ineffective; negative throttle is reverse,
         # not a service brake, so the policy deliberately coasts instead.
         throttle = float(np.clip(self.speed_gain * (target_speed - speed_mps), 0.0, 0.85))
+        if not safe_gap_found:
+            # No corridor wider than the configured vehicle clearance was
+            # visible. Keep the heuristic from driving blindly into the gap.
+            throttle = 0.0
         self.last_debug = {
             "target_angle_rad": target_angle,
             "nearest_distance_m": nearest_distance,
@@ -129,6 +134,7 @@ class LidarGapPolicy:
             "right_min_30_90deg_m": float(np.min(ranges[(angles <= -np.deg2rad(30.0)) & (angles >= -np.deg2rad(90.0))])),
             "speed_mps": speed_mps,
             "target_speed_mps": target_speed,
+            "safe_gap_found": float(safe_gap_found),
         }
         return np.asarray([throttle, steering], dtype=np.float32)
 
