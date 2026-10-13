@@ -1118,14 +1118,37 @@ class CampaignPhaseRunner:
                 continue
             if str(record.get("parent_run_id")) not in campaign_run_ids:
                 continue
+            service_result = record.get("result") if isinstance(record.get("result"), dict) else {}
+            claimed_runs = service_result.get("runs") if isinstance(service_result.get("runs"), list) else record.get("attempts")
+            claimed_passing_probe = bool(
+                service_result.get("readiness_passed") is True
+                or (isinstance(claimed_runs, list) and any(
+                    isinstance(item, dict)
+                    and item.get("readiness_passed") is True
+                    and item.get("score_status") == "valid"
+                    for item in claimed_runs
+                ))
+            )
             path = _report_path(record, self.repo_root)
             model = _resolve_model_path(record.get("model_path"), self.repo_root)
             if path is None or model is None or not path.is_file() or not model.is_file():
-                evidence.append({"evaluation_id": record.get("evaluation_id"), "classification": "infrastructure_or_missing_evidence"})
+                evidence.append({
+                    "evaluation_id": record.get("evaluation_id"),
+                    "parent_run_id": record.get("parent_run_id"),
+                    "classification": "infrastructure_or_missing_evidence",
+                    "claimed_passing_probe": claimed_passing_probe,
+                    "lineage_failure": claimed_passing_probe,
+                })
                 continue
             report = verification_context.read_json(path)
             if report is None:
-                evidence.append({"evaluation_id": record.get("evaluation_id"), "classification": "infrastructure_or_missing_evidence"})
+                evidence.append({
+                    "evaluation_id": record.get("evaluation_id"),
+                    "parent_run_id": record.get("parent_run_id"),
+                    "classification": "infrastructure_or_missing_evidence",
+                    "claimed_passing_probe": claimed_passing_probe,
+                    "lineage_failure": claimed_passing_probe,
+                })
                 continue
             digest = verification_context.hash_file(model)
             verified = verify_ppo_lineage_checkpoint(model, verification_context=verification_context)
@@ -1133,6 +1156,7 @@ class CampaignPhaseRunner:
                 record, report, digest, report_path=path, repo_root=self.repo_root,
             ) if verified else None
             trend_validation = None
+            finalist_screening = None
             parent = run_index.get(str(record.get("parent_run_id")))
             parent_config = parent.get("config") if isinstance(parent, dict) else None
             resume_path = _resolve_model_path(
@@ -1233,6 +1257,39 @@ class CampaignPhaseRunner:
                         and report_attempt.get("stop_reason") in {"collision_detected", "collision_disqualification_limit"}
                         and _is_exact_int(report_attempt.get("collision_count"), collision_count)
                     )
+                    report_service_bound = bool(report_hash_matches)
+                    authenticated_screening = bool(
+                        verified and parent_lineage and child_parent_matches
+                        and reward_branch_hash is not None and probe is not None
+                        and report_service_bound and sensor_valid
+                    )
+                    exclusion_reason = None
+                    if authenticated_screening and (
+                        actual_snapshot_step - parent_step < 2 * rollout_size or rollout_count < 2
+                    ):
+                        exclusion_reason = "insufficient_post_parent_training"
+                    eligible_for_finalist = bool(
+                        authenticated_screening and scheduled and snapshot_matches_trigger
+                        and actual_snapshot_step - parent_step >= 2 * rollout_size
+                        and rollout_count >= 2
+                    )
+                    finalist_screening = {
+                        "authenticated": authenticated_screening,
+                        "parent_child_match": child_parent_matches,
+                        "campaign_reward_linked": reward_branch_hash is not None,
+                        "report_service_bound": report_service_bound,
+                        "sensor_valid": sensor_valid,
+                        "parent_global_timestep": parent_step,
+                        "checkpoint_global_timestep": actual_snapshot_step,
+                        "post_parent_training_transitions": actual_snapshot_step - parent_step,
+                        "rollout_size": rollout_size,
+                        "post_parent_rollout_audit_steps": sorted(rollout_steps),
+                        "post_parent_rollout_audit_count": rollout_count,
+                        "scheduled_probe": scheduled,
+                        "snapshot_matches_trigger_bucket": snapshot_matches_trigger,
+                        "eligible_for_finalist": eligible_for_finalist,
+                        "exclusion_reason": exclusion_reason,
+                    }
                     if (child_parent_matches and reward_branch_hash is not None
                             and report_hash_matches and snapshot_matches_trigger and sensor_valid
                             and scheduled and rollout_count >= 2
@@ -1279,10 +1336,13 @@ class CampaignPhaseRunner:
                 "report_validation_mode": report.get("validation_mode"),
                 "report_protocol": report.get("protocol"),
                 "trend_validation": trend_validation,
+                "finalist_screening": finalist_screening,
                 "train_request": train_request,
                 "terminal_context": record.get("terminal_context"),
                 "failure_classification": failure_kind,
                 "reward_experiment_config_sha256": reward_branch_hash,
+                "claimed_passing_probe": claimed_passing_probe,
+                "lineage_failure": bool(claimed_passing_probe and not child_parent_matches),
             })
         return evidence
 
@@ -1700,9 +1760,91 @@ class CampaignPhaseRunner:
             return {"action": "wait_for_quiescence_before_finalist_manifest"}
         evidence = self.collect_evidence(snapshot)
         candidates = []
+        excluded_seed_candidates = []
         for row in evidence.get("probe_evidence", []):
-            if not isinstance(row, dict) or not isinstance(row.get("probe"), dict):
+            if not isinstance(row, dict):
                 continue
+            if not isinstance(row.get("probe"), dict):
+                if row.get("claimed_passing_probe") is True:
+                    raise RuntimeError(
+                        f"service claims passing probe {row.get('evaluation_id')} but authenticated probe validation failed"
+                    )
+                continue
+            screening = row.get("finalist_screening")
+            if not isinstance(screening, dict):
+                raise RuntimeError(
+                    f"passing probe {row.get('evaluation_id')} lacks authenticated finalist screening facts"
+                )
+            if screening.get("eligible_for_finalist") is not True:
+                if (screening.get("authenticated") is not True
+                        or screening.get("parent_child_match") is not True
+                        or screening.get("campaign_reward_linked") is not True
+                        or screening.get("report_service_bound") is not True
+                        or screening.get("sensor_valid") is not True
+                        or screening.get("exclusion_reason") != "insufficient_post_parent_training"
+                        or not _is_exact_int(screening.get("rollout_size"), 2048)
+                        or not isinstance(screening.get("parent_global_timestep"), int)
+                        or isinstance(screening.get("parent_global_timestep"), bool)
+                        or not isinstance(screening.get("checkpoint_global_timestep"), int)
+                        or isinstance(screening.get("checkpoint_global_timestep"), bool)
+                        or not isinstance(screening.get("post_parent_training_transitions"), int)
+                        or isinstance(screening.get("post_parent_training_transitions"), bool)
+                        or not isinstance(screening.get("post_parent_rollout_audit_steps"), list)
+                        or not _is_exact_int(screening.get("post_parent_rollout_audit_count"),
+                                             len(screening.get("post_parent_rollout_audit_steps", [])) )):
+                    raise RuntimeError(
+                        f"passing probe {row.get('evaluation_id')} is not eligible and lacks provable seed exclusion"
+                    )
+                steps = screening["post_parent_rollout_audit_steps"]
+                if (any(not isinstance(step, int) or isinstance(step, bool)
+                        or step <= screening["parent_global_timestep"]
+                        or step > screening["checkpoint_global_timestep"] for step in steps)
+                        or len(set(steps)) != len(steps)
+                        or (screening["checkpoint_global_timestep"] - screening["parent_global_timestep"]
+                            >= 2 * screening["rollout_size"] and len(steps) >= 2)):
+                    raise RuntimeError(
+                        f"probe {row.get('evaluation_id')} exclusion facts do not prove insufficient post-parent training"
+                    )
+                excluded_seed_candidates.append({
+                    "evaluation_id": row.get("evaluation_id"),
+                    "checkpoint_sha256": row.get("model_sha256"),
+                    "model_path": row.get("model_path"),
+                    "evaluation_history_path": str(
+                        self.repo_root / "logs" / "rl" / f"official_run_{row.get('parent_run_id')}"
+                        / "evaluation_history.jsonl"
+                    ),
+                    "probe_report_path": row.get("report_path"),
+                    "probe_report_sha256": row.get("report_sha256"),
+                    "parent_run_id": row.get("parent_run_id"),
+                    "exclusion_reason": "insufficient_post_parent_training",
+                    "parent_global_timestep": screening["parent_global_timestep"],
+                    "checkpoint_global_timestep": screening["checkpoint_global_timestep"],
+                    "post_parent_training_transitions": screening["post_parent_training_transitions"],
+                    "rollout_size": screening["rollout_size"],
+                    "post_parent_rollout_audit_steps": steps,
+                    "post_parent_rollout_audit_count": screening["post_parent_rollout_audit_count"],
+                })
+                continue
+            trend = row.get("trend_validation")
+            if (not isinstance(trend, dict) or trend.get("authenticated") is not True
+                    or trend.get("outcome") != "pass"
+                    or screening.get("authenticated") is not True
+                    or screening.get("parent_child_match") is not True
+                    or screening.get("campaign_reward_linked") is not True
+                    or screening.get("report_service_bound") is not True
+                    or screening.get("sensor_valid") is not True
+                    or screening.get("scheduled_probe") is not True
+                    or screening.get("snapshot_matches_trigger_bucket") is not True
+                    or not _is_exact_int(screening.get("rollout_size"), 2048)
+                    or not isinstance(screening.get("post_parent_rollout_audit_steps"), list)
+                    or len(set(screening.get("post_parent_rollout_audit_steps", []))) < 2
+                    or not _is_exact_int(screening.get("post_parent_rollout_audit_count"),
+                                         len(screening.get("post_parent_rollout_audit_steps", [])))
+                    or screening.get("post_parent_training_transitions", 0) < 4096
+                    or trend.get("completed_rollouts_since_branch") != screening.get("post_parent_rollout_audit_count")):
+                raise RuntimeError(
+                    f"finalist-eligible probe {row.get('evaluation_id')} lacks matching passing trend validation"
+                )
             parent_id = row.get("parent_run_id")
             report_path = row.get("report_path")
             model_path = row.get("model_path")
@@ -1724,8 +1866,21 @@ class CampaignPhaseRunner:
             })
         if not candidates:
             return {"action": "waiting_for_authenticated_passing_probe_candidate"}
-        input_evidence = {"campaign_id": state.get("campaign_id"), "candidates": candidates}
+        input_evidence = {
+            "campaign_id": state.get("campaign_id"), "candidates": candidates,
+            "excluded_seed_candidates": excluded_seed_candidates,
+        }
         evidence_path = _immutable_json(self.output_dir / "evidence", "finalist_candidates", input_evidence)
+        evidence_sha = _sha256(evidence_path)
+        if excluded_seed_candidates:
+            if not any(
+                row.get("event") == "finalist_seed_probes_excluded"
+                and row.get("candidate_evidence_sha256") == evidence_sha
+                for row in self._runner_events()
+            ):
+                self._event("finalist_seed_probes_excluded", evidence_path=str(evidence_path),
+                            candidate_evidence_sha256=evidence_sha,
+                            exclusions=excluded_seed_candidates)
         manifest = build_finalist_manifest(state, input_evidence, repo_root=self.repo_root)
         encoded = _json_bytes(manifest)
         self.finalists_manifest.parent.mkdir(parents=True, exist_ok=True)

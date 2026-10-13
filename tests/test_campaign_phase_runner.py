@@ -903,6 +903,19 @@ def test_finalist_manifest_is_created_only_after_training_and_evaluation_are_idl
         "report_path": str(tmp_path / "logs" / "rl" / "official_run_child-1" / "evaluation.json"),
         "model_path": str(tmp_path / "logs" / "rl" / "official_run_parent-1" / "checkpoints" / "candidate.zip"),
         "report_sha256": "b" * 64, "model_sha256": "a" * 64, "evaluation_id": "eval-1",
+        "finalist_screening": {
+            "eligible_for_finalist": True, "authenticated": True,
+            "parent_child_match": True, "campaign_reward_linked": True,
+            "report_service_bound": True, "sensor_valid": True,
+            "scheduled_probe": True, "snapshot_matches_trigger_bucket": True,
+            "rollout_size": 2048, "parent_global_timestep": 10000,
+            "checkpoint_global_timestep": 14096,
+            "post_parent_training_transitions": 4096,
+            "post_parent_rollout_audit_steps": [12048, 14096],
+            "post_parent_rollout_audit_count": 2,
+        },
+        "trend_validation": {"authenticated": True, "outcome": "pass",
+                              "completed_rollouts_since_branch": 2},
     }]}
     monkeypatch.setattr(runner, "collect_evidence", lambda _snapshot: evidence)
     monkeypatch.setattr(runner_module, "build_finalist_manifest", lambda *_args, **_kwargs: {
