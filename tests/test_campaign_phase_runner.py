@@ -897,12 +897,13 @@ def test_finalist_manifest_is_created_only_after_training_and_evaluation_are_idl
     runner = runner_module.CampaignPhaseRunner(
         state_path=tmp_path / "state.json", repo_root=tmp_path, api=FakeAPI(),
     )
+    selected_sha = "27c8775ca3ce8c58baadc0b1d5cf2b987f2e78f4b06a5a884aefe7d653362bfd"
     state = {"campaign_id": runner_module.CAMPAIGN_ID}
     evidence = {"campaign_id": runner_module.CAMPAIGN_ID, "probe_evidence": [{
         "probe": {"median_scored_lap_s": 50.0}, "parent_run_id": "parent-1",
         "report_path": str(tmp_path / "logs" / "rl" / "official_run_child-1" / "evaluation.json"),
         "model_path": str(tmp_path / "logs" / "rl" / "official_run_parent-1" / "checkpoints" / "candidate.zip"),
-        "report_sha256": "b" * 64, "model_sha256": "a" * 64, "evaluation_id": "eval-1",
+        "report_sha256": "b" * 64, "model_sha256": selected_sha, "evaluation_id": "eval-1",
         "finalist_screening": {
             "eligible_for_finalist": True, "authenticated": True,
             "parent_child_match": True, "campaign_reward_linked": True,
@@ -917,11 +918,19 @@ def test_finalist_manifest_is_created_only_after_training_and_evaluation_are_idl
         "trend_validation": {"authenticated": True, "outcome": "pass",
                               "completed_rollouts_since_branch": 2},
     }]}
+    captured = {}
     monkeypatch.setattr(runner, "collect_evidence", lambda _snapshot: evidence)
-    monkeypatch.setattr(runner_module, "build_finalist_manifest", lambda *_args, **_kwargs: {
-        "campaign_id": runner_module.CAMPAIGN_ID,
-        "finalists": [{"checkpoint_sha256": "a" * 64}],
+    monkeypatch.setattr(runner_module, "campaign_validation_request", lambda _state: {
+        "candidate_checkpoint_sha256": selected_sha,
     })
+    def fake_build(_state, input_evidence, **_kwargs):
+        captured.update(input_evidence)
+        return {
+            "campaign_id": runner_module.CAMPAIGN_ID,
+            "finalists": [{"checkpoint_sha256": selected_sha}],
+            "existing_competitive_validations": [],
+        }
+    monkeypatch.setattr(runner_module, "build_finalist_manifest", fake_build)
     runner.output_dir.mkdir(parents=True)
     active = {"runs": [{"state": "running"}], "replay": {"state": "stopped"}, "evaluation_history": []}
     assert runner._create_finalist_manifest_if_ready(state, active) == {
@@ -932,7 +941,13 @@ def test_finalist_manifest_is_created_only_after_training_and_evaluation_are_idl
     result = runner._create_finalist_manifest_if_ready(state, idle)
     assert result["action"] == "finalist_manifest_created"
     assert runner.finalists_manifest.exists()
-    assert json.loads(runner.finalists_manifest.read_text(encoding="utf-8"))["finalists"][0]["checkpoint_sha256"] == "a" * 64
+    assert json.loads(runner.finalists_manifest.read_text(encoding="utf-8"))["finalists"][0]["checkpoint_sha256"] == selected_sha
+    assert captured["existing_competitive_validations"] == [
+        {"kind": "competitive", "evidence_path": "logs/rl/official_campaign/competitive_benchmark_851968_terminal_evidence.json",
+         "evidence_sha256": "b114231ef6d1afdee8c71669b8a541870eb4e78fe976a6500736fcc4444b6c95"},
+        {"kind": "clean_reload", "evidence_path": "logs/rl/official_campaign/clean_reload_851968_validation.json",
+         "evidence_sha256": "3721e352fa51fa228bdbd62544af62e3744a432f773c2a759bfdf74d78b65d55"},
+    ]
 
 
 def test_finalist_manifest_existing_file_is_not_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -950,6 +965,56 @@ def test_finalist_manifest_existing_file_is_not_replaced(tmp_path: Path, monkeyp
     )
     assert result is None
     assert runner.finalists_manifest.read_text(encoding="utf-8") == '{"original":true}'
+
+
+def test_final_phase_reuses_authenticated_existing_batches_without_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class NoDispatchAPI:
+        def post(self, *_args, **_kwargs):
+            raise AssertionError("existing complete validations must not be dispatched again")
+
+    runner = runner_module.CampaignPhaseRunner(
+        state_path=tmp_path / "state.json", repo_root=tmp_path, api=NoDispatchAPI(),
+    )
+    checkpoint_sha = "27c8775ca3ce8c58baadc0b1d5cf2b987f2e78f4b06a5a884aefe7d653362bfd"
+    competitive = {
+        "kind": "competitive", "evaluation_id": "existing-competitive",
+        "source_recorded_at_utc": "2026-10-13T18:33:50.1341897Z",
+        "evidence_path": "/repo/logs/competitive.json", "evidence_sha256": "a" * 64,
+        "candidate_checkpoint_sha256": checkpoint_sha, "reused_existing_validation": True,
+        "attempts": [{"scored_lap_times_s": [16.9 + i / 1000 for i in range(10)]} for _ in range(3)],
+    }
+    clean_reload = {
+        "kind": "clean_reload", "evaluation_id": "existing-clean",
+        "source_recorded_at_utc": "2026-10-13T19:12:16.3942237Z",
+        "evidence_path": "/repo/logs/clean.json", "evidence_sha256": "b" * 64,
+        "candidate_checkpoint_sha256": checkpoint_sha, "reused_existing_validation": True,
+        "validator_passed": True, "training_idle_at_capture": True,
+        "evaluation_queue_idle_at_capture": True,
+        "requested_and_loaded_model_sha256": checkpoint_sha, "scored_laps": 30,
+        "hub_identity": {"pid": 51171, "process_start_identity": "pid:51171:start_ticks:12304659",
+                         "source_sha256": "c" * 64},
+        "attempts": [],
+    }
+    finalist = {"checkpoint_sha256": checkpoint_sha, "model_path": "/repo/model.zip",
+                "existing_competitive_validations": [competitive, clean_reload]}
+    manifest_sha = "d" * 64
+    monkeypatch.setattr(runner, "_create_finalist_manifest_if_ready", lambda *_args: None)
+    monkeypatch.setattr(runner, "_finalist_manifest_rows", lambda: (manifest_sha, [finalist]))
+    monkeypatch.setattr(runner_module, "campaign_validation_request", lambda _state: {"request_id": "req-1"})
+    outcome = runner._final_phase_tick(
+        {"campaign_id": runner_module.CAMPAIGN_ID, "deadline_policy_amendment": {"amendment_id": "amend-1"}},
+        {"runs": [], "replay": {"state": "complete"}, "evaluation_history": []},
+        remaining_s=0,
+    )
+    assert outcome["action"] == "winner_passed_reused_competitive_and_clean_reload_validations"
+    assert outcome["winner_checkpoint_sha256"] == checkpoint_sha
+    events = runner._runner_events()
+    assert [(row["kind"], row["evaluation_id"]) for row in events
+            if row.get("event") == "finalist_existing_validation_reused"] == [
+                ("competitive", "existing-competitive"), ("clean_reload", "existing-clean"),
+            ]
+    assert not any(row.get("event") in {"finalist_evaluation_intent", "finalist_evaluation_requested"}
+                   for row in events)
 
 
 def test_unresolved_branch_launch_intent_blocks_duplicate_post(tmp_path: Path):

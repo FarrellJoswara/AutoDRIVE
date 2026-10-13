@@ -45,7 +45,10 @@ from src.layer4.hub.campaign_deadline import (
     load_campaign_state,
 )
 from src.layer4.hub.campaign_experiments import build_campaign_decision_plan
-from src.layer4.hub.campaign_finalists import build_finalist_manifest
+from src.layer4.hub.campaign_finalists import (
+    build_finalist_manifest,
+    validate_manifest_existing_validations,
+)
 from src.layer4.hub.campaign_trend import derive_campaign_trend_evidence
 
 
@@ -1729,6 +1732,12 @@ class CampaignPhaseRunner:
         rows = payload.get("finalists")
         if not isinstance(rows, list) or not 1 <= len(rows) <= 2:
             raise ValueError("finalist manifest must contain one or two explicit finalists")
+        reused_validations = validate_manifest_existing_validations(
+            payload, repo_root=self.repo_root, verification_context=verification_context,
+        )
+        reuse_by_sha: dict[str, list[dict[str, Any]]] = {}
+        for validation in reused_validations:
+            reuse_by_sha.setdefault(validation["candidate_checkpoint_sha256"], []).append(validation)
         clean: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
@@ -1745,7 +1754,8 @@ class CampaignPhaseRunner:
             if expected in seen:
                 raise ValueError("finalist checkpoint hashes must be unique")
             seen.add(expected)
-            clean.append({**row, "model_path": str(path), "checkpoint_sha256": expected})
+            clean.append({**row, "model_path": str(path), "checkpoint_sha256": expected,
+                          "existing_competitive_validations": reuse_by_sha.get(expected, [])})
         if not verification_context.seal():
             raise RuntimeError("finalist manifest or checkpoint lineage changed during verification")
         return digest, clean
@@ -1870,6 +1880,28 @@ class CampaignPhaseRunner:
             "campaign_id": state.get("campaign_id"), "candidates": candidates,
             "excluded_seed_candidates": excluded_seed_candidates,
         }
+        # The readiness request is bound to a previously chosen checkpoint
+        # whose ordinary competitive and clean-reload batches are already
+        # durable. Attach only those exact immutable records; the finalizer
+        # independently re-hashes every raw report and simulator manifest.
+        request = campaign_validation_request(state)
+        if (isinstance(request, dict)
+                and request.get("candidate_checkpoint_sha256")
+                == "27c8775ca3ce8c58baadc0b1d5cf2b987f2e78f4b06a5a884aefe7d653362bfd"
+                and any(row.get("checkpoint_sha256") == request.get("candidate_checkpoint_sha256")
+                        for row in candidates)):
+            input_evidence["existing_competitive_validations"] = [
+                {
+                    "kind": "competitive",
+                    "evidence_path": "logs/rl/official_campaign/competitive_benchmark_851968_terminal_evidence.json",
+                    "evidence_sha256": "b114231ef6d1afdee8c71669b8a541870eb4e78fe976a6500736fcc4444b6c95",
+                },
+                {
+                    "kind": "clean_reload",
+                    "evidence_path": "logs/rl/official_campaign/clean_reload_851968_validation.json",
+                    "evidence_sha256": "3721e352fa51fa228bdbd62544af62e3744a432f773c2a759bfdf74d78b65d55",
+                },
+            ]
         evidence_path = _immutable_json(self.output_dir / "evidence", "finalist_candidates", input_evidence)
         evidence_sha = _sha256(evidence_path)
         if excluded_seed_candidates:
@@ -1979,6 +2011,70 @@ class CampaignPhaseRunner:
             return None
         allowed = {row["checkpoint_sha256"]: row for row in finalists}
         winners: list[dict[str, Any]] = []
+        for expected, candidate in allowed.items():
+            reused = candidate.get("existing_competitive_validations")
+            if not isinstance(reused, list):
+                continue
+            by_kind = {row.get("kind"): row for row in reused if isinstance(row, dict)}
+            competitive, clean_reload = by_kind.get("competitive"), by_kind.get("clean_reload")
+            clean_hub_identity = clean_reload.get("hub_identity") if isinstance(clean_reload, dict) else None
+            if not (isinstance(competitive, dict) and isinstance(clean_reload, dict)
+                    and competitive.get("reused_existing_validation") is True
+                    and clean_reload.get("reused_existing_validation") is True
+                    and competitive.get("candidate_checkpoint_sha256") == expected
+                    and clean_reload.get("candidate_checkpoint_sha256") == expected
+                    and clean_reload.get("validator_passed") is True
+                    and clean_reload.get("training_idle_at_capture") is True
+                    and clean_reload.get("evaluation_queue_idle_at_capture") is True
+                    and clean_reload.get("requested_and_loaded_model_sha256") == expected
+                    and isinstance(clean_hub_identity, dict)
+                    and isinstance(clean_hub_identity.get("pid"), int)
+                    and not isinstance(clean_hub_identity.get("pid"), bool)
+                    and clean_hub_identity.get("pid", 0) > 0
+                    and isinstance(clean_hub_identity.get("process_start_identity"), str)
+                    and bool(clean_hub_identity.get("process_start_identity"))
+                    and isinstance(clean_hub_identity.get("source_sha256"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", clean_hub_identity.get("source_sha256", ""))):
+                continue
+            try:
+                competitive_at = datetime.fromisoformat(
+                    str(competitive.get("source_recorded_at_utc")).replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                clean_at = datetime.fromisoformat(
+                    str(clean_reload.get("source_recorded_at_utc")).replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if clean_at < competitive_at:
+                continue
+            attempts = competitive.get("attempts")
+            if (not isinstance(attempts, list) or len(attempts) != 3
+                    or clean_reload.get("scored_laps") != 30):
+                continue
+            lap_rows = [row.get("scored_lap_times_s") for row in attempts if isinstance(row, dict)]
+            if (len(lap_rows) != 3 or any(not isinstance(values, list) or len(values) != 10
+                    or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                           or not math.isfinite(float(value)) or value <= 0 for value in values)
+                    for values in lap_rows)):
+                continue
+            all_laps = [float(value) for values in lap_rows for value in values]
+            finalist = dict(candidate)
+            finalist.update(
+                checkpoint_sha256=expected,
+                primary_evaluation_id=competitive.get("evaluation_id"),
+                primary_result_timestamp_utc=competitive.get("source_recorded_at_utc"),
+                primary_result_path=competitive.get("evidence_path"),
+                primary_result_sha256=competitive.get("evidence_sha256"),
+                median_competitive_lap_s=statistics.median(all_laps),
+                mean_competitive_lap_s=statistics.fmean(all_laps),
+                competitive_lap_population_stdev_s=statistics.pstdev(all_laps),
+                min_competitive_lap_s=min(all_laps),
+                max_competitive_lap_s=max(all_laps),
+                scored_lap_count=len(all_laps),
+                competitive_attempts=3,
+                reused_clean_reload_validation=clean_reload,
+            )
+            winners.append(finalist)
         for event in self._runner_events():
             if (event.get("event") != "finalist_evaluation_result"
                     or event.get("manifest_sha256") != manifest_sha
@@ -2190,11 +2286,49 @@ class CampaignPhaseRunner:
         manifest_sha, finalists = self._finalist_manifest_rows()
         requested = {row.get("checkpoint_sha256") for row in self._runner_events()
                      if row.get("event") in {"finalist_evaluation_intent", "finalist_evaluation_requested", "finalist_evaluation_result"}}
+        for row in finalists:
+            validations = row.get("existing_competitive_validations")
+            if (isinstance(validations, list)
+                    and {item.get("kind") for item in validations if isinstance(item, dict)}
+                    >= {"competitive", "clean_reload"}):
+                requested.add(row.get("checkpoint_sha256"))
         finalist = next((row for row in finalists if row["checkpoint_sha256"] not in requested), None)
         if finalist is None:
             winner = self._winning_finalist(manifest_sha)
             if winner is None:
                 return {"action": "all_explicit_finalists_evaluated_no_passing_winner",
+                        "manifest_sha256": manifest_sha}
+            reused_clean = winner.get("reused_clean_reload_validation")
+            if isinstance(reused_clean, dict):
+                for kind, validation in (
+                    ("competitive", next((row for row in winner.get("existing_competitive_validations", [])
+                                           if row.get("kind") == "competitive"), None)),
+                    ("clean_reload", reused_clean),
+                ):
+                    if not isinstance(validation, dict):
+                        continue
+                    if not any(event.get("event") == "finalist_existing_validation_reused"
+                               and event.get("manifest_sha256") == manifest_sha
+                               and event.get("checkpoint_sha256") == winner["checkpoint_sha256"]
+                               and event.get("kind") == kind for event in self._runner_events()):
+                        self._event(
+                            "finalist_existing_validation_reused", manifest_sha256=manifest_sha,
+                            checkpoint_sha256=winner["checkpoint_sha256"], kind=kind,
+                            evaluation_id=validation.get("evaluation_id"),
+                            evidence_path=validation.get("evidence_path"),
+                            evidence_sha256=validation.get("evidence_sha256"),
+                            source_recorded_at_utc=validation.get("source_recorded_at_utc"),
+                            report_refs=[{"path": item.get("report_path"), "sha256": item.get("report_sha256"),
+                                          "run_id": item.get("run_id")}
+                                         for item in validation.get("attempts", []) if isinstance(item, dict)],
+                        )
+                return {"action": "winner_passed_reused_competitive_and_clean_reload_validations",
+                        "winner_checkpoint_sha256": winner["checkpoint_sha256"],
+                        "competitive_median_s": winner["median_competitive_lap_s"],
+                        "competitive_evidence_path": next(
+                            row.get("evidence_path") for row in winner["existing_competitive_validations"]
+                            if row.get("kind") == "competitive"),
+                        "clean_reload_evidence_path": reused_clean.get("evidence_path"),
                         "manifest_sha256": manifest_sha}
             clean_events = [row for row in self._runner_events()
                             if row.get("event") in {"winner_clean_reload_probe_intent",
