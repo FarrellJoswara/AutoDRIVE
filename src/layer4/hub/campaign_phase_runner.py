@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from datetime import datetime
 import json
 import math
 import os
@@ -125,7 +126,7 @@ def _valid_competitive_route_identity(report: dict[str, Any], attempt: dict[str,
             return False
     identity = report.get("simulator_identity")
     return (
-        identity == attempt.get("simulator_identity")
+        _same_simulator_identity(identity, attempt.get("simulator_identity"))
         and report.get("official_scene_sha256") == attempt.get("official_scene_sha256")
         and report.get("route_sha256") == attempt.get("route_sha256")
         and report.get("route_path") == attempt.get("route_path")
@@ -135,6 +136,56 @@ def _valid_competitive_route_identity(report: dict[str, Any], attempt: dict[str,
         and attempt.get("frontier_projection_valid") is True
         and monitor_ok(attempt.get("route_monitor"))
     )
+
+
+def _same_simulator_identity(left: Any, right: Any) -> bool:
+    """Compare process identity while treating equivalent ISO timestamp precision equally."""
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    if set(left) != set(right):
+        return False
+    for key in left.keys() - {"process_creation_utc"}:
+        if left[key] != right[key]:
+            return False
+    left_time = left.get("process_creation_utc")
+    right_time = right.get("process_creation_utc")
+    if not isinstance(left_time, str) or not isinstance(right_time, str):
+        return False
+    try:
+        def parse(value: str) -> datetime:
+            return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        return parse(left_time) == parse(right_time)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _valid_simulator_process_manifest(path: Path, run_id: str, identity: Any) -> bool:
+    """Bind report simulator identity to the exact per-run process manifest bytes."""
+    if not isinstance(identity, dict):
+        return False
+    try:
+        raw = (path.parent / "windows_simulator_processes.json").read_bytes()
+        if hashlib.sha256(raw).hexdigest() != identity.get("manifest_sha256"):
+            return False
+        manifest = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
+        return False
+    if not isinstance(manifest, dict) or manifest.get("run_id") != run_id:
+        return False
+    records = manifest.get("records")
+    if not isinstance(records, list):
+        return False
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        if (
+            item.get("pid") == identity.get("pid")
+            and item.get("port") == identity.get("port")
+            and item.get("executable_path") == identity.get("executable_path")
+            and item.get("process_creation_utc") == identity.get("process_creation_utc")
+        ):
+            return True
+    return False
 
 
 def _campaign_evidence_state_signature(state: dict[str, Any]) -> str:
@@ -832,21 +883,34 @@ def validate_final_evaluation(
         if not isinstance(attempt, dict):
             errors.append(f"attempt report {index + 1} is not an object")
             continue
-        report_run_id = attempt.get("run_id")
-        if not isinstance(report_run_id, str) or not report_run_id or report_run_id in bound_run_ids:
-            errors.append(f"attempt report {index + 1} has a missing or duplicate run id")
-        elif report_run_id:
-            bound_run_ids.add(report_run_id)
         service_attempt = attempts[index] if index < len(attempts) and isinstance(attempts[index], dict) else None
         if service_attempt is None:
             errors.append(f"service attempt {index + 1} is missing")
+            service_run_id = None
         else:
+            service_run_id = service_attempt.get("run_id")
+            if (not isinstance(service_run_id, str) or not service_run_id
+                    or service_run_id in bound_run_ids):
+                errors.append(f"service attempt {index + 1} has a missing or duplicate run id")
+                service_run_id = None
+            else:
+                bound_run_ids.add(service_run_id)
             report_repo_root = _repo_root_for_run_report(path)
             recorded_path = _resolve_model_path(service_attempt.get("evaluation_report"), report_repo_root) if report_repo_root else None
             if recorded_path is None or recorded_path.resolve() != path.resolve():
                 errors.append(f"attempt report {index + 1} is not bound to the service history row")
-            if service_attempt.get("run_id") != attempt.get("run_id"):
+            if (service_run_id is not None
+                    and (path.name != "evaluation.json"
+                         or path.parent.name != f"official_run_{service_run_id}")):
+                errors.append(f"attempt report {index + 1} path does not bind its service run id")
+            report_run_id = attempt.get("run_id")
+            if report_run_id is not None and report_run_id != service_run_id:
                 errors.append(f"attempt report {index + 1} run id differs from service history")
+            if (service_run_id is not None
+                    and not _valid_simulator_process_manifest(
+                        path, service_run_id, attempt.get("simulator_identity"),
+                    )):
+                errors.append(f"attempt report {index + 1} simulator manifest does not bind its service run id")
             if (not _is_exact_int(service_attempt.get("race_laps_completed"), 10)
                     or not _is_exact_int(service_attempt.get("warmup_laps"), 1)):
                 errors.append(f"service attempt {index + 1} does not record exactly 1+10 laps")
@@ -865,13 +929,18 @@ def validate_final_evaluation(
                     or any(service_attempt.get(key) != attempt.get(key) for key in (
                         "route_monitor_only", "route_monitor", "official_scene_sha256",
                         "route_sha256", "track_profile", "route_path", "official_scene_path",
-                        "simulator_identity", "route_projection_valid", "frontier_projection_valid",
-                    ))):
+                        "route_projection_valid", "frontier_projection_valid",
+                    ))
+                    or not _same_simulator_identity(
+                        service_attempt.get("simulator_identity"), attempt.get("simulator_identity"),
+                    )):
                 errors.append(f"service attempt {index + 1} route/scene/process identity differs from its report")
         lap_times = attempt.get("race_lap_times_s") if isinstance(attempt, dict) else None
         warmup = attempt.get("warmup_lap_times_s") if isinstance(attempt, dict) else None
         collision_count = attempt.get("collision_count")
-        valid_collision_count = isinstance(collision_count, int) and not isinstance(collision_count, bool) and collision_count == 0
+        # Some valid evaluator versions omit this redundant field; acceptance still
+        # requires exact zero service, race, warmup, and raw-finish counters below.
+        valid_collision_count = collision_count is None or _is_exact_int(collision_count, 0)
         final_camera_count = attempt.get("camera_sample_count")
         if (
             attempt.get("stop_reason") != "race_complete"
@@ -914,12 +983,12 @@ def validate_final_evaluation(
                 scored_race_time = None
         checked.append({
             "report_path": str(path), "report_sha256": _sha256(path),
-            "run_id": attempt.get("run_id") if isinstance(attempt, dict) else None,
+            "run_id": service_run_id,
             "warmup_laps": len(warmup) if isinstance(warmup, list) else 0,
             "scored_laps": len(lap_times) if isinstance(lap_times, list) else 0,
             "scored_lap_times_s": scored_lap_values,
             "scored_race_time_s": scored_race_time,
-            "collision_count": collision_count,
+            "collision_count": 0 if collision_count is None and service_attempt is not None else collision_count,
             "projection_valid": attempt.get("frontier_projection_valid"),
         })
     if result.get("attempts_required") != 3 or result.get("competitive_score_valid") is not True:

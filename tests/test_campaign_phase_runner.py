@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -552,14 +553,27 @@ def test_final_evaluation_requires_three_clean_attempts_with_loaded_hash(tmp_pat
 
     reports = []
     service_rows = []
+    report_root = tmp_path / "logs" / "rl"
+    report_root.mkdir(parents=True)
     for index in range(3):
         run_id = f"run-{index}"
+        run_dir = report_root / f"official_run_{run_id}"
+        run_dir.mkdir(parents=True)
+        process_record = {
+            "pid": 5100 + index,
+            "port": 58000 + index,
+            "executable_path": rf"C:\Users\farre\Temp\aicar-official-iros-camera\windows\autodrive_simulator\AutoDRIVE Simulator.exe",
+            "process_creation_utc": f"2026-10-13T12:00:0{index}Z",
+        }
+        manifest_path = run_dir / "windows_simulator_processes.json"
+        manifest_bytes = json.dumps({"run_id": run_id, "records": [process_record]}).encode("utf-8")
+        manifest_path.write_bytes(manifest_bytes)
         simulator_identity = {
             "pid": 5100 + index,
             "process_creation_utc": f"2026-10-13T12:00:0{index}Z",
             "executable_path": rf"C:\Users\farre\Temp\aicar-official-iros-camera\windows\autodrive_simulator\AutoDRIVE Simulator.exe",
             "port": 58000 + index,
-            "manifest_sha256": str(index + 1) * 64,
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         }
         monitor = {
             "projection_valid": True, "projection_sample_count": 100,
@@ -579,7 +593,7 @@ def test_final_evaluation_requires_three_clean_attempts_with_loaded_hash(tmp_pat
             "track_profile": "competition",
             "simulator_identity": simulator_identity,
         }
-        report = tmp_path / f"attempt-{index}.json"
+        report = run_dir / "evaluation.json"
         report.write_text(
             json.dumps({
                 "model_sha256": SHA, "validation_mode": None,
@@ -595,14 +609,8 @@ def test_final_evaluation_requires_three_clean_attempts_with_loaded_hash(tmp_pat
             encoding="utf-8",
         )
         reports.append(report)
-    report_root = tmp_path / "logs" / "rl"
-    report_root.mkdir(parents=True)
-    copied = []
-    for index, report in enumerate(reports):
-        target = report_root / f"official_run_run-{index}" / "evaluation.json"
-        target.parent.mkdir(parents=True)
-        target.write_bytes(report.read_bytes())
-        copied.append(target)
+    copied = reports
+    for index, target in enumerate(copied):
         saved = json.loads(target.read_text(encoding="utf-8"))
         service_attempt = saved["runs"][0]
         service_rows.append({

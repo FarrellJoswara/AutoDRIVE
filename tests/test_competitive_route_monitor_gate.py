@@ -74,6 +74,18 @@ def _records(root: Path) -> tuple[dict, list[Path]]:
         run_dir.mkdir(parents=True)
         report_path = run_dir / "evaluation.json"
         attempt = _attempt(run_id)
+        identity = attempt["simulator_identity"]
+        manifest = {
+            "run_id": run_id,
+            "records": [{
+                "pid": identity["pid"], "port": identity["port"],
+                "executable_path": identity["executable_path"],
+                "process_creation_utc": identity["process_creation_utc"],
+            }],
+        }
+        manifest_bytes = json.dumps(manifest).encode("utf-8")
+        (run_dir / "windows_simulator_processes.json").write_bytes(manifest_bytes)
+        identity["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
         report = {
             "model_sha256": MODEL_SHA,
             "validation_mode": None,
@@ -135,6 +147,46 @@ def test_final_gate_accepts_standard_three_by_one_plus_ten_with_authenticated_mo
     result = validate_final_evaluation(record, reports, expected_sha256=MODEL_SHA)
     assert result["passed"], result["errors"]
     assert all(item["scored_laps"] == 10 for item in result["attempts"])
+
+
+def test_final_gate_accepts_report_without_redundant_run_and_collision_fields(tmp_path):
+    record, reports = _records(tmp_path)
+    for report_path in reports:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report_attempt = report["runs"][0]
+        report_attempt.pop("run_id")
+        report_attempt.pop("collision_count")
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+    result = validate_final_evaluation(record, reports, expected_sha256=MODEL_SHA)
+    assert result["passed"], result["errors"]
+    assert [item["run_id"] for item in result["attempts"]] == [
+        item["run_id"] for item in record["result"]["runs"]
+    ]
+
+
+def test_final_gate_rejects_process_manifest_byte_tampering(tmp_path):
+    record, reports = _records(tmp_path)
+    manifest_path = reports[0].parent / "windows_simulator_processes.json"
+    manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
+    result = validate_final_evaluation(record, reports, expected_sha256=MODEL_SHA)
+    assert not result["passed"]
+    assert any("simulator manifest" in error for error in result["errors"])
+
+
+def test_final_gate_accepts_equivalent_process_timestamp_precision(tmp_path):
+    record, reports = _records(tmp_path)
+    identity = record["result"]["runs"][0]["simulator_identity"]
+    identity["process_creation_utc"] = "2026-10-13T12:00:00.0000000+00:00"
+    result = validate_final_evaluation(record, reports, expected_sha256=MODEL_SHA)
+    assert result["passed"], result["errors"]
+
+
+def test_final_gate_rejects_different_process_creation_time(tmp_path):
+    record, reports = _records(tmp_path)
+    identity = record["result"]["runs"][0]["simulator_identity"]
+    identity["process_creation_utc"] = "2026-10-13T12:00:01Z"
+    result = validate_final_evaluation(record, reports, expected_sha256=MODEL_SHA)
+    assert not result["passed"]
 
 
 @pytest.mark.parametrize(

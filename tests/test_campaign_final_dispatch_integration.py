@@ -164,8 +164,14 @@ def _competitive_record(root: Path, expected_sha: str, evaluation_id: str,
             "process_creation_utc": f"2026-10-13T09:00:0{index}Z",
             "executable_path": r"C:\Users\farre\Documents\Github\AiCar\aicar-official-iros-camera\windows\autodrive_simulator\AutoDRIVE Simulator.exe",
             "port": 58000 + index,
-            "manifest_sha256": str(index + 1) * 64,
         }
+        manifest_bytes = json.dumps({"run_id": run_id, "records": [{
+            "pid": identity["pid"], "port": identity["port"],
+            "executable_path": identity["executable_path"],
+            "process_creation_utc": identity["process_creation_utc"],
+        }]}).encode("utf-8")
+        (report_path.parent / "windows_simulator_processes.json").write_bytes(manifest_bytes)
+        identity["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
         scene_sha = runner_module.OFFICIAL_COMPETITION_SCENE_SHA256
         route_sha = runner_module.OFFICIAL_COMPETITION_ROUTE_SHA256
         scene_path = r"C:\simulator\Data\level0"
