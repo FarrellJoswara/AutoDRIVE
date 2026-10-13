@@ -2,13 +2,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import zipfile
 
 import pytest
 
 import src.layer4.hub.campaign_finalists as finalists_module
 from src.layer4.hub.campaign_deadline import CAMPAIGN_ID, CAMPAIGN_PLAN
 from src.layer4.hub.campaign_finalists import build_finalist_manifest
-from src.layer4.hub.campaign_finalists import _atomic_create, _verified_campaign_ancestry
+from src.layer4.hub.campaign_finalists import (
+    _atomic_create,
+    _bundle_member_bytes,
+    _verified_campaign_ancestry,
+    _verified_evidence_bundle,
+    validate_manifest_existing_validations,
+)
 
 
 def _candidate(repo: Path, *, evaluation_id: str, run_id: str, laps: list[float]) -> dict:
@@ -157,6 +164,218 @@ def test_finalist_builder_shortlists_two_fastest_authenticated_probes(tmp_path: 
         assert row["lineage_sidecar_sha256"] == hashlib.sha256(sidecar.read_bytes()).hexdigest()
         assert row["effective_config_sha256"] == row["training_config_sha256"]
     assert "nonranking" in manifest["selection_policy"]
+
+
+def test_finalist_manifest_preserves_only_authenticated_undertrained_seed_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    _mock_verifiers(monkeypatch)
+    monkeypatch.setattr(finalists_module, "campaign_clock_status", lambda *a, **k: {
+        "phase": "final_validation", "remaining_seconds": 1000,
+    })
+    eligible = _candidate(tmp_path, evaluation_id="eval-eligible", run_id="eligible", laps=[40.0, 41.0, 42.0])
+    seed = _candidate(tmp_path, evaluation_id="eval-seed", run_id="seed", laps=[39.0, 40.0, 41.0])
+    seed_audit = tmp_path / "logs" / "rl" / "official_run_parent_seed" / "ppo_optimizer_audit.jsonl"
+    seed_audit.write_text(json.dumps({
+        "num_timesteps": 20000, "metrics_finite": True, "gradients_finite": True,
+        "parameters_finite": True, "optimizer_state_finite": True,
+    }) + "\n", encoding="utf-8")
+
+    manifest = build_finalist_manifest(
+        _state(),
+        {"campaign_id": CAMPAIGN_ID, "candidates": [eligible], "excluded_seed_candidates": [{
+            "evaluation_id": seed["evaluation_id"],
+            "checkpoint_sha256": seed["checkpoint_sha256"],
+            "model_path": seed["model_path"],
+            "probe_report_path": seed["probe_report_path"],
+            "probe_report_sha256": seed["probe_report_sha256"],
+            "parent_run_id": "parent_seed",
+            "exclusion_reason": "insufficient_post_parent_training",
+            "parent_global_timestep": 15000,
+            "checkpoint_global_timestep": 20000,
+            "post_parent_training_transitions": 5000,
+            "rollout_size": 2048,
+            "post_parent_rollout_audit_steps": [20000],
+            "post_parent_rollout_audit_count": 1,
+        }]},
+        repo_root=tmp_path,
+    )
+    assert [row["evaluation_id"] for row in manifest["finalists"]] == ["eval-eligible"]
+    assert manifest["evidence_candidates_count"] == 1
+    assert manifest["excluded_seed_candidates"] == [{
+        "evaluation_id": "eval-seed",
+        "probe_run_id": "seed",
+        "checkpoint_sha256": seed["checkpoint_sha256"],
+        "probe_report_sha256": seed["probe_report_sha256"],
+        "parent_global_timestep": 15000,
+        "checkpoint_global_timestep": 20000,
+        "post_parent_training_transitions": 5000,
+        "post_parent_rollout_audit_count": 1,
+        "post_parent_rollout_audit_steps": [20000],
+        "exclusion_reason": "insufficient_post_parent_training",
+    }]
+
+
+def test_manifest_reuse_validation_rows_are_reauthenticated_and_exact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    sha = "a" * 64
+    row = {
+        "kind": "competitive",
+        "evaluation_id": "eval-1",
+        "source_recorded_at_utc": "2026-10-13T00:00:00Z",
+        "evidence_path": str(tmp_path / "evidence.json"),
+        "evidence_sha256": "b" * 64,
+        "candidate_checkpoint_sha256": sha,
+        "attempts": [],
+        "scored_laps": 30,
+        "median_scored_lap_s": 12.5,
+        "reused_existing_validation": True,
+    }
+    monkeypatch.setattr(
+        finalists_module,
+        "_verify_existing_competitive_validation",
+        lambda reference, expected_sha, repo_root, context: dict(row),
+    )
+    result = validate_manifest_existing_validations(
+        {"finalists": [{"checkpoint_sha256": sha}], "existing_competitive_validations": [row]},
+        repo_root=tmp_path,
+        verification_context=object(),
+    )
+    assert result == [row]
+
+    tampered = dict(row, median_scored_lap_s=1.0)
+    with pytest.raises(ValueError, match="metadata differs"):
+        validate_manifest_existing_validations(
+            {"finalists": [{"checkpoint_sha256": sha}], "existing_competitive_validations": [tampered]},
+            repo_root=tmp_path,
+            verification_context=object(),
+        )
+
+
+def test_unbounded_finalizer_prefilters_to_exact_readiness_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bound_sha = "a" * 64
+    report_sha = "b" * 64
+    monkeypatch.setattr(finalists_module, "campaign_clock_status", lambda *a, **k: {
+        "phase": "final_validation_requested",
+        "deadline_policy": {"mode": "unbounded_until_readiness"},
+    })
+    monkeypatch.setattr(finalists_module, "campaign_validation_request", lambda state: {
+        "request_id": "request-1", "candidate_checkpoint_sha256": bound_sha,
+        "evaluation_id": "bound-eval", "probe_report_sha256": report_sha,
+    })
+    seen = []
+
+    def fake_probe(row, repo_root, context, **kwargs):
+        seen.append(row)
+        if row.get("evaluation_id") != "bound-eval":
+            raise AssertionError("unrelated evidence must be filtered before expensive authentication")
+        return {
+            "evaluation_id": "bound-eval", "checkpoint_sha256": bound_sha,
+            "probe_report_sha256": report_sha, "median_scored_lap_s": 17.0,
+            "eligible_for_policy_comparison": True,
+        }
+
+    monkeypatch.setattr(finalists_module, "_probe_candidate", fake_probe)
+    rows = [{"evaluation_id": f"old-{i}", "checkpoint_sha256": str(i) * 64} for i in range(18)]
+    rows.append({"evaluation_id": "bound-eval", "checkpoint_sha256": bound_sha})
+    manifest = build_finalist_manifest(_state(), {
+        "campaign_id": CAMPAIGN_ID, "candidates": rows,
+    }, repo_root=tmp_path)
+    assert len(seen) == 1 and seen[0]["evaluation_id"] == "bound-eval"
+    assert manifest["evidence_candidates_count"] == 19
+    assert manifest["authenticated_candidate_count"] == 1
+    assert [item["checkpoint_sha256"] for item in manifest["finalists"]] == [bound_sha]
+
+
+def test_unbounded_finalizer_does_not_hide_malformed_bound_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bound_sha = "a" * 64
+    monkeypatch.setattr(finalists_module, "campaign_clock_status", lambda *a, **k: {
+        "phase": "final_validation_requested",
+        "deadline_policy": {"mode": "unbounded_until_readiness"},
+    })
+    monkeypatch.setattr(finalists_module, "campaign_validation_request", lambda state: {
+        "request_id": "request-1", "candidate_checkpoint_sha256": bound_sha,
+        "evaluation_id": "bound-eval", "probe_report_sha256": "b" * 64,
+    })
+    seen = []
+
+    def fake_probe(row, repo_root, context, **kwargs):
+        seen.append(row)
+        raise ValueError("malformed bound row rejected")
+
+    monkeypatch.setattr(finalists_module, "_probe_candidate", fake_probe)
+    with pytest.raises(ValueError, match="malformed bound row"):
+        build_finalist_manifest(_state(), {
+            "campaign_id": CAMPAIGN_ID,
+            "candidates": [{"evaluation_id": "bound-eval", "model_sha256": bound_sha}],
+        }, repo_root=tmp_path)
+    assert len(seen) == 1
+
+
+def test_bundle_fallback_requires_pinned_receipt_archive_manifest_and_payload_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    rl = tmp_path / "logs" / "rl"
+    package = rl / "official_campaign" / "bundle"
+    package.mkdir(parents=True)
+    archive_path = package / "bundle.zip"
+    manifest_path = package / "bundle_manifest.json"
+    receipt_path = package / "receipt.json"
+    payload = b"raw validation evidence"
+    payload_name = "evidence/final851968/competitive_benchmark_851968_terminal_evidence.json"
+    payload_sha = hashlib.sha256(payload).hexdigest()
+    candidate_sha = "c" * 64
+    manifest = {
+        "schema_version": 1,
+        "candidate": {"sha256": candidate_sha},
+        "included_files": [{"bundle_path": payload_name, "size_bytes": len(payload), "sha256": payload_sha}],
+    }
+    manifest_bytes = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
+    manifest_path.write_bytes(manifest_bytes)
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("bundle_manifest.json", manifest_bytes)
+        archive.writestr(payload_name, payload)
+    archive_sha = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    receipt = {
+        "schema_version": 1, "kind": "candidate_package_receipt",
+        "archive_path": str(archive_path.relative_to(tmp_path)).replace("/", "\\"),
+        "archive_sha256": archive_sha, "archive_size_bytes": archive_path.stat().st_size,
+        "manifest_path": str(manifest_path.relative_to(tmp_path)).replace("/", "\\"),
+        "manifest_sha256": manifest_sha, "candidate_sha256": candidate_sha,
+    }
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    receipt_sha = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(finalists_module, "_851968_BUNDLE_ARCHIVE_SHA256", archive_sha)
+    monkeypatch.setattr(finalists_module, "_851968_BUNDLE_MANIFEST_SHA256", manifest_sha)
+    monkeypatch.setattr(finalists_module, "_851968_BUNDLE_RECEIPT_SHA256", receipt_sha)
+    context = finalists_module.PPOVerificationContext()
+    row = {
+        "kind": "competitive", "evidence_path": "logs/rl/official_campaign/evidence.json",
+        "evidence_sha256": payload_sha, "bundle_receipt_path": str(receipt_path.relative_to(tmp_path)),
+        "bundle_receipt_sha256": receipt_sha,
+    }
+    bundle = _verified_evidence_bundle(row, candidate_sha, tmp_path, context)
+    assert _bundle_member_bytes(bundle, payload_name) == payload
+    assert context.seal()
+
+
+def test_finalist_manifest_rejects_exclusion_for_a_candidate_that_qualifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    _mock_verifiers(monkeypatch)
+    monkeypatch.setattr(finalists_module, "campaign_clock_status", lambda *a, **k: {
+        "phase": "final_validation", "remaining_seconds": 1000,
+    })
+    eligible = _candidate(tmp_path, evaluation_id="eval-eligible", run_id="eligible", laps=[40.0, 41.0, 42.0])
+    claimed_seed = _candidate(tmp_path, evaluation_id="eval-claimed-seed", run_id="claimed", laps=[39.0, 40.0, 41.0])
+    with pytest.raises(ValueError, match="excluded seed candidate is eligible"):
+        build_finalist_manifest(
+            _state(),
+            {"campaign_id": CAMPAIGN_ID, "candidates": [eligible], "excluded_seed_candidates": [claimed_seed]},
+            repo_root=tmp_path,
+        )
 
 
 def test_finalist_builder_fails_closed_outside_final_window_or_on_tampering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -306,7 +306,11 @@ def test_readiness_request_is_manual_transition_to_hash_bound_finalists(tmp_path
             return True
 
     monkeypatch.setattr(campaign_finalists, "PPOVerificationContext", _VerificationContext)
-    monkeypatch.setattr(campaign_finalists, "_probe_candidate", lambda row, *_args: dict(row))
+    monkeypatch.setattr(
+        campaign_finalists,
+        "_probe_candidate",
+        lambda row, *_args: {**row, "eligible_for_policy_comparison": True},
+    )
     manifest = campaign_finalists.build_finalist_manifest(
         amended, evidence, repo_root=tmp_path,
         utc_now=now, monotonic_ns=mono, boot_id=BOOT,

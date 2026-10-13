@@ -944,9 +944,13 @@ def test_finalist_manifest_is_created_only_after_training_and_evaluation_are_idl
     assert json.loads(runner.finalists_manifest.read_text(encoding="utf-8"))["finalists"][0]["checkpoint_sha256"] == selected_sha
     assert captured["existing_competitive_validations"] == [
         {"kind": "competitive", "evidence_path": "logs/rl/official_campaign/competitive_benchmark_851968_terminal_evidence.json",
-         "evidence_sha256": "b114231ef6d1afdee8c71669b8a541870eb4e78fe976a6500736fcc4444b6c95"},
+         "evidence_sha256": "b114231ef6d1afdee8c71669b8a541870eb4e78fe976a6500736fcc4444b6c95",
+         "bundle_receipt_path": "logs/rl/official_campaign/current_verified_candidate_851968_bundle_20261013T1951Z_receipt.json",
+         "bundle_receipt_sha256": "d6f4ad960c907ba3088aba917ae9d1890e84f0979137385f6d576fc0f30d547a"},
         {"kind": "clean_reload", "evidence_path": "logs/rl/official_campaign/clean_reload_851968_validation.json",
-         "evidence_sha256": "3721e352fa51fa228bdbd62544af62e3744a432f773c2a759bfdf74d78b65d55"},
+         "evidence_sha256": "3721e352fa51fa228bdbd62544af62e3744a432f773c2a759bfdf74d78b65d55",
+         "bundle_receipt_path": "logs/rl/official_campaign/current_verified_candidate_851968_bundle_20261013T1951Z_receipt.json",
+         "bundle_receipt_sha256": "d6f4ad960c907ba3088aba917ae9d1890e84f0979137385f6d576fc0f30d547a"},
     ]
 
 
