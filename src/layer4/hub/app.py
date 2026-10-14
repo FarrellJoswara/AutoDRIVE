@@ -33,7 +33,7 @@ from src.layer4.hub.campaign_deadline import (
     campaign_deadline_status,
     current_boot_id,
 )
-from src.layer4.hub.official_models import list_official_models
+from src.layer4.hub.official_models import list_official_models, official_model_metadata
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
 from src.layer4.hub.watch_utils import watch_snapshot_age_ms as _watch_snapshot_age_ms
 from src.layer4.official_settings import (
@@ -1028,6 +1028,17 @@ async def replay_models() -> list[Dict[str, Any]]:
     import asyncio
 
     return await asyncio.to_thread(list_official_models, ROOT / "logs" / "rl")
+
+
+@app.get("/api/replay/model-metadata")
+async def replay_model_metadata(model_id: str) -> Dict[str, Any]:
+    """Hash only the selected archive and return its saved official settings."""
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(official_model_metadata, ROOT / "logs" / "rl", model_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/replay/status")

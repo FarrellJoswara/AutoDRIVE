@@ -1,5 +1,6 @@
 """Official checkpoint discovery and replay contracts (no pickle loading)."""
 import json
+import hashlib
 from pathlib import Path
 
 ACTION_KEYS = (
@@ -53,3 +54,38 @@ def list_official_models(root: Path) -> list[dict]:
                 except (ValueError, OSError):
                     continue
     return sorted(models, key=lambda item: item["modified"], reverse=True)[:200]
+
+
+def official_model_metadata(root: Path, model_id: str) -> dict:
+    """Return metadata and a content hash for one selected official checkpoint.
+
+    The list endpoint intentionally avoids hashing every archive.  This helper
+    resolves only the requested catalog ID, enforces the same shallow catalog
+    layout and symlink rules as discovery, then hashes that archive's bytes.
+    """
+    root = root.resolve()
+    if not isinstance(model_id, str) or not model_id or "\\" in model_id:
+        raise ValueError("invalid official checkpoint ID")
+    parts = model_id.split("/")
+    if len(parts) not in {2, 3} or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("invalid official checkpoint ID")
+    if len(parts) == 3 and parts[1] not in {"checkpoints", "ckpt"}:
+        raise ValueError("invalid official checkpoint ID")
+
+    candidate = root.joinpath(*parts)
+    if any((root.joinpath(*parts[:index])).is_symlink() for index in range(1, len(parts))):
+        raise ValueError("official checkpoint path cannot traverse a symbolic link")
+    if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.lower() != ".zip":
+        raise ValueError("official checkpoint not found")
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("official checkpoint path escapes the model catalog") from exc
+
+    settings = checkpoint_settings(resolved)
+    digest = hashlib.sha256()
+    with resolved.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"id": "/".join(parts), "sha256": digest.hexdigest(), **settings}

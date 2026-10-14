@@ -902,6 +902,7 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
             "score_status": "valid", "valid_for_comparison": True,
             "adjusted_race_time_s": 101.0 + attempt_number, "race_time_s": 100.0 + attempt_number,
             "race_lap_times_s": [10.0] * 10, "race_collisions": 0,
+            "warmup_collisions": 0, "raw_collision_count_at_finish": 0,
             "stop_reason": "race_complete",
         }
         Path(row["output_dir"], "evaluation.json").write_text(json.dumps({"runs": [result]}))
@@ -919,6 +920,8 @@ def test_replay_uses_saved_profile_and_controls_in_fresh_official_pair(manager, 
     assert completed["state"] == "complete"
     assert completed["evaluation"]["completed_attempts"] == 3
     assert completed["evaluation"]["median_adjusted_race_time_s"] == 103.0
+    assert all(run["warmup_collisions"] == 0 for run in completed["evaluation"]["runs"])
+    assert all(run["raw_collision_count_at_finish"] == 0 for run in completed["evaluation"]["runs"])
     assert service.champion()["model_path"] == "best_official_model/model.zip"
     recovered_service = OfficialEvaluationService(
         manager, registry_path=tmp_path / "official-evaluations.json",

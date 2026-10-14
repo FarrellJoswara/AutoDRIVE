@@ -229,6 +229,9 @@ export interface ReplayStatus {
   evaluation?: {
     protocol?: string;
     validation_mode?: "bc_diagnostic" | "training_probe" | null;
+    model_sha256?: string;
+    official_scene_sha256?: string;
+    route_sha256?: string;
     race_laps_required?: number;
     readiness_passed?: boolean;
     competitive_score_valid?: boolean;
@@ -250,11 +253,32 @@ export interface ReplayStatus {
       race_laps_required?: number;
       race_lap_times_s?: number[];
       collision_count?: number;
+      race_collisions?: number;
+      warmup_collisions?: number;
+      raw_collision_count_at_finish?: number;
+      camera_sample_count?: number;
+      route_projection_valid?: boolean | null;
+      route_monitor_only?: boolean;
+      route_monitor?: {
+        projection_valid?: boolean;
+        projection_sample_count?: number;
+        projection_valid_sample_count?: number;
+        projection_invalid_sample_count?: number;
+        scoring_or_stop_effect?: boolean;
+      } | null;
+      official_scene_sha256?: string;
+      route_sha256?: string;
+      simulator_identity?: {
+        pid?: number;
+        creation_identity?: string;
+        executable_path?: string;
+        port?: number;
+        manifest_sha256?: string;
+      } | null;
       frontier_progress_m?: number | null;
       frontier_progress_fraction?: number | null;
       frontier_lateral_offset_m?: number | null;
       frontier_projection_valid?: boolean | null;
-      camera_sample_count?: number;
       camera_fresh_sample_count?: number;
       camera_stale_sample_count?: number;
       camera_missing_sample_count?: number;
@@ -294,6 +318,19 @@ export interface ModelCheckpoint {
   id: string;
   label: string;
   modified: number;
+}
+
+export interface OfficialModelMetadata {
+  id: string;
+  sha256: string;
+  simulator_backend: "docker" | "windows_external";
+  observation_profile: "official_sensors" | "official_sensors_history" | "official_sensors_camera";
+  throttle_mode: string;
+  negative_throttle_mode: string;
+  steering_mode: string;
+  steering_action_scale: number;
+  straight_throttle_gain: number;
+  straight_throttle_steering_threshold: number;
 }
 
 export interface MetricsTelemetry {
@@ -754,6 +791,10 @@ export function getReplayStatus(): Promise<ReplayStatus> {
 
 export function fetchReplayModels(): Promise<ModelCheckpoint[]> {
   return jsonFetch("/api/replay/models");
+}
+
+export function getOfficialModelMetadata(modelId: string): Promise<OfficialModelMetadata> {
+  return jsonFetch(`/api/replay/model-metadata?model_id=${encodeURIComponent(modelId)}`);
 }
 
 export function startReplay(settings: { model_id: string; map_id: string; seed: number; device: string; validation_mode?: "bc_diagnostic" | "training_probe" }): Promise<ReplayStatus> {

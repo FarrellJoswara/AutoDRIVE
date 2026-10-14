@@ -505,6 +505,8 @@ class OfficialEvaluationService:
                 "race_lap_times_s": attempt.get("race_lap_times_s", []),
                 "warmup_lap_times_s": attempt.get("warmup_lap_times_s", []),
                 "race_collisions": attempt.get("race_collisions"),
+                "warmup_collisions": attempt.get("warmup_collisions"),
+                "raw_collision_count_at_finish": attempt.get("raw_collision_count_at_finish"),
                 "collision_count": _attempt_collision_count(attempt),
                 "stop_reason": attempt.get("stop_reason"),
                 "wall_duration_s": attempt.get("wall_duration_s"),
