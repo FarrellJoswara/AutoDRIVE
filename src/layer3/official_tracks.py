@@ -10,7 +10,11 @@ def official_frontier_path(*, backend=None, image=None, profile=None):
     image = image if image is not None else os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE", "")
     profile = profile if profile is not None else os.environ.get("AICAR_OFFICIAL_TRACK_PROFILE", "")
     if not profile:
-        profile = "competition" if backend == "windows_external" or "compete" in image else "practice"
+        profile = (
+            "competition"
+            if backend == "windows_external" or "compete" in str(image)
+            else "practice"
+        )
     root = Path(__file__).resolve().parents[2] / "competition" / "iros2026"
     if profile == "competition":
         return root / "tracks" / "competition" / "official_centerline.csv"

@@ -113,8 +113,8 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
         const configuredSettings = settingsResult.settings;
         setForm({
           ...configuredSettings,
-          observation_profile: "official_sensors_camera",
           timeout_s: configuredSettings.simulator_backend === "windows_external"
+              || configuredSettings.simulator_backend === "macos_external"
             ? Math.max(180, configuredSettings.timeout_s)
             : configuredSettings.timeout_s,
         });
@@ -181,8 +181,13 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setForm((current) => {
       if (!current) return current;
       const next = { ...current, [key]: value };
-      if (key === "simulator_backend" && value === "windows_external") {
+      if (key === "simulator_backend" && (value === "windows_external" || value === "macos_external")) {
         next.timeout_s = Math.max(180, next.timeout_s);
+      }
+      if (key === "simulator_backend" && value === "macos_external") {
+        next.observation_profile = "official_sensors";
+        next.simulator_display_mode = "offscreen";
+        next.automatic_evaluation_enabled = false;
       }
       return next;
     });
@@ -489,15 +494,17 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>Simulator, observations, and controls</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
-              <Field label="Simulator graphics" help="Mission Control starts the official graphics-enabled Windows simulator and a native WSL PPO learner with the official ROS 2 bridge. Docker is not used on this run path.">
+              <Field label="Simulator" help="On this Mac, macos_external launches your downloaded native AutoDRIVE practice .app. The ROS 2 Devkit/trainer still runs in Docker because that stack is not available natively on macOS.">
                 <select value={form.simulator_backend} onChange={(event) => setChoice("simulator_backend", event.target.value as OfficialTrainSettings["simulator_backend"])}>
+                  <option value="macos_external">Official macOS simulator (native Apple Silicon)</option>
                   <option value="windows_external">Official Windows simulator (camera)</option>
+                  <option value="docker">Docker Linux simulator (emulated on Mac)</option>
                 </select>
               </Field>
-              <Field label="Simulator window" help="Offscreen mode runs the same official Windows simulator in Unity batch mode while keeping the GPU graphics device initialized. It omits -nographics so camera observations remain available, and it avoids opening simulator windows.">
+              <Field label="Simulator window" help="macOS offscreen uses Unity -batchmode -nographics for LiDAR training. GUI opens the Metal window if you want to watch.">
                 <select value={form.simulator_display_mode} onChange={(event) => setChoice("simulator_display_mode", event.target.value as OfficialTrainSettings["simulator_display_mode"])}>
                   <option value="gui">Show simulator windows</option>
-                  <option value="offscreen">Offscreen rendering (camera on)</option>
+                  <option value="offscreen">Offscreen / headless</option>
                 </select>
               </Field>
               <Field label="Parallel environments" help="Official simulator/Devkit pairs feeding one PPO model. More environments consume more CPU and memory; measure throughput before increasing.">
@@ -514,8 +521,10 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
               <Field label="Per-episode simulator-clock watchdog (s)" help="Maximum elapsed episode time, including warm-up, measured from advancing ROS sensor timestamps when available. This is separate from the whole training run limit.">
                 <input type="number" min={1} step="any" value={form.training_timeout_s} onChange={(event) => setNumber("training_timeout_s", event.target.value)} />
               </Field>
-              <Field label="Observation profile" help="New official training runs always fuse the official front camera, LiDAR, and vehicle state as requested.">
-                <select value="official_sensors_camera" disabled>
+              <Field label="Observation profile" help="Use official_sensors (LiDAR + state) on macOS. Camera needs a graphics-capable Windows path or Metal GUI testing.">
+                <select value={form.observation_profile} onChange={(event) => setChoice("observation_profile", event.target.value as OfficialTrainSettings["observation_profile"])} disabled={form.simulator_backend === "windows_external"}>
+                  <option value="official_sensors">Official sensors (LiDAR + state)</option>
+                  <option value="official_sensors_history">Official sensors + LiDAR history</option>
                   <option value="official_sensors_camera">Official sensors + front camera</option>
                 </select>
               </Field>
@@ -557,9 +566,11 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
       {error && <p className="msg err" role="alert">{error}</p>}
       {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", behavior_cloning_ready: "BC policy saved for official evaluation", behavior_cloning_rejected: "BC rejected; PPO did not start", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase}{selectedPhase.reason ? ` · ${selectedPhase.reason}` : ""} · step {formatCount(selectedPhase.step)}.</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
-      {selectedRun?.simulator_backend === "windows_external" && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connections" style={{ marginTop: 14 }}>
+      {(selectedRun?.simulator_backend === "windows_external" || selectedRun?.simulator_backend === "macos_external") && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="External simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>
-        <p className="meta">Mission Control starts one official Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner.</p>
+        <p className="meta">{selectedRun.simulator_backend === "macos_external"
+          ? "Mission Control starts your native macOS AutoDRIVE practice simulator against the Docker Devkit relay. LiDAR and state feed PPO; the Unity process itself is not emulated."
+          : "Mission Control starts one official Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner."}</p>
         <ol>{selectedRun.simulator_connections.map((connection) => <li key={connection.environment}>Environment {connection.environment}: <code>{connection.host}:{connection.port}</code> (ROS domain {connection.ros_domain_id})</li>)}</ol>
         <p className="meta">{selectedRun.config?.simulator_display_mode === "offscreen" ? "Offscreen simulator processes stop when the run stops." : "Simulator windows close when the run stops."}</p>
       </section> : null}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from typing import Literal, Optional
 import json
 from pathlib import Path
@@ -15,6 +16,26 @@ from src.layer4.settings import ROOT
 OFFICIAL_SETTINGS_PATH = ROOT / "logs" / "layer4" / "official_train_settings.json"
 
 
+def _default_simulator_backend() -> Literal["docker", "windows_external", "macos_external"]:
+    if sys.platform == "darwin":
+        return "macos_external"
+    return "windows_external"
+
+
+def _default_observation_profile() -> Literal[
+    "official_sensors", "official_sensors_history", "official_sensors_camera"
+]:
+    if sys.platform == "darwin":
+        return "official_sensors"
+    return "official_sensors_camera"
+
+
+def _default_display_mode() -> Literal["gui", "offscreen"]:
+    if sys.platform == "darwin":
+        return "offscreen"
+    return "gui"
+
+
 class OfficialTrainSettings(BaseModel):
     """Competition settings accepted by the official-only run manager.
 
@@ -23,9 +44,11 @@ class OfficialTrainSettings(BaseModel):
     """
 
     # Zero means no timestep ceiling; plateau and optional wall-clock stop rules still apply.
-    simulator_backend: Literal["docker", "windows_external"] = "windows_external"
-    # Offscreen still initializes the GPU graphics device; never pair this with -nographics.
-    simulator_display_mode: Literal["gui", "offscreen"] = "gui"
+    simulator_backend: Literal["docker", "windows_external", "macos_external"] = Field(
+        default_factory=_default_simulator_backend
+    )
+    # Windows offscreen keeps the GPU graphics device; macOS offscreen uses batch/nographics.
+    simulator_display_mode: Literal["gui", "offscreen"] = Field(default_factory=_default_display_mode)
     n_envs: int = Field(default=1, ge=1, le=8)
     total_timesteps: int = Field(default=1_000_000, ge=0)
     stop_on_plateau: bool = True
@@ -44,7 +67,7 @@ class OfficialTrainSettings(BaseModel):
     device: Literal["cpu", "cuda"] = "cpu"
     resume: Optional[str] = None
     checkpoint_every: int = Field(default=10_000, ge=1)
-    automatic_evaluation_enabled: bool = True
+    automatic_evaluation_enabled: bool = Field(default_factory=lambda: sys.platform != "darwin")
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
     automatic_evaluation_mode: Literal["competitive", "training_probe"] = "competitive"
@@ -82,7 +105,7 @@ class OfficialTrainSettings(BaseModel):
     episode_failure_reward_percent: float = Field(default=0.0, ge=0, le=100)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
-    ] = "official_sensors_camera"
+    ] = Field(default_factory=_default_observation_profile)
     steering_action_scale: float = Field(default=1.0, ge=0, le=1)
     straight_throttle_gain: float = Field(default=1.0, ge=1, le=2)
     straight_throttle_steering_threshold: float = Field(default=0.15, ge=0, le=1)
@@ -205,6 +228,15 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
         legacy_reward_schema = "collision_penalty_base" in raw or "lidar_brake_distance_m" in raw
         for legacy in ("collision_penalty_base", "lidar_brake_distance_m"):
             raw.pop(legacy, None)
+        if sys.platform == "darwin":
+            # This Mac host trains against the native practice .app, not Docker/Windows.
+            if raw.get("simulator_backend") in {None, "docker", "windows_external"}:
+                raw["simulator_backend"] = "macos_external"
+            if raw.get("observation_profile") == "official_sensors_camera":
+                raw["observation_profile"] = "official_sensors"
+            raw.setdefault("simulator_display_mode", "offscreen")
+            if "automatic_evaluation_enabled" not in raw:
+                raw["automatic_evaluation_enabled"] = False
         if legacy_reward_schema:
             raw.update({
                 "warmup_laps": 0,

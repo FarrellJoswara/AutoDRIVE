@@ -26,6 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 HUB_URL = "http://127.0.0.1:8090"
 HEALTH_URL = f"{HUB_URL}/health"
+HOST_HUB_PID = ROOT / "logs" / "layer4" / "macos_host_hub.pid"
+HOST_HUB_LOG = ROOT / "logs" / "layer4" / "macos_host_hub.log"
 DEFAULT_SIMS = 2
 SERVICE_IMAGES = {
     "brain": "aicar-brain:latest",
@@ -99,7 +101,28 @@ def _windows_sim_present() -> bool:
     return (ROOT / "simulator" / "windows" / "AutoDRIVE Simulator.exe").is_file()
 
 
+def _macos_practice_sim_present() -> bool:
+    candidates = [
+        Path.home() / "Downloads" / "autodrive_simulator" / "AutoDRIVE Simulator.app",
+        Path("/Applications") / "AutoDRIVE Simulator.app",
+        ROOT / "simulator" / "macos" / "AutoDRIVE Simulator.app",
+    ]
+    cached = ROOT / "logs" / "layer4" / "official_simulator_path.txt"
+    if cached.is_file():
+        candidates.insert(0, Path(cached.read_text(encoding="utf-8").strip()))
+    for candidate in candidates:
+        binary = candidate / "Contents" / "MacOS" / "AutoDRIVE Simulator"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return True
+        if binary.is_file() and os.access(binary, os.X_OK):
+            return True
+    return False
+
+
 def _ensure_simulator(download_url: str, skip_download: bool) -> None:
+    if sys.platform == "darwin" and _macos_practice_sim_present():
+        print("Simulator: OK (native macOS AutoDRIVE practice .app)")
+        return
     if _linux_sim_present():
         print("Simulator: OK (linux binary present for Docker)")
         return
@@ -173,22 +196,33 @@ def _official_source_hash() -> str:
 def _ensure_images(docker: str, *, force_build: bool, no_build: bool) -> None:
     brain_missing = not _image_exists(docker, SERVICE_IMAGES["brain"])
     api_missing = not _image_exists(docker, OFFICIAL_API_IMAGE)
-    sim_missing = not _image_exists(docker, OFFICIAL_SIM_IMAGE)
+    # macOS practice training launches AutoDRIVE Simulator.app on the host, so the
+    # Linux/Windows Docker simulator image is optional on Darwin.
+    sim_required = sys.platform != "darwin"
+    sim_missing = sim_required and not _image_exists(docker, OFFICIAL_SIM_IMAGE)
     source_hash = _official_source_hash()
     image_hash = subprocess.run(
         [docker, "image", "inspect", "--format", '{{index .Config.Labels "aicar.source_hash"}}', OFFICIAL_API_IMAGE],
         capture_output=True, text=True, check=False,
     ).stdout.strip() if not api_missing else ""
+    # Hub runs on the Mac host; API image staleness only matters for trainer code
+    # baked into aicar-iros2026. Allow --no-build when the image already exists.
     api_stale = image_hash != source_hash
-    if no_build and (brain_missing or api_missing or sim_missing or api_stale):
+    if no_build and (api_missing or sim_missing or (sys.platform != "darwin" and (brain_missing or api_stale))):
         raise RuntimeError("Official runtime images are missing or do not match this checkout. Run without --no-build.")
-    if force_build or brain_missing:
+    if sys.platform != "darwin" and (force_build or brain_missing):
         _compose(docker, "build", "brain")
-    if force_build or api_stale:
-        subprocess.run([docker, "build", "-f", "competition/iros2026/Dockerfile", "-t", OFFICIAL_API_IMAGE,
-                        "--label", f"aicar.source_hash={source_hash}", "."], cwd=ROOT, check=True)
+    if force_build or (api_stale and sys.platform != "darwin") or api_missing:
+        if api_missing or force_build or api_stale:
+            subprocess.run([docker, "build", "-f", "competition/iros2026/Dockerfile", "-t", OFFICIAL_API_IMAGE,
+                            "--label", f"aicar.source_hash={source_hash}", "."], cwd=ROOT, check=True)
     if sim_missing:
         subprocess.run([docker, "pull", OFFICIAL_SIM_IMAGE], check=True)
+    if sys.platform == "darwin" and api_stale and not force_build:
+        print(
+            "Note: aicar-iros2026 source hash differs from this checkout; "
+            "re-run without --no-build (or with --build) if trainer behavior looks stale."
+        )
 
 
 def _stop_managed_runs(docker: str) -> None:
@@ -270,8 +304,81 @@ def _wait_health(timeout_s: float = 300.0) -> None:
         time.sleep(2)
     _banner("Timed out waiting for Mission Control")
     print(last_err or "no response")
-    print("Check: docker compose logs brain")
+    if sys.platform == "darwin":
+        print(f"Check: {HOST_HUB_LOG}")
+    else:
+        print("Check: docker compose logs brain")
     sys.exit(1)
+
+
+def _host_python() -> str:
+    venv = ROOT / ".venv" / "bin" / "python"
+    if venv.is_file():
+        return str(venv)
+    return sys.executable
+
+
+def _stop_host_hub() -> None:
+    if not HOST_HUB_PID.is_file():
+        return
+    try:
+        pid = int(HOST_HUB_PID.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        HOST_HUB_PID.unlink(missing_ok=True)
+        return
+    try:
+        os.kill(pid, 15)
+    except ProcessLookupError:
+        pass
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+    HOST_HUB_PID.unlink(missing_ok=True)
+
+
+def _start_host_hub() -> None:
+    """Run Mission Control on the Mac host so it can launch AutoDRIVE Simulator.app."""
+    _stop_host_hub()
+    # Free :8090 if an old aicar_brain hub is still bound.
+    subprocess.run(
+        ["docker", "rm", "-f", "aicar_brain"],
+        cwd=str(ROOT),
+        capture_output=True,
+        check=False,
+    )
+    HOST_HUB_PID.parent.mkdir(parents=True, exist_ok=True)
+    HOST_HUB_LOG.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["AICAR_RUN_BACKEND"] = "docker"
+    env["AICAR_SIMULATOR_BACKEND"] = "macos_external"
+    env["PYTHONPATH"] = str(ROOT)
+    env["HUB_URL"] = HUB_URL
+    env["HUB_PORT"] = "8090"
+    log = HOST_HUB_LOG.open("ab", buffering=0)
+    process = subprocess.Popen(
+        [
+            _host_python(), "-m", "uvicorn",
+            "src.layer4.hub.app:app",
+            "--host", "127.0.0.1",
+            "--port", "8090",
+        ],
+        cwd=str(ROOT),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    HOST_HUB_PID.write_text(str(process.pid), encoding="ascii")
+    print(f"Host Mission Control pid {process.pid} (log: {HOST_HUB_LOG})")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -324,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.stop:
         _banner("Stopping AiCar")
         _stop_managed_runs(docker)
+        if sys.platform == "darwin":
+            _stop_host_hub()
         _compose(docker, "down", check=True)
         print("Stopped.")
         return 0
@@ -336,12 +445,33 @@ def main(argv: list[str] | None = None) -> int:
         settings["n_envs"] = args.sims
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    if sys.platform == "darwin":
+        settings_path = ROOT / "logs/layer4/official_train_settings.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+        settings["simulator_backend"] = "macos_external"
+        settings["observation_profile"] = settings.get("observation_profile") or "official_sensors"
+        if settings.get("observation_profile") == "official_sensors_camera":
+            settings["observation_profile"] = "official_sensors"
+        settings["simulator_display_mode"] = settings.get("simulator_display_mode") or "offscreen"
+        settings["automatic_evaluation_enabled"] = False
+        settings["device"] = "cpu"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     _ensure_web_ui()
+    if sys.platform != "darwin":
+        _ensure_simulator(args.sim_url, args.no_download_sim)
+    else:
+        _ensure_simulator(args.sim_url, skip_download=True)
     _ensure_images(docker, force_build=args.build, no_build=args.no_build)
 
-    _banner("Starting Mission Control (official simulators start with each run)")
-    up_args = ["up", "-d", "--no-build", "brain"]
-    _compose(docker, *up_args)
+    if sys.platform == "darwin":
+        _banner("Starting Mission Control on this Mac (native practice simulator)")
+        print("ROS/Devkit trainer containers still use Docker; Unity runs as AutoDRIVE Simulator.app")
+        _start_host_hub()
+    else:
+        _banner("Starting Mission Control (official simulators start with each run)")
+        up_args = ["up", "-d", "--no-build", "brain"]
+        _compose(docker, *up_args)
 
     _wait_health()
 
@@ -349,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  {HUB_URL}")
     print()
     print("Pages: Train · Maps · Watch · Replay")
+    if sys.platform == "darwin":
+        print("Simulator: native macOS AutoDRIVE practice build")
     print("Stop later:  python main.py --stop")
     print("=" * 60)
 

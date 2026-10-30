@@ -48,6 +48,7 @@ function mapIdForWatch(snapshotMapId: string | null | undefined, runMapId: strin
   if (snapshotMapId && snapshotMapId !== "none") return snapshotMapId;
   if (runMapId && runMapId !== "none") return runMapId;
   if (backend === "windows_external" && maps.some((entry) => entry.id === "iros2026_official")) return "iros2026_official";
+  if (backend === "macos_external" && maps.some((entry) => entry.id === "porto")) return "porto";
   return maps.find((entry) => entry.active)?.id ?? "none";
 }
 

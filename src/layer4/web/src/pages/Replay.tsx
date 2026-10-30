@@ -191,7 +191,7 @@ export function ReplayPage() {
         : !metadataError ? <p>Checking the selected checkpoint’s file hash and saved settings…</p> : null}
       {metadataError && <p className="error" role="alert">{metadataError}</p>}
     </div>}
-    {status?.simulator_backend === "windows_external" && status.simulator_connections?.length ? <section className="panel" aria-label="Windows simulator connection" style={{ marginTop: 12 }}>
+    {(status?.simulator_backend === "windows_external" || status?.simulator_backend === "macos_external") && status.simulator_connections?.length ? <section className="panel" aria-label="External simulator connection" style={{ marginTop: 12 }}>
       <h3 style={{ marginTop: 0 }}>Connect the official Windows simulator</h3>
       <p className="meta">This checkpoint was trained with the graphics-enabled official Windows simulator. Start it on the assigned bridge port so replay uses the same camera and sensor workflow.</p>
       <p>Environment 0: <code>{status.simulator_connections[0].host}:{status.simulator_connections[0].port}</code></p>

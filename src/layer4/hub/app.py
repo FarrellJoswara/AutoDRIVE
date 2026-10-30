@@ -66,7 +66,17 @@ HUB_PORT = int(os.environ.get("HUB_PORT", os.environ.get("READY_PORT", "8090")))
 HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
-_run_backend = os.environ.get("AICAR_RUN_BACKEND", "native" if os.name != "nt" else "docker").strip().lower()
+def _default_run_backend() -> str:
+    # NativeOfficialBackend is the WSL + Windows-simulator path. On macOS the
+    # Devkit/ROS trainer still runs in Docker while the practice .app is native.
+    if os.environ.get("AICAR_RUN_BACKEND"):
+        return os.environ["AICAR_RUN_BACKEND"].strip().lower()
+    if sys.platform == "darwin":
+        return "docker"
+    return "native" if os.name != "nt" else "docker"
+
+
+_run_backend = _default_run_backend()
 if _run_backend == "test":
     # Test imports must never scan or reconcile the user's persisted run root.
     class _OfflineTestBackend:
@@ -724,7 +734,13 @@ async def create_official_run(request: Request) -> Dict[str, Any]:
             steering_action_scale=config.steering_action_scale,
             straight_throttle_gain=config.straight_throttle_gain,
         )
-        if config.observation_profile != "official_sensors_camera":
+        if config.simulator_backend == "macos_external":
+            if config.observation_profile not in {"official_sensors", "official_sensors_history"}:
+                raise ValueError(
+                    "macOS practice training uses LiDAR/state observations; "
+                    "camera requires the Windows graphics path"
+                )
+        elif config.observation_profile != "official_sensors_camera":
             raise ValueError("new official training runs require camera, LiDAR, and state observations")
         maintenance_context = {
             "normalized_config": config.model_dump(mode="json"),

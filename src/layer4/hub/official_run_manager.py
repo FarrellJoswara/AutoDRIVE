@@ -44,6 +44,7 @@ EVALUATION_SIM_IMAGE = os.environ.get(
     or "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
 )
 GPU_API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_GPU_IMAGE", "aicar-iros2026:cuda")
+EXTERNAL_SIMULATOR_BACKENDS = frozenset({"windows_external", "macos_external"})
 RUNS_ROOT = ROOT / "logs" / "rl"
 REGISTRY_PATH = ROOT / "logs" / "layer4" / "official_runs.json"
 TRAIN_DEFAULTS: Dict[str, Any] = OfficialTrainSettings().model_dump(mode="python")
@@ -252,9 +253,9 @@ def normalize_official_config(
         raise ValueError("disable automatic PPO evaluation for a BC-only run; evaluate its saved checkpoint from Replay")
     if result["automatic_evaluation_mode"] == "training_probe" and not result["automatic_evaluation_enabled"]:
         raise ValueError("training_probe mode requires automatic evaluation to be enabled")
-    if result["simulator_backend"] == "windows_external":
+    if result["simulator_backend"] in EXTERNAL_SIMULATOR_BACKENDS:
         # Keep API-side campaign hashes identical to the settings ultimately
-        # launched by the manager. The native Windows GUI needs extra startup
+        # launched by the manager. External GUI/native apps need extra startup
         # time; this was historically applied only inside create_run().
         result["timeout_s"] = max(180.0, float(result["timeout_s"]))
     resume = result["resume"]
@@ -594,23 +595,26 @@ class OfficialRunManager:
             created = _utc_now()
             run_dir = self.runs_root / f"official_run_{run_id}"
             simulator_connections = None
-            if config["simulator_backend"] == "windows_external":
+            if config["simulator_backend"] in EXTERNAL_SIMULATOR_BACKENDS:
                 external_base_port = self._external_simulator_port_base(run_id, config["n_envs"])
                 simulator_connections = [
                     {"environment": index, "host": getattr(self.backend, "simulator_host", "127.0.0.1"), "port": external_base_port + index,
                      "ros_domain_id": index}
                     for index in range(config["n_envs"])
                 ]
+            backend_name = config.get("simulator_backend", "docker")
+            if backend_name == "windows_external":
+                simulator_image = "official AutoDRIVE IROS 2026 Windows simulator"
+            elif backend_name == "macos_external":
+                simulator_image = "official AutoDRIVE IROS 2026 macOS practice simulator"
+            else:
+                simulator_image = EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE
             row: Dict[str, Any] = {
                 "run_id": run_id,
                 "display_name": display,
                 "kind": kind,
-                "simulator_image": (
-                    "official AutoDRIVE IROS 2026 Windows simulator"
-                    if config.get("simulator_backend", "docker") == "windows_external"
-                    else (EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE)
-                ),
-                "simulator_backend": config.get("simulator_backend", "docker"),
+                "simulator_image": simulator_image,
+                "simulator_backend": backend_name,
                 "evaluation_trace_steps": evaluation_trace_steps,
                 "evaluation_options": evaluation_options,
                 "state": "starting",
@@ -618,7 +622,11 @@ class OfficialRunManager:
                 "started_at": None,
                 "finished_at": None,
                 "config": config,
-                "map_id": "none",
+                "map_id": (
+                    "iros2026_official" if backend_name == "windows_external"
+                    else "porto" if backend_name == "macos_external"
+                    else "none"
+                ),
                 "output_dir": str(run_dir),
                 "log_path": str(run_dir / "hub_train.log"),
                 "error": None,
@@ -654,11 +662,11 @@ class OfficialRunManager:
                     raise RuntimeError("run was stopped while its network was starting")
                 self._persist()
             env = self._api_environment(config, run_id)
-            external_simulators = config.get("simulator_backend", "docker") == "windows_external"
+            external_simulators = config.get("simulator_backend", "docker") in EXTERNAL_SIMULATOR_BACKENDS
             external_base_port = row["simulator_connections"][0]["port"] if external_simulators else None
             if external_simulators:
                 env = [value for value in env if not value.startswith("AICAR_OFFICIAL_SIMULATOR_IMAGE=")]
-                env.append("AICAR_OFFICIAL_SIMULATOR_IMAGE=official AutoDRIVE IROS 2026 Windows simulator")
+                env.append(f"AICAR_OFFICIAL_SIMULATOR_IMAGE={row['simulator_image']}")
             if kind == "evaluation":
                 env = [value for value in env if not value.startswith("AICAR_MODE=")]
                 env.extend([
@@ -965,7 +973,7 @@ class OfficialRunManager:
         try:
             for row in rows:
                 run_id = str(row["run_id"])
-                if row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) != "windows_external":
+                if row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) not in EXTERNAL_SIMULATOR_BACKENDS:
                     raise RuntimeError(f"cannot isolate evaluation from active training run {run_id}")
                 pause(
                     run_id=run_id,
@@ -1013,7 +1021,7 @@ class OfficialRunManager:
             rows = [dict(row) for row in self._runs.values()
                     if row.get("kind", "training") == "training"
                     and row.get("state") == "running"
-                    and row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) == "windows_external"]
+                    and row.get("simulator_backend", row.get("config", {}).get("simulator_backend")) in EXTERNAL_SIMULATOR_BACKENDS]
         paused = []
         for row in rows:
             pause_file = Path(row.get("output_dir", "")) / "evaluation_pause.flag"
@@ -1166,7 +1174,7 @@ class OfficialRunManager:
                     api_state = (api or {}).get("State", "")
                     sim_state = (sim or {}).get("State", "")
                     sentinel = Path(row.get("output_dir", "")) / ("evaluation.json" if row.get("kind") == "evaluation" else "stop_reason.json")
-                    external_simulators = row.get("simulator_backend", row.get("config", {}).get("simulator_backend", "docker")) == "windows_external"
+                    external_simulators = row.get("simulator_backend", row.get("config", {}).get("simulator_backend", "docker")) in EXTERNAL_SIMULATOR_BACKENDS
                     expected_roles = ({"api"} if external_simulators else {"api", "sim"}) | {
                         f"{role}-{index}" for index in range(1, int(row.get("config", {}).get("n_envs", 1)))
                         for role in (("api",) if external_simulators else ("api", "sim"))

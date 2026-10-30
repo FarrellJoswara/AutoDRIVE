@@ -117,26 +117,32 @@ def create_official_run_container(
         "aicar.role": role,
     }
     labels.update(metadata_labels or {})
+    # Docker Desktop on macOS often fails to publish host ports when the
+    # container's primary NetworkMode is a custom network. Publish via bridge,
+    # then attach the custom run network for ROS aliases when needed.
+    publish_via_bridge = bool(published_ports)
+    primary_network = "bridge" if publish_via_bridge else network_name
     config: Dict[str, Any] = {
         "Image": image,
         "Env": list(env or []),
         "Labels": labels,
         "Hostname": name,
         "HostConfig": {
-            "NetworkMode": network_name,
+            "NetworkMode": primary_network,
             "Binds": list(binds or []),
             "RestartPolicy": {"Name": "no"},
             "Init": True,
             "ExtraHosts": list(extra_hosts or []),
         },
-        "NetworkingConfig": {
-            "EndpointsConfig": {network_name: {"Aliases": [role, name]}}
-        },
     }
+    if not publish_via_bridge:
+        config["NetworkingConfig"] = {
+            "EndpointsConfig": {network_name: {"Aliases": [role, name]}}
+        }
     if published_ports:
         config["ExposedPorts"] = {f"{int(container_port)}/tcp": {} for container_port in published_ports}
         config["HostConfig"]["PortBindings"] = {
-            f"{int(container_port)}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+            f"{int(container_port)}/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(host_port)}]
             for container_port, host_port in published_ports.items()
         }
     if gpu:
@@ -156,6 +162,15 @@ def create_official_run_container(
     container_id = str(response["Id"])
     try:
         _request("POST", f"/containers/{quote(container_id, safe='')}/start")
+        if publish_via_bridge and network_name not in {"bridge", "default", "host", "none"}:
+            _request(
+                "POST",
+                f"/networks/{quote(network_name, safe='')}/connect",
+                body={
+                    "Container": container_id,
+                    "EndpointConfig": {"Aliases": [role, name]},
+                },
+            )
     except Exception:
         try:
             remove_official_run_container(container_id)
@@ -514,3 +529,34 @@ def remove_replay_sim() -> Optional[str]:
             _request("POST", f"/containers/{container_id}/stop?t=5")
         _request("DELETE", f"/containers/{container_id}?force=1&v=1")
     return removed
+
+
+# Host address published for external native simulators (macOS AutoDRIVE.app).
+simulator_host = "127.0.0.1"
+_macos_active_runs: set[str] = set()
+
+
+def start_simulators(
+    *, run_id: str, connections: list[dict[str, Any]], hub_url: str,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Start host-side simulators against published API relay ports."""
+    del hub_url  # Windows pause/resume coordination only.
+    backend = (config or {}).get("simulator_backend", "")
+    if backend != "macos_external":
+        raise RuntimeError(
+            f"Docker run backend cannot start simulator_backend={backend!r}; "
+            "use macos_external on Darwin or the native WSL backend for windows_external"
+        )
+    from src.layer4.hub.macos_simulators import start_macos_simulators
+
+    start_macos_simulators(run_id=run_id, connections=connections, config=config)
+    _macos_active_runs.add(run_id)
+
+
+def stop_simulators(run_id: str) -> None:
+    """Stop host-side macOS simulators for one official run."""
+    from src.layer4.hub.macos_simulators import stop_macos_simulators
+
+    stop_macos_simulators(run_id)
+    _macos_active_runs.discard(run_id)
