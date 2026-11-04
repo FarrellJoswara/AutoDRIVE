@@ -1,5 +1,9 @@
 # AutoDRIVE RoboRacer — AiCar
 
+**Moving to a Linux GPU server?** Follow [the migration guide](docs/server-migration.md)
+to transfer uncommitted code and trained artifacts, run without a physical monitor,
+and access Mission Control over SSH.
+
 Training stack for AutoDRIVE RoboRacer / F1TENTH-style sim racing:
 
 **Layer 1** (driver) → **Layer 2** (Gymnasium env) → **Layer 3** (PPO) → **Layer 4** (Mission Control UI) + **Docker A/B** (brain + scalable sims).

@@ -4,6 +4,7 @@ import pytest
 
 from src.layer2.route_progress import RouteProgressTracker
 from src.layer3.expert import CenterlineExpert
+from src.layer3.official_teacher import _verified_lap_goal_reached
 
 
 def straight_teacher():
@@ -84,3 +85,48 @@ def test_closed_route_tracking_recovers_offset_and_crosses_seam():
         errors.append(abs(np.linalg.norm(xy)-3.))
     assert np.unwrap(bearings)[-1] > 4*np.pi
     assert max(errors[100:]) < 0.10
+
+
+def test_route_diagnostics_apply_vehicle_clearance_to_corridor_width():
+    widths = np.full(3, 0.5)
+    route = RouteProgressTracker(
+        np.array([[0., 0.], [10., 0.], [20., 0.]]), widths, widths
+    )
+    teacher = CenterlineExpert(route, vehicle_half_width_m=0.12, corridor_margin_m=0.05)
+    diagnostics = teacher.route_diagnostics(pose(x=2., y=0.1))
+    assert diagnostics["route_s_m"] == pytest.approx(2.)
+    assert diagnostics["lateral_error_m"] == pytest.approx(0.1)
+    assert diagnostics["lateral_bound_m"] == pytest.approx(0.33)
+
+
+def test_route_diagnostics_keep_unwrapped_progress_across_lap_seam():
+    angle = np.linspace(0., 2*np.pi, 241)
+    points = np.column_stack([3*np.cos(angle), 3*np.sin(angle)])
+    route = RouteProgressTracker(points)
+    teacher = CenterlineExpert(route)
+    diagnostics = [
+        teacher.route_diagnostics({"position": (3*np.cos(t), 3*np.sin(t))})
+        for t in (6.1, 6.2, 0.05)
+    ]
+    progress = [row["route_s_m"] for row in diagnostics]
+    assert all(value is not None for value in progress)
+    assert progress[1] > progress[0]
+    assert progress[2] > route.length_m
+    assert all(row["lateral_bound_m"] > 0 for row in diagnostics)
+
+
+def test_teacher_lap_gate_requires_counter_crossings_and_full_route_coverage():
+    kwargs = {
+        "race_laps_completed": 3,
+        "race_lap_times_s": [31.0, 30.5, 32.1],
+        "current_route_frontier_m": 107.7,
+        "initial_route_frontier_m": 15.3,
+        "route_length_m": 31.1169,
+        "lap_goal": 3,
+    }
+    assert _verified_lap_goal_reached(**kwargs)
+    assert not _verified_lap_goal_reached(**{**kwargs, "race_laps_completed": 2})
+    assert not _verified_lap_goal_reached(**{**kwargs, "race_lap_times_s": [31.0, 30.5]})
+    assert not _verified_lap_goal_reached(**{**kwargs, "race_lap_times_s": [31.0, float("nan"), 32.1]})
+    assert not _verified_lap_goal_reached(**{**kwargs, "current_route_frontier_m": 103.0})
+    assert not _verified_lap_goal_reached(**{**kwargs, "current_route_frontier_m": None})

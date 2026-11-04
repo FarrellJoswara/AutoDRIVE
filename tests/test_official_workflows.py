@@ -21,7 +21,7 @@ from src.layer3.official_train import (
     _make_training_exploration_schedule,
     _verified_ready_bc_resume_sha256,
 )
-from src.layer4.hub.official_run_manager import normalize_official_config
+from src.layer4.hub.official_run_manager import normalize_official_config, _training_simulator_image
 
 
 @pytest.fixture
@@ -91,6 +91,92 @@ def test_run_manager_rejects_incompatible_bc_mapping_before_startup():
     assert normalize_official_config({"behavior_cloning_enabled": False, "steering_mode": "invert"})[
         "steering_mode"
     ] == "invert"
+
+
+def test_windows_practice_run_requires_explicit_executable_and_propagates_profile():
+    with pytest.raises(ValueError, match="explicit verified simulator_executable"):
+        normalize_official_config({
+            "simulator_backend": "windows_external",
+            "track_profile": "practice",
+        })
+
+    raw = {
+        "simulator_backend": "windows_external",
+        "simulator_display_mode": "offscreen",
+        "track_profile": "practice",
+        "safe_neutral_fallback_s": 0.20,
+        "simulator_executable": r"C:\official-practice\AutoDRIVE Simulator.exe",
+        "behavior_cloning_enabled": True,
+        "behavior_cloning_only": True,
+        "behavior_cloning_collect_only": True,
+        "automatic_evaluation_enabled": False,
+        "behavior_cloning_clean_laps": 10,
+        "behavior_cloning_required_clean_episodes": 2,
+        "behavior_cloning_wall_timeout_s": 1800,
+    }
+    config = normalize_official_config(raw)
+    assert _training_simulator_image(config) == "official AutoDRIVE IROS 2026 Windows practice release"
+    assert config["simulator_display_mode"] == "gui"
+
+    env = OfficialTrainSettings.model_validate(config).to_container_env(
+        hub_url="http://127.0.0.1:8090", run_id="a1b2c3d4e5f6",
+    )
+    assert env["AICAR_OFFICIAL_TRACK_PROFILE"] == "practice"
+    assert env["AICAR_OFFICIAL_SIMULATOR_EXE"] == raw["simulator_executable"]
+    assert env["AICAR_OFFICIAL_SAFE_NEUTRAL_FALLBACK_S"] == "0.2"
+    assert env["AICAR_BEHAVIOR_CLONING_COLLECT_ONLY"] == "1"
+    assert env["AICAR_BEHAVIOR_CLONING_CLEAN_LAPS"] == "10"
+    assert env["AICAR_BEHAVIOR_CLONING_REQUIRED_CLEAN_EPISODES"] == "2"
+    assert env["AICAR_BEHAVIOR_CLONING_WALL_TIMEOUT_S"] == "1800.0"
+
+
+def test_docker_practice_run_uses_official_porto_image_and_stays_bound_to_porto(manager):
+    config = normalize_official_config({
+        "simulator_backend": "docker",
+        "track_profile": "practice",
+        "simulator_executable": None,
+        "behavior_cloning_enabled": False,
+    })
+    assert _training_simulator_image(config) == (
+        "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
+    )
+
+    run = manager.create_run(config)
+    assert run["map_id"] == "porto"
+    assert manager.telemetry(run["run_id"])["map_id"] == "porto"
+
+
+def test_native_windows_practice_run_stays_bound_to_porto(manager):
+    config = normalize_official_config({
+        "simulator_backend": "windows_external",
+        "track_profile": "practice",
+        "simulator_executable": r"C:\official-practice\AutoDRIVE Simulator.exe",
+        "behavior_cloning_enabled": False,
+    })
+
+    run = manager.create_run(config)
+    assert run["map_id"] == "porto"
+    assert manager.telemetry(run["run_id"])["map_id"] == "porto"
+
+
+def test_watch_run_telemetry_keeps_the_persisted_porto_map_id(tmp_path, monkeypatch):
+    from src.layer4.hub import app as hub_app
+
+    output = tmp_path / "logs" / "rl" / "official_run_porto"
+    output.mkdir(parents=True)
+
+    class Runs:
+        def telemetry(self, run_id):
+            return {"map_id": "porto"}
+
+        def get_run(self, run_id):
+            return {"run_id": run_id, "output_dir": str(output)}
+
+    monkeypatch.setattr(hub_app, "ROOT", tmp_path)
+    monkeypatch.setattr(hub_app, "official_runs", Runs())
+    monkeypatch.setattr(hub_app.bus, "run_snapshot", lambda run_id: {})
+
+    assert hub_app._run_telemetry("porto")["map_id"] == "porto"
 
 
 def test_only_hash_verified_ready_bc_checkpoint_gets_lower_noise_bounds(tmp_path, monkeypatch):
@@ -599,7 +685,7 @@ def test_reconcile_exposes_native_terminal_context_and_trainer_exit_code(manager
     assert "exit code -9" in failed["error"]
 
 
-def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
+def test_native_bridge_resources_are_unique_and_skip_occupied_ports(monkeypatch):
     import socket
     import threading
     from src.layer4.hub.native_official_backend import NativeOfficialBackend
@@ -636,6 +722,13 @@ def test_native_bridge_resources_are_unique_and_skip_occupied_ports():
     }
     assert backend._allocate_ros_domain() == 4
     assert backend._allocate_devkit_port() == first_port + 4
+
+    monkeypatch.setenv("AICAR_ROS_DOMAIN_ID_BASE", "86")
+    assert backend._allocate_ros_domain() == 86
+    backend._reserved_ros_domains.clear()
+    backend._groups.clear()
+    backend._groups["occupied-domain"] = {"ros_domains": [86]}
+    assert backend._allocate_ros_domain() == 87
 
 
 def test_reconcile_does_not_mark_a_stopping_run_orphaned(manager):

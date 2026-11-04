@@ -1,0 +1,42 @@
+# Standalone Linux/NVIDIA deployment; do not merge with docker-compose.yml.
+name: aicar-server
+services:
+  brain:
+    image: aicar-server-runtime:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.brain.ros
+      args:
+        AICAR_LEGACY_REPO_ROOT: /mnt/c/Users/farre/Documents/Github/AiCar
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./logs:/runs
+      - ./simulator/maps:/app/simulator/maps
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AICAR_RUN_BACKEND: docker
+      AICAR_IN_DOCKER: "1"
+      AICAR_COMPOSE_PROJECT: aicar-server
+      AICAR_HUB_DOCKER_NETWORK: aicar-server-control
+      AICAR_HUB_PUBLIC_URL: http://brain:8090
+      AICAR_OFFICIAL_API_IMAGE: aicar-server-runtime:local
+      AICAR_OFFICIAL_API_GPU_IMAGE: aicar-server-runtime:local
+      AICAR_OFFICIAL_TRAIN_SIM_IMAGE: autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice
+      AICAR_OFFICIAL_EVALUATION_SIM_IMAGE: autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete
+      PYTHONNOUSERSITE: "1"
+      HUB_URL: http://127.0.0.1:8090
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    networks:
+      - control
+
+networks:
+  control:
+    name: aicar-server-control

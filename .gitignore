@@ -70,3 +70,7 @@ logs/layer4/UnitySetup*.exe
 
 
 simulator/_build/
+
+# Local export bundles and migration integrity manifest
+outputs/migration/
+migration-manifest.json

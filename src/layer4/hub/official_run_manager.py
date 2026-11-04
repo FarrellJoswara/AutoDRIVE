@@ -31,7 +31,9 @@ from src.layer3.bc_artifact import (
 )
 
 
-API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_IMAGE", "aicar-iros2026")
+API_IMAGE = os.environ.get(
+    "AICAR_OFFICIAL_API_IMAGE", "aicar-iros2026:porto-api-ros-20261030"
+)
 LEGACY_SIM_IMAGE_OVERRIDE = os.environ.get("AICAR_OFFICIAL_SIM_IMAGE")
 TRAIN_SIM_IMAGE = os.environ.get(
     "AICAR_OFFICIAL_TRAIN_SIM_IMAGE",
@@ -45,6 +47,8 @@ EVALUATION_SIM_IMAGE = os.environ.get(
 )
 GPU_API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_GPU_IMAGE", "aicar-iros2026:cuda")
 EXTERNAL_SIMULATOR_BACKENDS = frozenset({"windows_external", "macos_external"})
+PORTO_PRACTICE_SIM_IMAGE = "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
+OFFICIAL_COMPETITION_SIM_IMAGE = "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete"
 RUNS_ROOT = ROOT / "logs" / "rl"
 REGISTRY_PATH = ROOT / "logs" / "layer4" / "official_runs.json"
 TRAIN_DEFAULTS: Dict[str, Any] = OfficialTrainSettings().model_dump(mode="python")
@@ -236,6 +240,15 @@ def normalize_official_config(
         }:
             merged[field] = value
     result = OfficialTrainSettings.model_validate(merged).model_dump(mode="python")
+    if result["track_profile"] == "practice" and result["simulator_backend"] == "windows_external":
+        if not result.get("simulator_executable"):
+            raise ValueError("Windows Porto practice requires an explicit verified simulator_executable path")
+        if result["observation_profile"] == "official_sensors_camera":
+            # The official practice player emitted fresh but black RGB frames
+            # in Unity batchmode on this runtime. Preserve real camera rendering.
+            result["simulator_display_mode"] = "gui"
+    if result["simulator_backend"] == "docker" and result.get("simulator_executable"):
+        raise ValueError("simulator_executable is only supported by the windows_external backend")
     validate_bc_teacher_action_mapping(
         behavior_cloning_enabled=result["behavior_cloning_enabled"],
         resume=result["resume"],
@@ -306,6 +319,23 @@ def normalize_official_config(
     elif result["automatic_evaluation_mode"] == "training_probe":
         raise ValueError("training_probe mode requires an authenticated BC or BC-derived resume checkpoint")
     return result
+
+
+def _training_simulator_image(config: Dict[str, Any]) -> str:
+    """Resolve an explicitly selected route to its matching runtime identity.
+
+    Omitted track_profile preserves the pre-existing environment/image override
+    behavior. Docker profiles pin the official image; Windows practice records
+    the separate official release label.
+    """
+    profile = config.get("track_profile")
+    if profile == "practice":
+        if config.get("simulator_backend") == "windows_external":
+            return "official AutoDRIVE IROS 2026 Windows practice release"
+        return PORTO_PRACTICE_SIM_IMAGE
+    if profile == "competition":
+        return OFFICIAL_COMPETITION_SIM_IMAGE
+    return TRAIN_SIM_IMAGE
 
 
 def _safe_display_name(value: Optional[str]) -> str:
@@ -537,13 +567,17 @@ class OfficialRunManager:
                         or not supplied_frontier.is_file()):
                     raise ValueError("competitive route monitoring requires only the verified official frontier path")
             else:
-                if validation_mode not in {"bc_diagnostic", "training_probe"}:
+                if validation_mode not in {"bc_diagnostic", "training_probe", "porto_practice_diagnostic"}:
                     raise ValueError("unsupported evaluation validation mode")
                 if (float(evaluation_options.get("lap_progress_timeout_s", 0)) != 240
                         or float(evaluation_options.get("lap_progress_wall_timeout_s", 0)) != 240):
                     raise ValueError("diagnostic lap progress timeouts must both be 240 seconds")
                 if float(evaluation_options.get("frontier_stall_after_s", 0)) != 5 or not evaluation_options.get("frontier_path"):
                     raise ValueError("diagnostic requires a frontier path and five-second frontier stall timeout")
+                if validation_mode == "porto_practice_diagnostic":
+                    expected_practice = (ROOT / "competition" / "iros2026" / "official_centerline.csv").resolve()
+                    if Path(str(evaluation_options["frontier_path"])).resolve() != expected_practice:
+                        raise ValueError("Porto practice diagnostics require the official aligned Porto centerline")
         config = normalize_official_config(official_config)
         # Older API callers do not send simulator_backend; keep their explicit
         # legacy behavior. The Mission Control form always sends its selected
@@ -595,6 +629,11 @@ class OfficialRunManager:
             created = _utc_now()
             run_dir = self.runs_root / f"official_run_{run_id}"
             simulator_connections = None
+            api_image = GPU_API_IMAGE if config["device"] == "cuda" else API_IMAGE
+            ros_domain_base = (
+                self._docker_ros_domain_base(config["n_envs"])
+                if config["simulator_backend"] == "docker" else None
+            )
             if config["simulator_backend"] in EXTERNAL_SIMULATOR_BACKENDS:
                 external_base_port = self._external_simulator_port_base(run_id, config["n_envs"])
                 simulator_connections = [
@@ -615,6 +654,8 @@ class OfficialRunManager:
                 "kind": kind,
                 "simulator_image": simulator_image,
                 "simulator_backend": backend_name,
+                "api_image": api_image,
+                "ros_domain_base": ros_domain_base,
                 "evaluation_trace_steps": evaluation_trace_steps,
                 "evaluation_options": evaluation_options,
                 "state": "starting",
@@ -622,9 +663,14 @@ class OfficialRunManager:
                 "started_at": None,
                 "finished_at": None,
                 "config": config,
+                # Map identity is pinned to the selected runtime route.
                 "map_id": (
                     "iros2026_official" if backend_name == "windows_external"
                     else "porto" if backend_name == "macos_external"
+                    else "porto" if config.get("track_profile") == "practice"
+                    and backend_name in {"docker", "windows_external"}
+                    else "none"
+                ),
                     else "none"
                 ),
                 "output_dir": str(run_dir),
@@ -650,6 +696,8 @@ class OfficialRunManager:
             (run_dir / "manager_config.json").write_text(json.dumps({
                 "run_id": run_id, "display_name": display, "runtime": "official",
                 "config": config, "simulator_image": row["simulator_image"],
+                "api_image": api_image,
+                "ros_domain_base": ros_domain_base,
                 "evaluation_trace_steps": evaluation_trace_steps,
                 "evaluation_options": evaluation_options,
                 "created_at": created,
@@ -667,6 +715,27 @@ class OfficialRunManager:
             if external_simulators:
                 env = [value for value in env if not value.startswith("AICAR_OFFICIAL_SIMULATOR_IMAGE=")]
                 env.append(f"AICAR_OFFICIAL_SIMULATOR_IMAGE={row['simulator_image']}")
+            if (kind == "evaluation"
+                    and evaluation_options.get("validation_mode") == "porto_practice_diagnostic"):
+                env = [value for value in env if not value.startswith("AICAR_OFFICIAL_SIMULATOR_IMAGE=")]
+                env.append(f"AICAR_OFFICIAL_SIMULATOR_IMAGE={PORTO_PRACTICE_SIM_IMAGE}")
+            docker_api_entrypoint = None
+            docker_api_command = None
+            if not external_simulators:
+                docker_api_entrypoint = [
+                    "/opt/aicar-venv/bin/python", "-u", "-m",
+                    "src.layer4.hub.docker_run_supervisor",
+                ]
+                docker_api_command = ["--mode", "evaluate" if kind == "evaluation" else "train"]
+                env.extend([
+                    f"ROS_DOMAIN_ID={ros_domain_base}",
+                    f"AICAR_ROS_DOMAIN_ID_BASE={ros_domain_base}",
+                    "AICAR_OFFICIAL_ENV_INDEX=0",
+                    "AICAR_DEVKIT_PORT=4567",
+                    "AICAR_RELAY_PORT=4568",
+                    f"AICAR_POLICY_START_GATE=/runs/rl/official_run_{run_id}/policy-start.gate",
+                    "AICAR_POLICY_START_GATE_TIMEOUT_S=180",
+                ])
             if kind == "evaluation":
                 env = [value for value in env if not value.startswith("AICAR_MODE=")]
                 env.extend([
@@ -691,10 +760,14 @@ class OfficialRunManager:
                             f"AICAR_FRONTIER_STALL_AFTER_S={float(evaluation_options['frontier_stall_after_s'])}",
                             f"AICAR_EVALUATION_FRONTIER_PATH={evaluation_options['frontier_path']}",
                         ])
+                        if evaluation_options["validation_mode"] == "porto_practice_diagnostic":
+                            env.append("AICAR_OFFICIAL_TRACK_PROFILE=practice")
             api_id = self.backend.create_official_run_container(
                 run_id=run_id, role="api",
-                image=GPU_API_IMAGE if config["device"] == "cuda" else API_IMAGE,
+                image=api_image,
                 network_name=row["network_name"], env=env,
+                entrypoint=docker_api_entrypoint,
+                command=docker_api_command,
                 binds=[f"{host_logs}:/runs"],
                 extra_hosts=["host.docker.internal:host-gateway"],
                 metadata_labels=self._container_metadata(row),
@@ -707,9 +780,15 @@ class OfficialRunManager:
                     raise RuntimeError("run was stopped while its API container was starting")
                 row["started_at"] = _utc_now()
                 self._persist()
+            wait_api_ready = getattr(self.backend, "wait_official_run_container_ready", None)
+            if not external_simulators and callable(wait_api_ready):
+                wait_api_ready(
+                    api_id,
+                    timeout_s=float(os.environ.get("AICAR_BRIDGE_STARTUP_TIMEOUT_S", "90")),
+                )
             for index in range(1, config["n_envs"]):
-                worker_roles = ((f"api-{index}", API_IMAGE),) if external_simulators else (
-                    (f"api-{index}", API_IMAGE), (f"sim-{index}", row["simulator_image"])
+                worker_roles = ((f"api-{index}", api_image),) if external_simulators else (
+                    (f"api-{index}", api_image), (f"sim-{index}", row["simulator_image"])
                 )
                 for role, image in worker_roles:
                     with self._lock:
@@ -718,11 +797,26 @@ class OfficialRunManager:
                     worker_id = self.backend.create_official_run_container(
                         run_id=run_id, role=role, image=image,
                         network_name=row["network_name"],
-                        env=[f"ROS_DOMAIN_ID={index}", "AICAR_MODE=bridge"] if role.startswith("api") else [],
-                        entrypoint=None if role.startswith("api") else ["/bin/bash", "-lc"],
-                        command=None if role.startswith("api") else [
-                            _official_simulator_command(f"api-{index}")
-                        ],
+                        binds=[f"{host_logs}:/runs"] if role.startswith("api") else None,
+                        env=([
+                            f"ROS_DOMAIN_ID={ros_domain_base + index}",
+                            f"AICAR_ROS_DOMAIN_ID_BASE={ros_domain_base}",
+                            f"AICAR_OFFICIAL_ENV_INDEX={index}",
+                            f"AICAR_RUN_ID={run_id}",
+                            f"AICAR_TRAIN_OUT=/runs/rl/official_run_{run_id}",
+                            "AICAR_MODE=bridge",
+                            "AICAR_DEVKIT_PORT=4567",
+                            "AICAR_RELAY_PORT=4568",
+                        ] if role.startswith("api") else []),
+                        entrypoint=(
+                            docker_api_entrypoint if role.startswith("api")
+                            else ["/bin/bash", "-lc"]
+                        ),
+                        command=(
+                            ["--mode", "bridge"] if role.startswith("api") else [
+                                _official_simulator_command(f"api-{index}")
+                            ]
+                        ),
                         metadata_labels=self._container_metadata(row),
                         gpu=role.startswith("sim"),
                         published_ports={"4568": external_base_port + index} if external_simulators and role.startswith("api") else None,
@@ -730,6 +824,11 @@ class OfficialRunManager:
                     with self._lock:
                         row.setdefault("worker_container_ids", {})[role] = worker_id
                         self._persist()
+                    if role.startswith("api") and callable(wait_api_ready):
+                        wait_api_ready(
+                            worker_id,
+                            timeout_s=float(os.environ.get("AICAR_BRIDGE_STARTUP_TIMEOUT_S", "90")),
+                        )
             sim_id = None
             if not external_simulators:
                 sim_id = self.backend.create_official_run_container(
@@ -740,6 +839,13 @@ class OfficialRunManager:
                     metadata_labels=self._container_metadata(row),
                     gpu=True,
                 )
+                policy_gate = Path(host_logs) / "rl" / f"official_run_{run_id}" / "policy-start.gate"
+                policy_gate.write_text(json.dumps({
+                    "released_at": _utc_now(),
+                    "simulator_container_id": sim_id,
+                    "map_id": row.get("map_id", "none"),
+                    "ros_domain_base": ros_domain_base,
+                }, indent=2), encoding="utf-8")
             if external_simulators and hasattr(self.backend, "start_simulators"):
                 self.backend.start_simulators(
                     run_id=run_id,
@@ -775,7 +881,9 @@ class OfficialRunManager:
         )
         env["AICAR_CONTROLLER"] = "ppo"
         env["AICAR_SIMULATOR_BACKEND"] = config.get("simulator_backend", "docker")
-        env["AICAR_OFFICIAL_SIMULATOR_IMAGE"] = TRAIN_SIM_IMAGE
+        env["AICAR_OFFICIAL_SIMULATOR_IMAGE"] = _training_simulator_image(config)
+        if config.get("track_profile") is not None:
+            env["AICAR_OFFICIAL_TRACK_PROFILE"] = str(config["track_profile"])
         return [f"{key}={value}" for key, value in env.items()]
 
     def _external_simulator_port_base(self, run_id: str, n_envs: int) -> int:
@@ -803,15 +911,42 @@ class OfficialRunManager:
                 return base_port
         raise RuntimeError("no unused localhost port block is available for external simulators")
 
+    def _docker_ros_domain_base(self, n_envs: int) -> int:
+        """Reserve a stable, non-overlapping ROS domain block for this run."""
+        first_domain = int(os.environ.get("AICAR_ROS_DOMAIN_ID_BASE", "86"))
+        last_domain = 232
+        if first_domain < 0 or first_domain > last_domain:
+            raise ValueError("AICAR_ROS_DOMAIN_ID_BASE must be between 0 and 232")
+        if n_envs < 1 or first_domain + n_envs - 1 > last_domain:
+            raise ValueError("official run environment count exceeds the ROS domain range")
+        occupied: set[int] = set()
+        for row in self._runs.values():
+            if row.get("state") not in {"starting", "running", "stopping"}:
+                continue
+            base = row.get("ros_domain_base")
+            count = int((row.get("config") or {}).get("n_envs", 1))
+            if isinstance(base, int):
+                occupied.update(range(base, min(last_domain + 1, base + count)))
+        block_count = last_domain - first_domain - n_envs + 2
+        for offset in range(block_count):
+            candidate = first_domain + offset
+            block = set(range(candidate, candidate + n_envs))
+            if not block.intersection(occupied):
+                return candidate
+        raise RuntimeError("no unused ROS domain block is available for this official run")
+
     @staticmethod
     def _container_metadata(row: Dict[str, Any]) -> Dict[str, str]:
         return {
             "aicar.display_name": row["display_name"],
             "aicar.kind": row.get("kind", "training"),
+            "aicar.api_image": str(row.get("api_image", "")),
             "aicar.simulator_image": row["simulator_image"],
             "aicar.output_dir": row["output_dir"],
             "aicar.config": json.dumps(row["config"], separators=(",", ":")),
             "aicar.created_at": row["created_at"],
+            "aicar.map_id": str(row.get("map_id", "none")),
+            "aicar.ros_domain_base": str(row.get("ros_domain_base", "")),
         }
 
     def _cleanup_row_resources(self, row: Dict[str, Any], *, stopped_ids: Optional[set[str]] = None) -> None:

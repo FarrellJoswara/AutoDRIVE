@@ -30,6 +30,7 @@ except ImportError:  # Native process ownership is only supported on the WSL/Lin
     fcntl = None
 
 from src.layer4.settings import ROOT
+from src.layer3.official_tracks import official_frontier_path, verify_windows_scene
 
 
 def simulator_session_ready(
@@ -349,6 +350,10 @@ class NativeOfficialBackend:
             "--automatic-evaluation-interval", value("AICAR_AUTO_EVALUATION_INTERVAL", "50000"),
             "--behavior-cloning-enabled", value("AICAR_BEHAVIOR_CLONING_ENABLED", "1"),
             "--behavior-cloning-only", value("AICAR_BEHAVIOR_CLONING_ONLY", "0"),
+            "--behavior-cloning-collect-only", value("AICAR_BEHAVIOR_CLONING_COLLECT_ONLY", "0"),
+            "--behavior-cloning-clean-laps", value("AICAR_BEHAVIOR_CLONING_CLEAN_LAPS", "10"),
+            "--behavior-cloning-required-clean-episodes", value("AICAR_BEHAVIOR_CLONING_REQUIRED_CLEAN_EPISODES", "2"),
+            "--behavior-cloning-wall-timeout-s", value("AICAR_BEHAVIOR_CLONING_WALL_TIMEOUT_S", "1800"),
             "--behavior-cloning-steps-per-env", value("AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV", "4000"),
             "--behavior-cloning-epochs", value("AICAR_BEHAVIOR_CLONING_EPOCHS", "8"),
             "--behavior-cloning-batch-size", value("AICAR_BEHAVIOR_CLONING_BATCH_SIZE", "256"),
@@ -380,6 +385,12 @@ class NativeOfficialBackend:
             "--steering-mode", value("AICAR_STEERING_MODE", "normal"),
             "--throttle-mode", value("AICAR_THROTTLE_MODE", "bidirectional"),
         ]
+        dataset_path = value("AICAR_BEHAVIOR_CLONING_DATASET", "").strip()
+        acceptance_path = value("AICAR_BEHAVIOR_CLONING_ACCEPTANCE", "").strip()
+        if dataset_path:
+            command.extend(["--behavior-cloning-dataset", dataset_path])
+        if acceptance_path:
+            command.extend(["--behavior-cloning-acceptance", acceptance_path])
         resume = value("AICAR_TRAIN_RESUME", "")
         if resume:
             command.extend(["--resume", resume])
@@ -424,7 +435,7 @@ class NativeOfficialBackend:
             "--trace-steps", env.get("AICAR_EVALUATION_TRACE_STEPS", "0"),
         ]
         validation_mode = env.get("AICAR_EVALUATION_VALIDATION_MODE")
-        if validation_mode in {"bc_diagnostic", "training_probe"}:
+        if validation_mode in {"bc_diagnostic", "training_probe", "porto_practice_diagnostic"}:
             command.extend([
                 "--validation-mode", validation_mode,
                 "--lap-progress-timeout-s", env.get("AICAR_LAP_PROGRESS_TIMEOUT_S", "240"),
@@ -474,6 +485,7 @@ class NativeOfficialBackend:
                     # pair inherited this value, leaving evaluation clients on
                     # the default domain where no simulator topics exist.
                     child_env["ROS_DOMAIN_ID"] = str(allocated_domain)
+                    child_env["AICAR_ROS_DOMAIN_ID_BASE"] = str(allocated_domain)
                     self._start_bridge_pair(
                         records, run_id, index, child_env, run_dir,
                         relay_port=relay_port, ros_domain=allocated_domain,
@@ -551,6 +563,9 @@ class NativeOfficialBackend:
         return identity
 
     def _allocate_ros_domain(self) -> int:
+        base = int(os.environ.get("AICAR_ROS_DOMAIN_ID_BASE", "0"))
+        if not 0 <= base <= 232:
+            raise ValueError("AICAR_ROS_DOMAIN_ID_BASE must be between 0 and 232")
         with self._lock:
             used = set()
             for group in self._groups.values():
@@ -564,7 +579,8 @@ class NativeOfficialBackend:
                             except ValueError:
                                 continue
             used.update(self._reserved_ros_domains)
-            for domain in range(233):
+            candidates = (*range(base, 233), *range(0, base))
+            for domain in candidates:
                 if domain not in used:
                     self._reserved_ros_domains.add(domain)
                     return domain
@@ -698,6 +714,66 @@ class NativeOfficialBackend:
                 time.sleep(0.2)
         raise TimeoutError(f"native official bridge for environment {index} did not listen on port {relay_port}")
 
+    def _run_prelaunch_neutral_barrier(
+        self, *, run_id: str, run_dir: Path, environment_count: int,
+    ) -> None:
+        """Publish zero throttle/steering on each practice domain before GUI launch."""
+        with self._lock:
+            groups = [
+                group for group in self._groups.values()
+                if group.get("Labels", {}).get("aicar.run_id") == run_id
+                and group.get("ros_domains")
+            ]
+        if len(groups) != environment_count:
+            raise RuntimeError(
+                "could not identify every native ROS domain for Porto neutral startup"
+            )
+        script = ROOT / "scripts" / "native_prelaunch_neutral_barrier.py"
+        if not script.is_file():
+            raise FileNotFoundError(f"native Porto neutral barrier helper is missing: {script}")
+        setup = (
+            "set +u; source /opt/ros/jazzy/setup.bash; "
+            f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; "
+            "set -u; export PYTHONNOUSERSITE=1; exec \"$@\""
+        )
+        for environment, group in enumerate(groups):
+            domains = list(group["ros_domains"])
+            if len(domains) != 1:
+                raise RuntimeError("each native Porto environment must own one ROS domain")
+            domain = int(domains[0])
+            evidence = run_dir / f"neutral_startup_env{environment}.json"
+            command = [
+                sys.executable, "-u", str(script),
+                "--output", str(evidence),
+                "--duration-s", "3.0",
+                "--subscriber-timeout-s", "20.0",
+            ]
+            env = os.environ.copy()
+            env.update({
+                "ROS_DOMAIN_ID": str(domain),
+                "AICAR_ROS_DOMAIN_ID_BASE": str(domain),
+                "PYTHONNOUSERSITE": "1",
+            })
+            completed = subprocess.run(
+                ["bash", "-lc", setup, "aicar-native-neutral", *command],
+                cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", timeout=35,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "native Porto neutral startup barrier failed before GUI launch: "
+                    + completed.stdout[-3000:]
+                )
+            try:
+                report = json.loads(evidence.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError("neutral startup barrier evidence is missing or invalid") from exc
+            if (report.get("verified") is not True
+                    or report.get("ros_domain_id") != domain
+                    or report.get("zero_commands_sent", 0) < 20):
+                raise RuntimeError("neutral startup barrier did not verify both zero commands")
+
     def start_simulators(
         self, *, run_id: str, connections: list[dict[str, Any]], hub_url: str,
         config: dict[str, Any] | None = None,
@@ -706,7 +782,10 @@ class NativeOfficialBackend:
         if not connections:
             raise ValueError("no simulator connection ports were allocated")
         powershell = "powershell.exe"
-        simulator_exe = os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE", "").strip()
+        config = config or {}
+        simulator_exe = str(config.get("simulator_executable") or "").strip()
+        if not simulator_exe:
+            simulator_exe = os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE", "").strip()
         if not simulator_exe:
             configured_path = ROOT / "logs" / "layer4" / "official_simulator_path.txt"
             try:
@@ -734,6 +813,19 @@ class NativeOfficialBackend:
             raise RuntimeError(
                 "Set AICAR_OFFICIAL_SIMULATOR_EXE to the official Windows AutoDRIVE Simulator.exe path "
                 "or leave one official simulator process open so its executable path can be detected."
+            )
+        profile = config.get("track_profile")
+        if profile is not None:
+            verification = verify_windows_scene(
+                official_frontier_path(backend="windows_external", profile=profile), simulator_exe
+            )
+            if verification.get("track_profile") != profile or not verification.get("verified"):
+                raise RuntimeError("Windows simulator scene verification did not match the selected track profile")
+        if profile == "practice":
+            self._run_prelaunch_neutral_barrier(
+                run_id=run_id,
+                run_dir=self._run_dir_for_id(run_id),
+                environment_count=len(connections),
             )
         script_wsl = ROOT / "scripts" / "start_official_windows_simulators.ps1"
         script_windows = subprocess.run(

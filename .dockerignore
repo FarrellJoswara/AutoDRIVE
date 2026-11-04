@@ -18,6 +18,9 @@ Thumbs.db
 logs/
 scratch/
 temp/
+outputs/
+.codex_work/
+migration-manifest.json
 *.fbx
 src/layer4/web/node_modules
 src/layer4/web/dist

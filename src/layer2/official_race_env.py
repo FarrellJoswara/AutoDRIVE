@@ -186,13 +186,17 @@ class OfficialRaceEnv(gym.Env):
         )
         self._initial_lap_count = 0
         self._last_lap_count = 0
+        self._last_lap_count_update_count: Optional[int] = None
+        self._last_lap_count_change_count: Optional[int] = None
         self._last_collision_count = 0
         self._initial_collision_count = 0
         self._race_collision_baseline: Optional[int] = None
         self._warmup_collision_count = 0
         self._race_lap_times_s: list[float] = []
+        self._race_lap_timing_missing_count = 0
         self._race_laps_count = 0
         self._warmup_lap_times_s: list[float] = []
+        self._warmup_lap_timing_missing_count = 0
         self._episode_steps = 0
         self._training_elapsed_s = 0.0
         self._positive_episode_return = 0.0
@@ -233,6 +237,14 @@ class OfficialRaceEnv(gym.Env):
             metrics = self.racer.wait_for_race_metrics(cancel_check=cancel_check)
         self._initial_lap_count = int(metrics.lap_count)
         self._last_lap_count = self._initial_lap_count
+        lap_count_update_count = getattr(metrics, "lap_count_update_count", None)
+        self._last_lap_count_update_count = (
+            int(lap_count_update_count) if lap_count_update_count is not None else None
+        )
+        lap_count_change_count = getattr(metrics, "lap_count_change_count", None)
+        self._last_lap_count_change_count = (
+            int(lap_count_change_count) if lap_count_change_count is not None else None
+        )
         self._last_collision_count = int(metrics.collision_count)
         self._initial_collision_count = self._last_collision_count
         self._race_collision_baseline = (
@@ -240,8 +252,10 @@ class OfficialRaceEnv(gym.Env):
         )
         self._warmup_collision_count = 0
         self._race_lap_times_s = []
+        self._race_lap_timing_missing_count = 0
         self._race_laps_count = 0
         self._warmup_lap_times_s = []
+        self._warmup_lap_timing_missing_count = 0
         self._episode_steps = 0
         self._training_elapsed_s = 0.0
         self._positive_episode_return = 0.0
@@ -353,13 +367,69 @@ class OfficialRaceEnv(gym.Env):
         collision_event = collision_count > self._last_collision_count
         current_lap_count = int(metrics.lap_count)
         completed_since_last = max(0, current_lap_count - self._last_lap_count)
+        race_lap_events: list[dict[str, Any]] = []
         if completed_since_last:
+            current_lap_update_count = getattr(metrics, "lap_count_change_count", None)
+            generation_delta = (
+                int(current_lap_update_count) - self._last_lap_count_change_count
+                if current_lap_update_count is not None
+                and self._last_lap_count_change_count is not None else None
+            )
+            # One latest-value telemetry sample cannot reconstruct several
+            # crossings. Do not reuse it across multiple lap-count increments.
+            if generation_delta is not None and generation_delta != completed_since_last:
+                generation_delta = -1
             for offset in range(completed_since_last):
                 relative_laps = self._last_lap_count - self._initial_lap_count + offset + 1
-                lap_time = float(metrics.last_lap_time)
+                lap_metrics = metrics
+                timing_verified = generation_delta is None
+                if generation_delta == 1 and completed_since_last == 1:
+                    update_after_count = getattr(
+                        metrics, "last_lap_time_update_count_at_lap_count", None
+                    )
+                    last_time_update_count = getattr(
+                        metrics, "last_lap_time_update_count", None
+                    )
+                    if update_after_count is not None and last_time_update_count is not None:
+                        if int(last_time_update_count) <= int(update_after_count):
+                            wait_for_lap_time = getattr(
+                                self.racer, "wait_for_lap_time_update", None
+                            )
+                            if callable(wait_for_lap_time):
+                                lap_metrics = wait_for_lap_time(
+                                    int(update_after_count),
+                                    timeout_s=min(self.frame_timeout_s, 0.25),
+                                )
+                            else:
+                                lap_metrics = None
+                        timing_verified = (
+                            lap_metrics is not None
+                            and int(getattr(lap_metrics, "last_lap_time_update_count", -1))
+                            > int(update_after_count)
+                        )
+                    else:
+                        timing_verified = False
+                elif generation_delta is not None:
+                    timing_verified = False
+
+                lap_time = float(
+                    getattr(lap_metrics, "last_lap_time", 0.0)
+                    if lap_metrics is not None else 0.0
+                )
+                timing_verified = timing_verified and np.isfinite(lap_time) and lap_time > 0.0
+                timing_missing_reason = None
+                if not timing_verified:
+                    if generation_delta is not None and generation_delta != 1:
+                        timing_missing_reason = "multiple_or_unmatched_lap_counter_updates"
+                    elif lap_metrics is None:
+                        timing_missing_reason = "no_fresh_last_lap_time_update"
+                    else:
+                        timing_missing_reason = "missing_or_invalid_lap_time"
                 if relative_laps <= self.warmup_laps:
-                    if lap_time > 0:
+                    if timing_verified:
                         self._warmup_lap_times_s.append(lap_time)
+                    else:
+                        self._warmup_lap_timing_missing_count += 1
                     if relative_laps >= self.warmup_laps:
                         # Warm-up collisions do not count toward the race score.
                         self._race_collision_baseline = collision_count
@@ -368,9 +438,33 @@ class OfficialRaceEnv(gym.Env):
                         )
                 else:
                     self._race_laps_count += 1
-                    if lap_time > 0:
+                    if timing_verified:
                         self._race_lap_times_s.append(lap_time)
+                    else:
+                        self._race_lap_timing_missing_count += 1
+                race_lap_events.append({
+                    "official_lap_count": self._last_lap_count + offset + 1,
+                    "lap_index": (
+                        relative_laps if relative_laps <= self.warmup_laps
+                        else self._race_laps_count
+                    ),
+                    "phase": "warmup" if relative_laps <= self.warmup_laps else "race",
+                    "lap_time_s": float(lap_time) if timing_verified else None,
+                    "timing_valid": bool(timing_verified),
+                    "timing_missing_reason": timing_missing_reason,
+                    "timing_update_count": (
+                        int(getattr(lap_metrics, "last_lap_time_update_count"))
+                        if timing_verified and getattr(lap_metrics, "last_lap_time_update_count", None) is not None
+                        else None
+                    ),
+                })
             self._last_lap_count = current_lap_count
+        current_lap_update_count = getattr(metrics, "lap_count_update_count", None)
+        if current_lap_update_count is not None:
+            self._last_lap_count_update_count = int(current_lap_update_count)
+        current_lap_change_count = getattr(metrics, "lap_count_change_count", None)
+        if current_lap_change_count is not None:
+            self._last_lap_count_change_count = int(current_lap_change_count)
 
         race_collisions = self._race_collisions(collision_count)
         race_disqualified = race_collisions > 10
@@ -391,6 +485,7 @@ class OfficialRaceEnv(gym.Env):
             "laps_since_start": max(0, current_lap_count - self._initial_lap_count),
             "warmup_lap_times_s": list(self._warmup_lap_times_s),
             "race_lap_times_s": list(self._race_lap_times_s),
+            "race_lap_events": race_lap_events,
             "race_last_lap_time_s": (
                 self._race_lap_times_s[-1] if self._race_lap_times_s else None
             ),
@@ -399,6 +494,10 @@ class OfficialRaceEnv(gym.Env):
             ),
             "lap_times_s": list(self._race_lap_times_s),
             "race_laps_completed": self._race_laps_count,
+            "race_lap_timing_missing_count": self._race_lap_timing_missing_count,
+            "race_lap_timing_valid": self._race_lap_timing_missing_count == 0
+            and len(self._race_lap_times_s) == self._race_laps_count,
+            "warmup_lap_timing_missing_count": self._warmup_lap_timing_missing_count,
             "watch_lap_count": self._race_laps_count,
             "race_collisions": race_collisions,
             "race_collision_baseline": self._race_collision_baseline,
@@ -418,6 +517,7 @@ class OfficialRaceEnv(gym.Env):
                 getattr(self.racer, "last_control_wall_interval_s", 0.0)
             ),
             "command_expiry_count": int(getattr(self.racer, "command_expiry_count", 0)),
+            "neutral_fallback_count": int(getattr(self.racer, "neutral_fallback_count", 0)),
         })
         observation = self._observation_builder.observe(
             snap,
@@ -433,6 +533,7 @@ class OfficialRaceEnv(gym.Env):
         )
         reward = 0.0
         truncated = False
+        training_goal_reached = False
         if self.training_mode:
             self._training_elapsed_s += step_duration_s
             route_length_m = max(
@@ -602,6 +703,37 @@ class OfficialRaceEnv(gym.Env):
             )
             info["training_elapsed_s"] = self._training_elapsed_s
             info["termination_reason"] = reason or ("training_watchdog_timeout" if truncated else None)
+        race_timing_valid = (
+            self._race_lap_timing_missing_count == 0
+            and len(self._race_lap_times_s) == self._race_laps_count
+        )
+        info["race_episode_outcome"] = None
+        if terminated or truncated:
+            target_frontier_m = (
+                float(getattr(self.route_progress, "length_m", 0.0)) * self.race_laps
+                if self.training_mode else None
+            )
+            info["race_episode_outcome"] = {
+                "clean_10_lap_episode": bool(
+                    self.training_mode
+                    and self.race_laps == 10
+                    and training_goal_reached
+                    and race_timing_valid
+                    and race_collisions == 0
+                ),
+                "episode_won": bool(info.get("episode_won", False)),
+                "termination_reason": info.get("termination_reason"),
+                "race_laps_completed": self._race_laps_count,
+                "race_laps_required": self.race_laps,
+                "race_lap_times_s": list(self._race_lap_times_s),
+                "race_lap_timing_valid": race_timing_valid,
+                "race_lap_timing_missing_count": self._race_lap_timing_missing_count,
+                "race_collisions": race_collisions,
+                "raw_collision_count": collision_count,
+                "race_time_s": float(sum(self._race_lap_times_s)),
+                "route_frontier_distance_m": float(self._episode_frontier_distance_m),
+                "route_frontier_target_m": target_frontier_m,
+            }
         # The official scoring harness is deterministic evaluation, not PPO
         # training; scores come from official lap timing and collision counts.
         self._teacher_info = dict(info)
@@ -620,6 +752,8 @@ class OfficialRaceEnv(gym.Env):
         *,
         collision_event: bool,
     ) -> Dict[str, Any]:
+        transport_status = getattr(self.racer, "transport_status", None)
+        transport_diagnostics = transport_status() if callable(transport_status) else {}
         return {
             # Restricted state is monitoring-only: it can support training
             # reward/evaluation but is intentionally excluded from observation.
@@ -654,6 +788,15 @@ class OfficialRaceEnv(gym.Env):
             "lidar_left_clearance_m": self._lidar_sector_clearance(snap, 70.0, 110.0),
             "lidar_front_clearance_m": self._lidar_sector_clearance(snap, -12.0, 12.0),
             "lidar_right_clearance_m": self._lidar_sector_clearance(snap, -110.0, -70.0),
+            # Read-only monotonic timing evidence for command-expiry diagnosis.
+            # It contains no additional policy observation or route target.
+            "command_expiry_diagnostic": transport_diagnostics.get(
+                "command_expiry_diagnostic"
+            ),
+            "neutral_fallback_count": int(transport_diagnostics.get("neutral_fallback_count", 0)),
+            "neutral_fallback_diagnostic": transport_diagnostics.get(
+                "neutral_fallback_diagnostic"
+            ),
         }
 
     @staticmethod

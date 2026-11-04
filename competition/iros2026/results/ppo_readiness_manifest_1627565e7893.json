@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "status": "pending_official_bc_student_evaluation",
+  "created_for": "Prepare PPO resume from the official behavior-cloned policy; do not launch PPO until the BC student evaluation is reviewed.",
+  "source": {
+    "run_id": "1627565e7893",
+    "checkpoint": "logs/rl/official_run_1627565e7893/behavior_cloned_policy.zip",
+    "checkpoint_sha256": "3e6707501d9d02ca48c6d2b11ca650df680e9da4d8048251ec7a00941f863e39",
+    "checkpoint_bytes": 6697611,
+    "resume_path_for_mission_control": "/runs/rl/official_run_1627565e7893/behavior_cloned_policy.zip",
+    "teacher_validation_report": "competition/iros2026/results/official_teacher_validation_1627565e7893.json",
+    "teacher_episode": {
+      "official_laps": 10,
+      "collisions": 0,
+      "stagnation": false,
+      "transitions": 48862,
+      "bc_epochs": 8,
+      "initial_validation_loss": 0.021343241107388167,
+      "final_validation_loss": 0.00011846855140902335,
+      "initial_action_std": 0.19999998807907104
+    }
+  },
+  "student_evaluation": {
+    "evaluation_id": "2391f1216ab14242",
+    "status": "incomplete_under_default_evaluator; extended_diagnostic_pending",
+    "api": "Mission Control Replay official evaluation",
+    "trace_steps": 500,
+    "initial_attempt": {
+      "official_run_id": "0f770eaacb52",
+      "termination_reason": "lap_progress_stalled",
+      "steps": 2689,
+      "wall_duration_s": 86.65543188300217,
+      "warmup_laps_completed": 0,
+      "scored_laps_completed": 0,
+      "collisions": 0,
+      "path_length_m": 39.056,
+      "net_displacement_m": 3.729,
+      "evaluation_report": "logs/rl/official_run_0f770eaacb52/evaluation.json"
+    },
+    "required_result_before_ppo": "Review the explicitly authorized extended BC diagnostic and establish whether the default incomplete attempt reflects the evaluator lap deadline or a student route-following failure. No PPO until the student behavior and training action handling are understood."
+  },
+  "simulator_and_track": {
+    "backend": "windows_external",
+    "display_mode": "gui",
+    "official_scene": "SRL 2026 IROS Track",
+    "inactive_alternative_scene": "Porto Track",
+    "scene_sha256": "a5d11e435857e2ead32ec0eb065dbbd011c41fa80d1bf8a187177014e014b674",
+    "scene_verified": true,
+    "official_centerline": "competition/iros2026/tracks/competition/official_centerline.csv",
+    "route_length_m": 45.80209158004757,
+    "official_competition_simulator_release": "AutoDRIVE RoboRacer 2026 IROS competition Windows executable, verified against the official compete release"
+  },
+  "ppo_run_config_to_apply_after_student_gate": {
+    "simulator_backend": "windows_external",
+    "simulator_display_mode": "gui",
+    "n_envs": 1,
+    "resume": "/runs/rl/official_run_1627565e7893/ppo_warmstart_std_001_005.zip",
+    "behavior_cloning_enabled": true,
+    "behavior_cloning_only": false,
+    "resume_behavior": "Resume skips new teacher collection and transfers the saved actor weights into a fresh PPO optimizer and rollout buffer.",
+    "total_timesteps": 0,
+    "stop_on_plateau": false,
+    "max_duration_hours": 0.0,
+    "stop_policy": "No timestep, plateau, or wall-clock stop; stop manually from Mission Control.",
+    "checkpoint_every": 10000,
+    "automatic_evaluation_enabled": true,
+    "automatic_evaluation_trigger": "steps",
+    "automatic_evaluation_interval": 50000,
+    "evaluation_protocol": "One warm-up lap followed by ten scored official laps, repeated over three fresh attempts.",
+    "observation_profile": "official_sensors_camera",
+    "observations": {
+      "camera": "RGB uint8 90x160x3; feature extractor divides by 255 once; SB3 image normalization disabled",
+      "lidar": "1081 beams normalized to [0,1]",
+      "state": "9 normalized proprioceptive values",
+      "privileged_map_or_pose_input_to_policy": false
+    },
+    "action_mapping": {
+      "throttle_mode": "bidirectional",
+      "negative_throttle_mode": "allow",
+      "steering_mode": "normal",
+      "steering_action_scale": 1.0,
+      "straight_throttle_gain": 1.0,
+      "straight_throttle_steering_threshold": 0.15
+    },
+    "ppo": {
+      "n_steps": 2048,
+      "learning_rate": 0.0001,
+      "n_epochs": 4,
+      "gamma": 0.9995,
+      "gae_lambda": 0.95,
+      "batch_size": 64,
+      "clip_range": 0.2,
+      "entropy_coefficient": 0.01,
+      "value_coefficient": 0.5,
+      "max_gradient_norm": 0.5,
+      "rollout_transitions": 2048,
+      "device": "cpu"
+    },
+    "exploration": {
+      "starting_action_std_throttle": 0.01,
+      "starting_action_std_steering": 0.05,
+      "minimum_action_std_by_action": [0.01, 0.05],
+      "maximum_action_std": 0.8,
+      "reason": "The saved BC policy uses 0.2 for both action dimensions. On 256 held-out observations and 1000 draws per observation, that produced throttle below zero 46.4% of the time and throttle above the teacher's 0.035 maximum 46.6% of the time. A separate PPO warm-start candidate uses smaller per-action noise; it leaves deterministic actor outputs unchanged and must still be checked by the official student diagnostic.",
+      "sampled_candidate_noise_check": {
+        "observations": 256,
+        "draws_per_observation": 1000,
+        "throttle_negative_fraction": 0.10655859375,
+        "throttle_above_0_035_fraction": 0.1101640625,
+        "throttle_above_0_1_fraction": 0.0,
+        "steering_abs_above_0_2_fraction": 0.54925390625,
+        "steering_abs_above_0_4_fraction": 0.3495234375
+      },
+      "schedule": "Reduce by 10% after an improved valid ten-lap score; raise by 10% after three stale official evaluations, clamped to the range above."
+    },
+    "episode_and_reward": {
+      "warmup_laps": 0,
+      "race_laps": 10,
+      "training_watchdog_s": 600.0,
+      "frontier_stagnation_s": 5.0,
+      "collision_penalty": 200.0,
+      "noncollision_failure_penalty": 200.0,
+      "frontier_reward_cap": 100.0,
+      "centerline_potential_cap": 20.0,
+      "lap_bonus": 0.0,
+      "time_cost_per_simulated_second": 0.0,
+      "collision_and_stall_behavior": "Terminate and reset that training life; no reward clawback; collision/failure penalty exceeds the 120-point maximum shaped progress return."
+    }
+  },
+  "preparation_checks": {
+    "saved_checkpoint_load_and_inference": "passed; finite two-dimensional action from camera, LiDAR, and state input",
+    "offline_heldout_validation_subset": {
+      "samples": 256,
+      "split": "indices 47838..48861, within behavior_clone_actor validation indices 43976..48861 and outside its training indices 0..43975",
+      "action_mae_throttle": 0.009809322655200958,
+      "action_mae_steering": 0.016948968172073364,
+      "limitation": "Same teacher episode and sensor distribution; this measures imitation error, not student driving performance."
+    },
+    "checkpoint_to_fresh_ppo_resume": "passed on original BC checkpoint; strict actor weight transfer, expected camera transpose, action std about 0.2",
+    "separate_ppo_warmstart_candidate": {
+      "path": "logs/rl/official_run_1627565e7893/ppo_warmstart_std_001_005.zip",
+      "sha256": "ea0be9d2aec305e3ccda203abf476dddbf7190edbbcd693acd0fc4cf121aee8b",
+      "action_std_throttle_steering": [0.01, 0.05],
+      "deterministic_action_change_from_source": 0.0,
+      "status": "prepared; requires official evaluator diagnosis before PPO use",
+      "resume_and_rollout_start_smoke": "passed; fresh PPO resume preserved camera transpose and the per-action scheduler kept [0.01, 0.05] at rollout start"
+    },
+    "synthetic_ppo_optimizer_update": "passed; one 64-step rollout/update on a synthetic environment only",
+    "official_student_ten_lap_result": "pending"
+  },
+  "limitations": [
+    "The only official 10-lap result is the privileged route-aware teacher episode. The cloned sensor policy has not yet passed an official evaluation.",
+    "Checkpoint load, offline held-out imitation, and the synthetic PPO update do not prove official simulator behavior, wall avoidance under PPO exploration, or long-run stability.",
+    "One environment is selected because the successful BC collection and teacher validation used one official Windows simulator; parallel PPO speedup is not established by this preparation."
+  ]
+}

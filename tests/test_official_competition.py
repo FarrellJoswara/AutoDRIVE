@@ -554,6 +554,113 @@ def test_race_env_ignores_warmup_collision_and_records_ten_race_laps():
     assert info["race_time_s"] == 50.0
 
 
+def test_race_env_waits_for_fresh_last_lap_time_after_counter_event():
+    class MetricRacer(FakeRacer):
+        def __init__(self):
+            super().__init__([
+                _snapshot(lap=0, last_lap=0.0, collisions=0),
+                _snapshot(lap=0, last_lap=0.0, collisions=0),
+            ])
+            self._metrics = RaceMetrics(
+                lap_count=0,
+                collision_count=0,
+                lap_count_update_count=10,
+                lap_count_change_count=0,
+                last_lap_time_update_count=20,
+                last_lap_time_update_count_at_lap_count=20,
+            )
+            self.waited_after = None
+
+        @property
+        def race_metrics(self):
+            return self._metrics
+
+        def wait_for_race_metrics(self):
+            return self._metrics
+
+        def step(self, throttle, steering):
+            self._metrics = RaceMetrics(
+                lap_count=1,
+                last_lap_time=88.0,
+                collision_count=0,
+                lap_count_update_count=15,
+                lap_count_change_count=1,
+                last_lap_time_update_count=20,
+                last_lap_time_update_count_at_lap_count=20,
+            )
+            return self.snapshots.pop(0)
+
+        def wait_for_lap_time_update(self, after_update_count, *, timeout_s):
+            self.waited_after = after_update_count
+            assert timeout_s <= 0.25
+            self._metrics = RaceMetrics(
+                lap_count=1,
+                last_lap_time=91.5,
+                collision_count=0,
+                lap_count_update_count=15,
+                lap_count_change_count=1,
+                last_lap_time_update_count=21,
+                last_lap_time_update_count_at_lap_count=20,
+            )
+            return self._metrics
+
+    racer = MetricRacer()
+    env = OfficialRaceEnv(racer=racer, warmup_laps=0, race_laps=1)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+
+    assert racer.waited_after == 20
+    assert info["race_laps_completed"] == 1
+    assert info["race_lap_times_s"] == [91.5]
+    assert info["race_lap_timing_missing_count"] == 0
+    assert info["race_lap_timing_valid"] is True
+
+
+def test_race_env_does_not_duplicate_latest_time_when_counter_jumps_multiple_laps():
+    class MetricRacer(FakeRacer):
+        def __init__(self):
+            super().__init__([
+                _snapshot(lap=0, last_lap=0.0, collisions=0),
+                _snapshot(lap=0, last_lap=0.0, collisions=0),
+            ])
+            self._metrics = RaceMetrics(
+                lap_count=0,
+                collision_count=0,
+                lap_count_update_count=10,
+                lap_count_change_count=0,
+                last_lap_time_update_count=20,
+                last_lap_time_update_count_at_lap_count=20,
+            )
+
+        @property
+        def race_metrics(self):
+            return self._metrics
+
+        def wait_for_race_metrics(self):
+            return self._metrics
+
+        def step(self, throttle, steering):
+            self._metrics = RaceMetrics(
+                lap_count=2,
+                last_lap_time=94.0,
+                collision_count=0,
+                lap_count_update_count=18,
+                lap_count_change_count=2,
+                last_lap_time_update_count=22,
+                last_lap_time_update_count_at_lap_count=22,
+            )
+            return self.snapshots.pop(0)
+
+    env = OfficialRaceEnv(racer=MetricRacer(), warmup_laps=0, race_laps=2)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+
+    assert info["race_laps_completed"] == 2
+    assert info["race_lap_times_s"] == []
+    assert info["race_lap_timing_missing_count"] == 2
+    assert info["race_lap_timing_valid"] is False
+
+
 def test_official_env_starts_from_live_spawn_without_reset_command():
     racer = FakeRacer([_snapshot(lap=0, last_lap=0.0, collisions=0)])
     env = OfficialRaceEnv(racer=racer)
@@ -1074,6 +1181,9 @@ def test_training_reset_accepts_persistent_official_race_counters():
     racer.frame_timeout_s = 0.5
     racer._last_scan_source_time = None
     racer._check_wait_state = lambda: None
+    racer._transport_diagnostic = lambda *args, **kwargs: "test transport"
+    racer._race_metric_update_counts = {}
+    racer._wait_for_fresh_reset_metrics = lambda *args, **kwargs: racer._race_metrics
     snap = _snapshot(lap=2, last_lap=0.0, collisions=3)
     racer.wait_until_ready = lambda: snap
     racer._wait_for_scan_after = lambda previous_step: snap

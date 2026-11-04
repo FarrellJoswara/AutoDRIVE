@@ -259,11 +259,13 @@ class OfficialEvaluationService:
             raise ValueError("evaluation checkpoint must be an existing .zip file")
         if isinstance(trace_steps, bool) or not 0 <= trace_steps <= 500:
             raise ValueError("trace_steps must be between 0 and 500")
-        if validation_mode not in {None, "bc_diagnostic", "training_probe"}:
-            raise ValueError("validation_mode must be bc_diagnostic or training_probe when provided")
+        if validation_mode not in {None, "bc_diagnostic", "training_probe", "porto_practice_diagnostic"}:
+            raise ValueError("unsupported validation_mode")
+        if validation_mode == "porto_practice_diagnostic" and source != "manual":
+            raise ValueError("Porto practice diagnostics must be explicitly requested as manual evaluations")
         if validation_mode == "training_probe" and source == "automatic" and not parent_run_id:
             raise ValueError("automatic training_probe requires its parent training run")
-        if validation_mode == "bc_diagnostic":
+        if validation_mode in {"bc_diagnostic", "porto_practice_diagnostic"}:
             verified = verify_bc_checkpoint(model_path)
             if verified is None:
                 raise ValueError(
@@ -291,7 +293,9 @@ class OfficialEvaluationService:
             "model_path": str(model_path), "model_sha256": digest,
             "settings": settings, "trace_steps": trace_steps,
             "validation_mode": validation_mode,
-            "attempts_required": 1 if validation_mode in {"bc_diagnostic", "training_probe"} else self.ATTEMPTS,
+            "attempts_required": 3 if validation_mode == "porto_practice_diagnostic" else (
+                1 if validation_mode in {"bc_diagnostic", "training_probe"} else self.ATTEMPTS
+            ),
             "state": "queued", "attempts": [], "current_run_id": None,
             "created_utc": _utc_now(), "updated_utc": _utc_now(), "error": None,
         }
@@ -438,11 +442,15 @@ class OfficialEvaluationService:
 
     def _run_batch(self, job: dict[str, Any]) -> None:
         probe = job.get("validation_mode") == "training_probe"
-        noncompetitive = job.get("validation_mode") in {"bc_diagnostic", "training_probe"}
-        race_laps = 3 if probe else 10
+        porto_diagnostic = job.get("validation_mode") == "porto_practice_diagnostic"
+        noncompetitive = job.get("validation_mode") in {"bc_diagnostic", "training_probe", "porto_practice_diagnostic"}
+        race_laps = 3 if probe or porto_diagnostic else 10
         config = _evaluation_child_settings(
             job["settings"], job["model_path"], race_laps=race_laps,
         )
+        if porto_diagnostic:
+            config["warmup_laps"] = 0
+            config["simulator_backend"] = "docker"
         scores: list[float] = []
         for attempt_index in range(1, self.ATTEMPTS + 1):
             attempts_required = int(job.get("attempts_required", self.ATTEMPTS))
@@ -453,6 +461,8 @@ class OfficialEvaluationService:
                 break
             if job.get("validation_mode") == "bc_diagnostic":
                 run_name = f"BC diagnostic evaluation {attempt_index}/1"
+            elif porto_diagnostic:
+                run_name = f"Porto practice diagnostic {attempt_index}/3"
             elif probe:
                 run_name = f"Training probe {attempt_index}/1"
             else:
@@ -463,7 +473,11 @@ class OfficialEvaluationService:
                 evaluation_options=(
                     {"validation_mode": job["validation_mode"], "lap_progress_timeout_s": 240,
                      "lap_progress_wall_timeout_s": 240, "frontier_stall_after_s": 5,
-                     "frontier_path": str(ROOT / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv")}
+                     "frontier_path": str(
+                         ROOT / "competition" / "iros2026" / "official_centerline.csv"
+                         if porto_diagnostic else
+                         ROOT / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv"
+                     )}
                     if noncompetitive else _competitive_route_monitor_options()
                 ),
             )
@@ -510,6 +524,9 @@ class OfficialEvaluationService:
                 "collision_count": _attempt_collision_count(attempt),
                 "stop_reason": attempt.get("stop_reason"),
                 "wall_duration_s": attempt.get("wall_duration_s"),
+                "control_gap_fault_count": attempt.get("control_gap_fault_count"),
+                "median_control_interval_s": attempt.get("median_control_interval_s"),
+                "route_projection_invalid_sample_count": attempt.get("route_projection_invalid_sample_count"),
                 "frontier_progress_m": attempt.get("frontier_progress_m"),
                 "frontier_progress_fraction": attempt.get("frontier_progress_fraction"),
                 "frontier_lateral_offset_m": attempt.get("frontier_lateral_offset_m"),
@@ -539,10 +556,21 @@ class OfficialEvaluationService:
                 attempt_record["valid_for_comparison"] = False
                 attempt_record["readiness_passed"] = (
                     attempt_record["stop_reason"] == "race_complete"
-                    and attempt_record["warmup_laps"] >= 1
+                    and attempt_record["warmup_laps"] >= (0 if porto_diagnostic else 1)
                     and attempt_record["race_laps_completed"] >= race_laps
                     and attempt_record["collision_count"] == 0
                     and attempt_record["frontier_projection_valid"] is True
+                    and (
+                        not porto_diagnostic
+                        or (
+                            attempt.get("route_projection_invalid_sample_count", 0) == 0
+                            and attempt.get("control_gap_fault_count", 0) == 0
+                            and attempt.get("camera_missing_sample_count", 0) == 0
+                            and attempt.get("camera_stale_sample_count", 0) == 0
+                            and attempt.get("camera_freshness_unknown_count", 0) == 0
+                            and attempt.get("motion_verification", {}).get("verified") is True
+                        )
+                    )
                 )
             job["attempts"].append(attempt_record)
             job["current_run_id"] = None
@@ -555,12 +583,18 @@ class OfficialEvaluationService:
 
         attempts_required = int(job.get("attempts_required", self.ATTEMPTS))
         valid_batch = len(scores) == attempts_required and len(job["attempts"]) == attempts_required
-        diagnostic = job.get("validation_mode") in {"bc_diagnostic", "training_probe"}
+        diagnostic = job.get("validation_mode") in {"bc_diagnostic", "training_probe", "porto_practice_diagnostic"}
         protocol = "official_training_probe_1_plus_3" if probe else (
-            "official_bc_diagnostic_1_plus_10" if job.get("validation_mode") == "bc_diagnostic"
-            else "official_10_lap_race"
+            "official_porto_practice_3_laps_x_3_fresh_attempts" if porto_diagnostic else (
+                "official_bc_diagnostic_1_plus_10" if job.get("validation_mode") == "bc_diagnostic"
+                else "official_10_lap_race"
+            )
         )
-        readiness_passed = diagnostic and len(job["attempts"]) == 1 and job["attempts"][0].get("readiness_passed") is True
+        readiness_passed = (
+            diagnostic
+            and len(job["attempts"]) == attempts_required
+            and all(item.get("readiness_passed") is True for item in job["attempts"])
+        )
         raw_times = [float(item["race_time_s"]) for item in job["attempts"]
                      if item.get("valid_for_comparison") and isinstance(item.get("race_time_s"), (int, float))]
         result = {

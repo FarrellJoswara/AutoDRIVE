@@ -661,15 +661,22 @@ def _run_telemetry(run_id: str) -> Dict[str, Any]:
         "last_train_phase": phase,
         "last_evaluator_live": evaluator_live,
         "last_evaluation": evaluation,
-        "map_id": "none",
+        "map_id": persisted.get("map_id", "none"),
     }
 
 
 def _run_output_dir(run_id: str) -> Path:
     run = official_runs.get_run(run_id)
     raw = run.get("output_dir")
-    path = Path(raw).resolve() if raw else (ROOT / "logs" / "rl" / f"official_run_{run_id}").resolve()
     root = (ROOT / "logs" / "rl").resolve()
+    fallback = (root / f"official_run_{run_id}").resolve()
+    path = Path(raw).resolve() if raw else fallback
+    if not path.is_relative_to(root):
+        # Run history is shared between Windows and Docker. Older rows may
+        # contain a host-native absolute path (for example /mnt/c/Users/...),
+        # which is outside this container's artifact root. Use the canonical
+        # in-container path for those legacy rows while keeping traversal out.
+        path = fallback
     if not path.is_relative_to(root):
         raise HTTPException(status_code=400, detail="invalid run output path")
     return path

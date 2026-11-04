@@ -37,3 +37,5 @@ pytest>=8.0.0
 # Map mesh generation (Phase 2 — occupancy → OBJ)
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
+docker>=7.2.0
+pywin32>=312; platform_system == "Windows"

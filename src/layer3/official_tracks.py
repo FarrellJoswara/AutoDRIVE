@@ -2,7 +2,48 @@
 from pathlib import Path
 import os
 import hashlib
+import subprocess
 from pathlib import PureWindowsPath
+
+
+def _windows_scene_sha256(scene_path):
+    """Hash the real Windows scene when WSL cannot read AppData via DrvFS.
+
+    The Windows path is sent as stdin data to a fixed PowerShell command. It is
+    never interpolated into PowerShell source or interpreted by a shell.
+    """
+    command = (
+        "$scene = [Console]::In.ReadLine(); "
+        "$stream = [System.IO.File]::OpenRead($scene); "
+        "try { $sha = [System.Security.Cryptography.SHA256]::Create(); "
+        "$digest = $sha.ComputeHash($stream); "
+        "[Console]::Out.WriteLine(([System.BitConverter]::ToString($digest)).Replace('-', '').ToLowerInvariant()) } "
+        "finally { $stream.Dispose(); if ($sha) { $sha.Dispose() } }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            input=f"{scene_path}\n",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"could not hash the official Windows scene through PowerShell: {scene_path}"
+        ) from exc
+    digest = result.stdout.strip().splitlines()[-1].strip().lower() if result.stdout.strip() else ""
+    if result.returncode != 0 or len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(
+            f"PowerShell could not verify the official Windows scene {scene_path}: {detail}"
+        )
+    return digest
 
 
 def official_frontier_path(*, backend=None, image=None, profile=None):
@@ -41,7 +82,13 @@ def verify_windows_scene(frontier_path, executable=None):
     if os.name != "nt" and win.drive:
         executable = Path("/mnt") / win.drive[0].lower() / Path(*win.parts[1:])
     scene = Path(executable).parent / "Data" / "level0"
-    digest = hashlib.sha256(scene.read_bytes()).hexdigest()
+    try:
+        digest = hashlib.sha256(scene.read_bytes()).hexdigest()
+    except OSError:
+        if os.name == "nt" or not win.drive:
+            raise
+        windows_scene = str(win.parent / "Data" / "level0")
+        digest = _windows_scene_sha256(windows_scene)
     profile = "competition" if Path(frontier_path).parent.name == "competition" else "practice"
     if digest != WINDOWS_SCENES[profile]:
         raise ValueError(

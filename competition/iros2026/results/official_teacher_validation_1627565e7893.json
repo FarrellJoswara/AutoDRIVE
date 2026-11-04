@@ -1,0 +1,98 @@
+{
+  "run_id": "1627565e7893",
+  "display_name": "Competition teacher ten laps with control watchdog",
+  "runtime": "official",
+  "backend": "windows_external",
+  "started_at_utc": "2026-10-10T21:27:27.183145+00:00",
+  "completed_at_utc": "2026-10-10T22:00:57.584293+00:00",
+  "status": "verified_success",
+  "validation": {
+    "actual_official_laps": 10,
+    "required_laps": 10,
+    "episode_won": true,
+    "collision_count": 0,
+    "collision_trace_examples": [],
+    "completed_episodes": 1,
+    "successful_episodes": 1,
+    "stagnation_detected": false,
+    "termination_reason": "training_goal_reached",
+    "official_route_length_m": 45.80209158004757,
+    "frontier_progress_m": 503.0152011655288,
+    "route_net_progress_m": 457.2148,
+    "route_loops_by_net_progress": 9.982400022080501,
+    "forward_progress_steps": 5549,
+    "backward_progress_steps": 0,
+    "reverse_motion_steps": 0,
+    "negative_throttle_steps": 0,
+    "route_distance_short_of_10_centerline_lengths_m": 0.8061
+  },
+  "track": {
+    "profile": "competition",
+    "centerline_path": "competition/iros2026/tracks/competition/official_centerline.csv",
+    "scene_verified": true,
+    "scene_sha256": "a5d11e435857e2ead32ec0eb065dbbd011c41fa80d1bf8a187177014e014b674",
+    "active_gameobject": "SRL 2026 IROS Track",
+    "active_scene_tracks": {
+      "SRL 2026 IROS Track": true,
+      "Porto Track": false
+    }
+  },
+  "teacher_trace": {
+    "path": "logs/rl/official_run_1627565e7893/teacher_trace.jsonl",
+    "records": 48862,
+    "first_step": 1,
+    "last_step": 48862,
+    "route_progress_first_m": 45.80039101504808,
+    "route_progress_last_m": 503.00200116552884,
+    "step_duration": {
+      "n": 48861,
+      "mean_s": 0.033816294128379866,
+      "median_s": 0.03172588348388672,
+      "p90_s": 0.040142059326171875,
+      "p95_s": 0.041384220123291016,
+      "p99_s": 0.04999804496765137,
+      "max_s": 1.2075228691101074,
+      "over_100ms": 83
+    },
+    "control_gap": {
+      "n": 48862,
+      "mean_s": 0.03277636822526748,
+      "median_s": 0.03158670950506348,
+      "p90_s": 0.040496693982277066,
+      "p95_s": 0.04211791799752973,
+      "p99_s": 0.04975916899275035,
+      "max_s": 0.27269944199360907,
+      "over_100ms": 33
+    },
+    "max_consecutive_position_delta_m": 0.18079999999999963,
+    "positive_route_delta_steps": 44117,
+    "nonpositive_route_delta_steps": 4744
+  },
+  "camera_dataset_sample": {
+    "array_shape": [
+      48862,
+      90,
+      160,
+      3
+    ],
+    "dtype": "uint8",
+    "sampled_frames": 3,
+    "frame0_stddev": 83.47212669477688,
+    "frame0_1_mean_abs_pixel_delta": 0.0,
+    "frame1_2_mean_abs_pixel_delta": 0.26252314814814814
+  },
+  "behavior_cloning": {
+    "only": true,
+    "transitions": 48862,
+    "epochs": 8,
+    "initial_validation_loss": 0.021343241107388167,
+    "final_validation_loss": 0.00011846855140902335,
+    "checkpoint": "logs/rl/official_run_1627565e7893/behavior_cloned_policy.zip",
+    "checkpoint_exists": true
+  },
+  "limitations": [
+    "Teacher step_duration_s has 83 of 48,861 records above 100 ms (maximum 1.208 s); control_gap_s has 33 of 48,862 above 100 ms (maximum 272.7 ms). Trace has no timestamps to attribute these outliers. Maximum adjacent logged position delta was 0.1808 m.",
+    "The active run process started before async progress-callback/latest-preview-join changes on disk; those later changes were not part of this validation.",
+    "config.json has a stale teacher description mentioning Porto; track_profile.json records the verified active competition scene and official_centerline.csv."
+  ]
+}

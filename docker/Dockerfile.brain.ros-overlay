@@ -1,0 +1,17 @@
+# Fast source/dependency overlay on the already verified ROS+PPO image.
+# This avoids rebuilding ROS, CUDA Torch, and the Devkit workspace when only
+# current application sources or the Python 3.12 AttrDict fix changes.
+FROM node:20-bookworm-slim AS web-build
+WORKDIR /web
+COPY src/layer4/web/package.json src/layer4/web/package-lock.json* src/layer4/web/.npmrc* ./
+RUN npm install --no-audit --no-fund --legacy-peer-deps
+COPY src/layer4/web/ ./
+RUN npm run build
+
+FROM aicar-iros2026:porto-api-ros-20261030@sha256:bbe2bc70fcebaf9a2be2c4681e9be6f574720afb77f88e884e9a32837e5e1822
+WORKDIR /app
+COPY . /app/
+COPY --from=web-build /web/dist /app/static/mission-control
+COPY --from=web-build /web/dist /app/src/layer4/web/dist
+RUN /opt/aicar-venv/bin/pip install --no-cache-dir attrdict3==2.0.2 \
+    && chmod +x /app/docker/entrypoint-brain.sh

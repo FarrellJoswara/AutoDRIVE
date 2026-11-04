@@ -112,7 +112,7 @@ def test_competitive_route_monitor_propagates_without_diagnostic_options(manager
 def test_competitive_evaluation_service_selects_nonblocking_route_monitor():
     options = _competitive_route_monitor_options()
     assert options["route_monitor_only"] is True
-    assert options["frontier_path"].endswith("competition/official_centerline.csv")
+    assert Path(options["frontier_path"]).as_posix().endswith("competition/official_centerline.csv")
     assert "validation_mode" not in options
     assert "lap_progress_timeout_s" not in options
     assert "lap_progress_wall_timeout_s" not in options

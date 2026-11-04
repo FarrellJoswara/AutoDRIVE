@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 
 OFFICIAL_COMPETITION_ROUTE_SHA256 = "62307684f1fd2813e50222f0c97e3545dc7c2808ef8544c1e161f7744d1ba4fb"
+OFFICIAL_PORTO_PRACTICE_ROUTE_SHA256 = "87d26be59ccc88ff6fc273905038906b8ed9e883b111c33de008a38f83a15bb3"
 
 
 def collision_penalty_seconds(collisions: int, seconds_per_collision: float = 10.0) -> float:
@@ -191,6 +192,43 @@ def _distribution(values: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def _control_interval_diagnostics(info: Dict[str, Any]) -> Tuple[float, float, bool, bool]:
+    """Separate monotonic action timing from ROS header-stamp anomalies."""
+    source_interval = float(info.get("control_interval_s", 0.0))
+    wall_interval = float(info.get("control_interval_wall_s", source_interval))
+    source = info.get("control_interval_source")
+    raw_stamp_gap = (
+        source == "ros_sensor_stamp"
+        and math.isfinite(source_interval)
+        and source_interval > 1.0
+    )
+    actual_gap = math.isfinite(wall_interval) and wall_interval > 1.0
+    return source_interval, wall_interval, actual_gap, raw_stamp_gap
+
+
+def _porto_practice_attempt_passed(run: Dict[str, Any], required_laps: int) -> bool:
+    lap_times = run.get("race_lap_times_s")
+    return bool(
+        run.get("stop_reason") == "race_complete"
+        and run.get("race_laps_completed") == required_laps
+        and run.get("race_lap_timing_valid") is True
+        and run.get("race_lap_timing_missing_count") == 0
+        and isinstance(lap_times, list)
+        and len(lap_times) == required_laps
+        and all(math.isfinite(float(value)) and float(value) > 0.0 for value in lap_times)
+        and run.get("race_collisions") == 0
+        and run.get("warmup_collisions") == 0
+        and run.get("raw_collision_count_at_finish") == 0
+        and run.get("frontier_projection_valid") is True
+        and run.get("route_projection_invalid_sample_count") == 0
+        and run.get("control_gap_fault_count") == 0
+        and run.get("camera_missing_sample_count") == 0
+        and run.get("camera_stale_sample_count") == 0
+        and run.get("camera_freshness_unknown_count") == 0
+        and run.get("motion_verification", {}).get("verified") is True
+    )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -259,6 +297,130 @@ def _route_monitor_identity(
             "manifest_sha256": _sha256(manifest_path),
         },
     }
+
+
+def _verified_porto_practice_route(frontier_path: Optional[Path]) -> Dict[str, Any]:
+    """Require the exact aligned official practice centerline for Porto diagnostics."""
+    expected = (
+        Path(__file__).resolve().parents[2]
+        / "competition" / "iros2026" / "official_centerline.csv"
+    ).resolve()
+    if frontier_path is None or Path(frontier_path).resolve() != expected:
+        raise ValueError("Porto practice diagnostics require the fixed official practice centerline")
+    if not expected.is_file() or _sha256(expected) != OFFICIAL_PORTO_PRACTICE_ROUTE_SHA256:
+        raise ValueError("official Porto practice centerline bytes do not match the verified route")
+    metadata_path = expected.with_name("official_frontier.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("official Porto practice route metadata is unavailable or invalid") from exc
+    if (metadata.get("simulator_image") != "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
+            or metadata.get("simulator_image_digest") != "sha256:b4bbda41fdb1da7a2eadba4350ed3a0cb5020e7eb783454e78399ef5852dbd76"):
+        raise ValueError("official Porto practice route metadata does not identify the verified runtime")
+    return {
+        "track_profile": "practice",
+        "route_path": str(expected),
+        "route_sha256": OFFICIAL_PORTO_PRACTICE_ROUTE_SHA256,
+        "route_metadata_path": str(metadata_path),
+        "practice_asset_source_image": metadata["simulator_image"],
+        "practice_asset_source_image_digest": metadata["simulator_image_digest"],
+    }
+
+
+def _verified_porto_practice_runtime(route_identity: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify the active practice runtime without treating a Docker tag as proof on Windows."""
+    from src.layer3.official_tracks import (
+        WINDOWS_SCENES,
+        _windows_scene_sha256,
+        verify_windows_scene,
+    )
+
+    backend = os.environ.get("AICAR_SIMULATOR_BACKEND", "")
+    if os.environ.get("AICAR_OFFICIAL_TRACK_PROFILE") != "practice":
+        raise ValueError("Porto practice diagnostic requires AICAR_OFFICIAL_TRACK_PROFILE=practice")
+    if backend == "windows_external":
+        executable = os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE", "").strip()
+        if not executable:
+            raise ValueError("Porto practice diagnostic requires the verified Windows practice simulator executable")
+        scene = verify_windows_scene(Path(route_identity["route_path"]), executable)
+        if (scene.get("track_profile") != "practice"
+                or scene.get("scene_sha256") != WINDOWS_SCENES["practice"]
+                or scene.get("verified") is not True):
+            raise ValueError("Windows simulator scene does not match the verified Porto practice track")
+        identity = {
+            "simulator_backend": backend,
+            "simulator_executable": executable,
+            "scene_verification": scene,
+            "safe_neutral_fallback_s": float(
+                os.environ.get("AICAR_OFFICIAL_SAFE_NEUTRAL_FALLBACK_S", "0")
+            ),
+            "ros_domain_id_base": int(os.environ.get("AICAR_ROS_DOMAIN_ID_BASE", "0")),
+        }
+        preflight_value = os.environ.get("AICAR_RUNTIME_PREFLIGHT", "").strip()
+        if preflight_value:
+            preflight_path = Path(preflight_value).resolve()
+            try:
+                preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+                launch_config = json.loads(
+                    preflight_path.with_name("launch_config.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise ValueError("native Porto runtime preflight or launch config is unreadable") from exc
+            expected_route = route_identity["route_sha256"]
+            executable_sha256 = _windows_scene_sha256(executable).lower()
+            sessions = (preflight.get("health") or {}).get("simulator_sessions")
+            if not isinstance(sessions, list):
+                sessions = []
+            ready_session = any(
+                isinstance(session, dict)
+                and bool(session.get("sid"))
+                and int(session.get("complete_frames", 0) or 0) > 0
+                and int(session.get("camera_frames", 0) or 0) > 0
+                and int(session.get("devkit_commands", 0) or 0) > 0
+                for session in sessions
+            )
+            sim_pid = preflight.get("sim_pid")
+            if (not isinstance(sim_pid, int) or isinstance(sim_pid, bool) or sim_pid <= 0
+                    or not str(preflight.get("runtime_kind", "")).startswith(
+                        "native_windows_official_simulator"
+                    )
+                    or preflight.get("docker_used_for_runtime") is not False
+                    or preflight.get("profile") != "practice"
+                    or preflight.get("route_sha256") != expected_route
+                    or preflight.get("scene_sha256") != WINDOWS_SCENES["practice"]
+                    or preflight.get("executable_sha256", "").lower() != executable_sha256
+                    or preflight.get("simulator_display_mode") != "gui"
+                    or preflight.get("simulator_process_responding") is not True
+                    or int(preflight.get("ros_domain_id", -1)) != int(os.environ.get("ROS_DOMAIN_ID", "86"))
+                    or not ready_session
+                    or int((preflight.get("health") or {}).get("response_timeouts", 0) or 0)
+                    > int(preflight.get("response_timeouts_baseline", 0) or 0)
+                    or launch_config.get("simulator_backend") != "windows_external"
+                    or launch_config.get("track_profile") != "practice"
+                    or launch_config.get("simulator_display_mode") != "gui"
+                    or launch_config.get("simulator_executable") != executable):
+                raise ValueError(
+                    "native Porto runtime preflight does not prove a live GUI process for the "
+                    "verified practice executable, scene, route, and ROS domain"
+                )
+            identity.update({
+                "simulator_process_id": sim_pid,
+                "simulator_display_mode": "gui",
+                "ros_domain_id": int(preflight["ros_domain_id"]),
+                "runtime_preflight_path": str(preflight_path),
+                "runtime_preflight_sha256": _sha256(preflight_path),
+            })
+        return identity
+    if backend == "docker":
+        expected_image = "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
+        if os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE") != expected_image:
+            raise ValueError("Porto practice diagnostic requires the verified official practice simulator image")
+        return {
+            "simulator_backend": backend,
+            "simulator_image": route_identity["practice_asset_source_image"],
+            "simulator_image_digest": route_identity["practice_asset_source_image_digest"],
+        }
+    raise ValueError("Porto practice diagnostic requires the Windows external or official Docker simulator backend")
 
 
 def _camera_topic_age_s(env: Any) -> Optional[float]:
@@ -421,6 +583,9 @@ def evaluate_attempt(
     collisions_reported = 0
     steps = 0
     control_intervals_s: List[float] = []
+    ros_sensor_stamp_intervals_s: List[float] = []
+    control_gap_fault_count = 0
+    ros_sensor_stamp_gap_count = 0
     scan_rates_hz: List[float] = []
     policy_throttle: List[float] = []
     policy_steering: List[float] = []
@@ -462,6 +627,8 @@ def evaluate_attempt(
     route_projection_invalid_sample_count = 0
     if diagnostic_frontier_required and (frontier_tracker is None or initial_position is None):
         frontier_telemetry_invalid = True
+        route_projection_sample_count += 1
+        route_projection_invalid_sample_count += 1
     if route_monitor_only and (frontier_tracker is None or initial_position is None):
         route_projection_sample_count += 1
         route_projection_invalid_sample_count += 1
@@ -475,7 +642,7 @@ def evaluate_attempt(
             )
             frontier_progress_m = float(frontier_state["progress_m"])
             frontier_projection_valid = bool(frontier_state.get("current_projection_valid", True))
-            if route_monitor_only:
+            if route_monitor_only or diagnostic_frontier_required:
                 route_projection_sample_count += 1
                 route_projection_valid_sample_count += int(frontier_projection_valid)
                 route_projection_invalid_sample_count += int(not frontier_projection_valid)
@@ -571,11 +738,17 @@ def evaluate_attempt(
         applied_throttle.append(float(info.get("throttle_command", 0.0)))
         applied_steering.append(float(info.get("steering_command", 0.0)))
         steps += 1
-        interval = float(info.get("control_interval_s", 0.0))
+        interval, wall_interval, actual_gap, raw_stamp_gap = _control_interval_diagnostics(info)
         scan_rate = float(info.get("lidar_scan_rate_hz", 0.0))
         if math.isfinite(interval) and interval > 0:
-            control_intervals_s.append(interval)
-            control_elapsed_s += interval
+            ros_sensor_stamp_intervals_s.append(interval)
+            if raw_stamp_gap:
+                ros_sensor_stamp_gap_count += 1
+        if math.isfinite(wall_interval) and wall_interval > 0:
+            control_intervals_s.append(wall_interval)
+            control_elapsed_s += wall_interval
+            if actual_gap:
+                control_gap_fault_count += 1
         if math.isfinite(scan_rate) and scan_rate > 0:
             scan_rates_hz.append(scan_rate)
         current_position = info.get("race_position")
@@ -602,7 +775,7 @@ def evaluate_attempt(
                     frontier_state = progress
                     frontier_progress_m = float(progress.get("progress_m") or frontier_progress_m)
                     frontier_projection_valid = bool(progress.get("current_projection_valid", False))
-                    if route_monitor_only:
+                    if route_monitor_only or diagnostic_frontier_required:
                         route_projection_sample_count += 1
                         route_projection_valid_sample_count += int(frontier_projection_valid)
                         route_projection_invalid_sample_count += int(not frontier_projection_valid)
@@ -616,6 +789,8 @@ def evaluate_attempt(
                 except (ValueError, TypeError, IndexError):
                     if diagnostic_frontier_required:
                         frontier_telemetry_invalid = True
+                        route_projection_sample_count += 1
+                        route_projection_invalid_sample_count += 1
                         frontier_projection_valid = False
                     else:
                         if route_monitor_only:
@@ -626,6 +801,8 @@ def evaluate_attempt(
         elif diagnostic_frontier_required:
             frontier_telemetry_invalid = True
             frontier_projection_valid = False
+            route_projection_sample_count += 1
+            route_projection_invalid_sample_count += 1
         elif route_monitor_only:
             route_projection_sample_count += 1
             route_projection_invalid_sample_count += 1
@@ -781,6 +958,9 @@ def evaluate_attempt(
         "warmup_collisions": int(info.get("warmup_collisions", 0)),
         "raw_collision_count_at_finish": int(info.get("raw_collision_count", 0)),
         "race_collision_baseline": info.get("race_collision_baseline"),
+        "race_lap_timing_valid": info.get("race_lap_timing_valid"),
+        "race_lap_timing_missing_count": info.get("race_lap_timing_missing_count"),
+        "latest_official_lap_time_s": info.get("last_lap_time_s"),
         "total_laps_since_start": int(info.get("laps_since_start", 0)),
         "stop_reason": stop_reason,
         "wall_duration_s": time.monotonic() - started,
@@ -791,6 +971,12 @@ def evaluate_attempt(
         "median_control_interval_s": (
             statistics.median(control_intervals_s)
             if control_intervals_s else None
+        ),
+        "control_gap_fault_count": control_gap_fault_count,
+        "ros_sensor_stamp_gap_count": ros_sensor_stamp_gap_count,
+        "median_ros_sensor_stamp_interval_s": (
+            statistics.median(ros_sensor_stamp_intervals_s)
+            if ros_sensor_stamp_intervals_s else None
         ),
         "median_reported_lidar_scan_rate_hz": (
             statistics.median(scan_rates_hz) if scan_rates_hz else None
@@ -866,6 +1052,7 @@ def evaluate(
     frontier_stall_after_s: float = 0.0,
     route_monitor_only: bool = False,
     validation_mode: Optional[str] = None,
+    porto_practice_laps: int = 3,
 ) -> Dict[str, Any]:
     from src.layer2.official_race_env import OfficialRaceEnv
     from src.layer3.official_policy import load_policy
@@ -876,9 +1063,11 @@ def evaluate(
     model_sha256 = _sha256(checkpoint) if checkpoint.is_file() else None
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
+    if porto_practice_laps < 1:
+        raise ValueError("porto_practice_laps must be at least 1")
     if trace_steps < 0 or trace_steps > 500:
         raise ValueError("trace_steps must be between 0 and 500")
-    if validation_mode not in {None, "bc_diagnostic", "training_probe"}:
+    if validation_mode not in {None, "bc_diagnostic", "training_probe", "porto_practice_diagnostic"}:
         raise ValueError("unsupported validation_mode")
     if route_monitor_only and (validation_mode is not None or frontier_path is None):
         raise ValueError("route_monitor_only requires a competitive evaluation with a verified route path")
@@ -891,6 +1080,17 @@ def evaluate(
             raise ValueError(f"{validation_mode} requires the five-second frontier-stall check")
         if attempts != 1:
             raise ValueError(f"{validation_mode} requires exactly one fresh attempt")
+    porto_route_identity = None
+    porto_runtime_identity = None
+    if validation_mode == "porto_practice_diagnostic":
+        porto_route_identity = _verified_porto_practice_route(Path(frontier_path) if frontier_path else None)
+        if attempts != 1:
+            raise ValueError("Porto practice diagnostic runs require one invocation per fresh simulator attempt")
+        porto_runtime_identity = _verified_porto_practice_runtime(porto_route_identity)
+        if lap_progress_timeout_s < 240 or lap_progress_wall_timeout_s < 240:
+            raise ValueError("Porto practice diagnostic requires at least 240-second lap-progress deadlines")
+        if frontier_stall_after_s != 5.0:
+            raise ValueError("Porto practice diagnostic requires the five-second route-stall check")
     if validation_mode == "training_probe" and controller != "ppo":
         raise ValueError("training_probe requires the authenticated PPO controller")
     if attempts > 1:
@@ -920,13 +1120,15 @@ def evaluate(
     if frontier_path is not None:
         from src.layer2.route_progress import RouteProgressTracker
         frontier_tracker = RouteProgressTracker.from_csv(Path(frontier_path), min_push_m=0.04)
-    race_laps_required = 3 if validation_mode == "training_probe" else 10
-    frontier_progress_target_laps = (
-        race_laps_required + 1 if validation_mode is not None else race_laps_required
+    race_laps_required = (
+        porto_practice_laps if validation_mode == "porto_practice_diagnostic"
+        else 3 if validation_mode == "training_probe" else 10
     )
+    warmup_laps = 0 if validation_mode == "porto_practice_diagnostic" else 1
+    frontier_progress_target_laps = race_laps_required + warmup_laps
     env = OfficialRaceEnv(
         timeout_s=timeout_s,
-        warmup_laps=1,
+        warmup_laps=warmup_laps,
         race_laps=race_laps_required,
         steering_action_scale=steering_action_scale,
         straight_throttle_gain=straight_throttle_gain,
@@ -1026,13 +1228,14 @@ def evaluate(
             "observation_profile": observation_profile,
             "throttle_mode": throttle_mode,
             "steering_mode": steering_mode,
-            "warmup_laps_ignored": 1,
+            "warmup_laps_ignored": warmup_laps,
             "race_laps": race_laps_required,
             "validation_mode": validation_mode,
             "competitive_score_valid": competitive,
             "noncompetitive_diagnostic": not competitive,
             "protocol": (
                 "official_training_probe_1_plus_3" if validation_mode == "training_probe"
+                else f"official_porto_practice_{race_laps_required}_lap_attempt" if validation_mode == "porto_practice_diagnostic"
                 else "official_bc_diagnostic_1_plus_10" if validation_mode == "bc_diagnostic"
                 else "official_competitive_1_plus_10"
             ),
@@ -1041,6 +1244,22 @@ def evaluate(
             "median_adjusted_race_time_s": statistics.median(adjusted) if competitive and adjusted else None,
             "best_adjusted_race_time_s": min(adjusted) if competitive and adjusted else None,
         }
+        if porto_route_identity is not None:
+            result.update(porto_route_identity)
+            result["official_base_image"] = "aicar-iros2026"
+            result["runtime_identity"] = porto_runtime_identity
+            if porto_runtime_identity.get("simulator_backend") == "docker":
+                result["simulator_image"] = porto_route_identity["practice_asset_source_image"]
+                result["simulator_image_digest"] = porto_route_identity["practice_asset_source_image_digest"]
+            result["fresh_simulator_attempt_required"] = True
+            result["practice_diagnostic_passed"] = bool(
+                len(runs) == 1
+                and _porto_practice_attempt_passed(runs[0], race_laps_required)
+            )
+            result["competitive_score_valid"] = False
+            result["noncompetitive_diagnostic"] = True
+            result["median_adjusted_race_time_s"] = None
+            result["best_adjusted_race_time_s"] = None
         if route_monitor_only:
             route_identity = _route_monitor_identity(
                 output_path=output_path,
@@ -1126,7 +1345,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--frontier-path", type=Path, default=None)
     parser.add_argument("--frontier-stall-after-s", type=float, default=0.0)
     parser.add_argument("--route-monitor-only", action="store_true")
-    parser.add_argument("--validation-mode", choices=("bc_diagnostic", "training_probe"), default=None)
+    parser.add_argument("--validation-mode", choices=("bc_diagnostic", "training_probe", "porto_practice_diagnostic"), default=None)
+    parser.add_argument("--porto-practice-laps", type=int, default=3,
+                        help="Scored laps for porto_practice_diagnostic only")
     args = parser.parse_args(argv)
     evaluate(
         args.model,
@@ -1151,6 +1372,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         frontier_stall_after_s=args.frontier_stall_after_s,
         route_monitor_only=args.route_monitor_only,
         validation_mode=args.validation_mode,
+        porto_practice_laps=args.porto_practice_laps,
     )
     return 0
 

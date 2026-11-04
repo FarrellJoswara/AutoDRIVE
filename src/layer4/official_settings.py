@@ -49,6 +49,13 @@ class OfficialTrainSettings(BaseModel):
     )
     # Windows offscreen keeps the GPU graphics device; macOS offscreen uses batch/nographics.
     simulator_display_mode: Literal["gui", "offscreen"] = Field(default_factory=_default_display_mode)
+    # None preserves the backend's legacy route. Explicit profiles pin the route
+    # independently of image labels and are verified against the runtime scene.
+    track_profile: Optional[Literal["competition", "practice"]] = None
+    simulator_executable: Optional[str] = None
+    # Opt-in native official-run safeguard. Zero preserves legacy watchdog
+    # behavior; enabled values neutralize both actuators before the 250 ms lease.
+    safe_neutral_fallback_s: float = Field(default=0.0, ge=0.0, lt=0.25)
     n_envs: int = Field(default=1, ge=1, le=8)
     total_timesteps: int = Field(default=1_000_000, ge=0)
     stop_on_plateau: bool = True
@@ -73,6 +80,10 @@ class OfficialTrainSettings(BaseModel):
     automatic_evaluation_mode: Literal["competitive", "training_probe"] = "competitive"
     behavior_cloning_enabled: bool = True
     behavior_cloning_only: bool = False
+    behavior_cloning_collect_only: bool = False
+    behavior_cloning_clean_laps: int = Field(default=10, ge=1, le=100)
+    behavior_cloning_required_clean_episodes: int = Field(default=2, ge=1, le=100)
+    behavior_cloning_wall_timeout_s: float = Field(default=1800.0, gt=0, le=86400)
     behavior_cloning_steps_per_env: int = Field(default=4000, ge=2, le=100_000)
     behavior_cloning_epochs: int = Field(default=8, ge=1, le=100)
     behavior_cloning_batch_size: int = Field(default=256, ge=8, le=4096)
@@ -118,6 +129,7 @@ class OfficialTrainSettings(BaseModel):
         values = {
             "AICAR_MODE": "train",
             "AICAR_SIMULATOR_BACKEND": self.simulator_backend,
+            "AICAR_OFFICIAL_SAFE_NEUTRAL_FALLBACK_S": str(self.safe_neutral_fallback_s),
             "AICAR_TRAIN_N_ENVS": str(self.n_envs),
             "HUB_URL": hub_url,
             "AICAR_RUN_ID": run_id,
@@ -138,6 +150,10 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_AUTO_EVALUATION_MODE": self.automatic_evaluation_mode,
             "AICAR_BEHAVIOR_CLONING_ENABLED": "1" if self.behavior_cloning_enabled else "0",
             "AICAR_BEHAVIOR_CLONING_ONLY": "1" if self.behavior_cloning_only else "0",
+            "AICAR_BEHAVIOR_CLONING_COLLECT_ONLY": "1" if self.behavior_cloning_collect_only else "0",
+            "AICAR_BEHAVIOR_CLONING_CLEAN_LAPS": str(self.behavior_cloning_clean_laps),
+            "AICAR_BEHAVIOR_CLONING_REQUIRED_CLEAN_EPISODES": str(self.behavior_cloning_required_clean_episodes),
+            "AICAR_BEHAVIOR_CLONING_WALL_TIMEOUT_S": str(self.behavior_cloning_wall_timeout_s),
             "AICAR_BEHAVIOR_CLONING_STEPS_PER_ENV": str(self.behavior_cloning_steps_per_env),
             "AICAR_BEHAVIOR_CLONING_EPOCHS": str(self.behavior_cloning_epochs),
             "AICAR_BEHAVIOR_CLONING_BATCH_SIZE": str(self.behavior_cloning_batch_size),
@@ -168,6 +184,10 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_NEGATIVE_THROTTLE_MODE": self.negative_throttle_mode,
             "AICAR_STEERING_MODE": self.steering_mode,
         }
+        if self.track_profile is not None:
+            values["AICAR_OFFICIAL_TRACK_PROFILE"] = self.track_profile
+        if self.simulator_executable:
+            values["AICAR_OFFICIAL_SIMULATOR_EXE"] = self.simulator_executable
         if self.target_kl is not None:
             values["AICAR_PPO_TARGET_KL"] = str(self.target_kl)
         if self.exploration_profile is not None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import time
 import math
+import os
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, Optional
 
@@ -36,6 +37,10 @@ class RaceMetrics:
     collision_count: int = 0
     position: Optional[tuple[float, float, float]] = None
     position_received_at: float = 0.0
+    lap_count_update_count: int = 0
+    lap_count_change_count: int = 0
+    last_lap_time_update_count: int = 0
+    last_lap_time_update_count_at_lap_count: int = 0
 
 
 def _xyz(value: Any) -> str:
@@ -193,6 +198,7 @@ class RacerRos2:
         include_race_metrics: bool = False,
         allow_training_reset: bool = False,
         require_camera: bool = False,
+        safe_neutral_fallback_s: Optional[float] = None,
     ) -> None:
         self.port = 0  # compatibility with Layer 2 diagnostics; ROS uses topics
         self.action_interval_s = None
@@ -201,6 +207,15 @@ class RacerRos2:
         self.include_race_metrics = bool(include_race_metrics)
         self.allow_training_reset = bool(allow_training_reset)
         self.require_camera = bool(require_camera)
+        if safe_neutral_fallback_s is None:
+            configured_fallback = os.getenv("AICAR_OFFICIAL_SAFE_NEUTRAL_FALLBACK_S", "0")
+            try:
+                safe_neutral_fallback_s = float(configured_fallback)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("AICAR_OFFICIAL_SAFE_NEUTRAL_FALLBACK_S must be numeric") from exc
+        self.safe_neutral_fallback_s = float(safe_neutral_fallback_s)
+        if not math.isfinite(self.safe_neutral_fallback_s) or not 0.0 <= self.safe_neutral_fallback_s < 0.25:
+            raise ValueError("safe_neutral_fallback_s must be finite and in [0, 0.25)")
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         if self.frame_timeout_s <= 0:
@@ -248,6 +263,7 @@ class RacerRos2:
         self._telemetry = TelemetrySnapshot(lidar_valid=False)
         self._race_metrics = RaceMetrics()
         self._race_metrics_received: set[str] = set()
+        self._race_metric_update_counts: Dict[str, int] = {}
         self._position_update_count = 0
         self._last_scan_receipt = 0.0
         self._last_scan_source_time: Optional[float] = None
@@ -256,8 +272,21 @@ class RacerRos2:
         self._last_scan_interval_source = "receipt_clock"
         self._last_control_scan_receipt = 0.0
         self._last_action_time = 0.0
+        self._last_policy_action = {"throttle": 0.0, "steering": 0.0}
         self._command_expired = False
         self.command_expiry_count = 0
+        self._command_expiry_diagnostic: Optional[Dict[str, Any]] = None
+        self.neutral_fallback_count = 0
+        self._neutral_fallback_diagnostic: Optional[Dict[str, Any]] = None
+        self._callback_receipts: Dict[str, float] = {}
+        self._callback_gaps_s: Dict[str, float] = {}
+        self._callback_durations_s: Dict[str, float] = {}
+        self._max_callback_durations_s: Dict[str, float] = {}
+        self._spin_iteration_started_at = 0.0
+        self._spin_iteration_finished_at = 0.0
+        self._last_spin_gap_s = 0.0
+        self._last_spin_iteration_s = 0.0
+        self._max_spin_iteration_s = 0.0
         self._last_control_interval_s = 0.0
         self._last_control_wall_interval_s = 0.0
         self._sim_time = 0.0
@@ -316,7 +345,20 @@ class RacerRos2:
         self._spin_state = "running"
         try:
             while not self._closed and self._rclpy is not None and self._rclpy.ok():
+                iteration_started = time.monotonic()
                 self._rclpy.spin_once(self.node, timeout_sec=0.05)
+                iteration_finished = time.monotonic()
+                with self._condition:
+                    self._spin_iteration_started_at = iteration_started
+                    self._last_spin_gap_s = (
+                        max(0.0, iteration_started - self._spin_iteration_finished_at)
+                        if self._spin_iteration_finished_at else 0.0
+                    )
+                    self._last_spin_iteration_s = max(0.0, iteration_finished - iteration_started)
+                    self._max_spin_iteration_s = max(
+                        self._max_spin_iteration_s, self._last_spin_iteration_s
+                    )
+                    self._spin_iteration_finished_at = iteration_finished
                 self._expire_stale_command()
             if not self._closed:
                 self._fail_transport("ROS context stopped while the racer was active")
@@ -336,22 +378,109 @@ class RacerRos2:
                 self._spin_state = "closed" if self._closed else "stopped"
 
     def _expire_stale_command(self) -> None:
-        """Release latched throttle if the policy stops issuing commands.
+        """Apply an opted-in neutral fallback, then retain the hard lease guard.
 
         Run on the ROS receive thread, independently of policy/preview work.
-        Preserve steering while coasting: straightening during a turn is unsafe.
+        The fallback sends only zero throttle and steering. It never replays a
+        cached action; the caller must deliver a new action after a fresh frame.
         This cannot protect against suspension of the entire host or ROS process.
         """
         with self._condition:
-            if (not self._publishers or not self._last_action_time
-                    or self._command_expired
-                    or time.monotonic() - self._last_action_time <= 0.25):
+            if not self._publishers or not self._last_action_time or self._command_expired:
                 return
-            message = self._msg_types["Float32"]()
-            message.data = 0.0
-            self._publishers["throttle"].publish(message)
+            now = time.monotonic()
+            action_age = max(0.0, now - self._last_action_time)
+            policy_action = getattr(self, "_last_policy_action", {"throttle": 0.0, "steering": 0.0})
+            fallback_s = float(getattr(self, "safe_neutral_fallback_s", 0.0))
+            action_is_non_neutral = any(
+                abs(float(value)) > 1e-9 for value in policy_action.values()
+            )
+            if (fallback_s > 0.0 and action_is_non_neutral and action_age <= 0.25
+                    and action_age >= fallback_s):
+                self._publish_neutral_command()
+                self._neutral_fallback_diagnostic = {
+                    "step_counter": int(getattr(self, "_step_counter", 0)),
+                    "neutralized_at_monotonic_s": now,
+                    "action_age_s": action_age,
+                    "threshold_s": fallback_s,
+                    "reason": "policy_action_waiting_for_fresh_sensor_frame",
+                    "previous_policy_action": dict(policy_action),
+                    "active_action": {"throttle": 0.0, "steering": 0.0},
+                    "feedback": self._actuator_feedback_diagnostic(),
+                    "last_scan_age_s": (
+                        None if not getattr(self, "_last_scan_receipt", 0.0)
+                        else max(0.0, now - self._last_scan_receipt)
+                    ),
+                    "topic_age_s": {
+                        name: max(0.0, now - receipt)
+                        for name, receipt in getattr(self, "_raw_receipts", {}).items()
+                    },
+                }
+                self.neutral_fallback_count += 1
+                self._last_policy_action = {"throttle": 0.0, "steering": 0.0}
+                self._command_expired = True
+                return
+            if action_age <= 0.25:
+                return
+            self._command_expiry_diagnostic = {
+                "step_counter": int(getattr(self, "_step_counter", 0)),
+                "expired_at_monotonic_s": now,
+                "last_action_at_monotonic_s": self._last_action_time,
+                "action_age_s": action_age,
+                "reason": "hard_command_lease_exceeded_before_neutral_fallback",
+                "active_action": dict(policy_action),
+                "feedback": self._actuator_feedback_diagnostic(),
+                "last_scan_age_s": (
+                    None if not getattr(self, "_last_scan_receipt", 0.0)
+                    else max(0.0, now - self._last_scan_receipt)
+                ),
+                "topic_age_s": {
+                    name: max(0.0, now - receipt)
+                    for name, receipt in getattr(self, "_raw_receipts", {}).items()
+                },
+                "last_callback_gap_s": dict(getattr(self, "_callback_gaps_s", {})),
+                "last_callback_duration_s": dict(getattr(self, "_callback_durations_s", {})),
+                "max_callback_duration_s": dict(getattr(self, "_max_callback_durations_s", {})),
+                "last_spin_gap_s": float(getattr(self, "_last_spin_gap_s", 0.0)),
+                "last_spin_iteration_s": float(getattr(self, "_last_spin_iteration_s", 0.0)),
+                "max_spin_iteration_s": float(getattr(self, "_max_spin_iteration_s", 0.0)),
+                "spin_state": getattr(self, "_spin_state", "unknown"),
+            }
+            if fallback_s > 0.0:
+                self._publish_neutral_command()
+            else:
+                self._publish_throttle_zero()
+            self._last_policy_action = {"throttle": 0.0, "steering": 0.0}
             self._command_expired = True
             self.command_expiry_count += 1
+
+    def _publish_neutral_command(self) -> None:
+        """Publish a fresh all-zero command without reusing any policy values."""
+        for actuator in ("throttle", "steering"):
+            publisher = self._publishers.get(actuator)
+            if publisher is None:
+                continue
+            message = self._msg_types["Float32"]()
+            message.data = 0.0
+            publisher.publish(message)
+
+    def _publish_throttle_zero(self) -> None:
+        publisher = self._publishers.get("throttle")
+        if publisher is not None:
+            message = self._msg_types["Float32"]()
+            message.data = 0.0
+            publisher.publish(message)
+
+    def _actuator_feedback_diagnostic(self) -> Dict[str, Any]:
+        raw = getattr(self, "_raw", {})
+        return {
+            name: {
+                "value": float(raw[name].data),
+                "age_s": max(0.0, time.monotonic() - self._raw_receipts[name]),
+            }
+            for name in ("throttle", "steering")
+            if name in raw and hasattr(raw[name], "data") and name in self._raw_receipts
+        }
 
     def _fail_transport(self, message: str, cause: Optional[BaseException] = None) -> None:
         with self._condition:
@@ -416,6 +545,14 @@ class RacerRos2:
                 "topic_age_s": topic_age_s,
                 "topic_fresh": fresh,
                 "required_topics": required,
+                "command_expiry_diagnostic": getattr(
+                    self, "_command_expiry_diagnostic", None
+                ),
+                "safe_neutral_fallback_s": float(getattr(self, "safe_neutral_fallback_s", 0.0)),
+                "neutral_fallback_count": int(getattr(self, "neutral_fallback_count", 0)),
+                "neutral_fallback_diagnostic": getattr(
+                    self, "_neutral_fallback_diagnostic", None
+                ),
             }
 
     def request_pause_neutral(self) -> Dict[str, Any]:
@@ -457,6 +594,38 @@ class RacerRos2:
 
     def _on_message(self, field: str, message: Any) -> None:
         now = time.monotonic()
+        with self._condition:
+            callback_receipts = getattr(self, "_callback_receipts", None)
+            if callback_receipts is None:
+                callback_receipts = self._callback_receipts = {}
+            previous = callback_receipts.get(field)
+            if previous is not None:
+                callback_gaps = getattr(self, "_callback_gaps_s", None)
+                if callback_gaps is None:
+                    callback_gaps = self._callback_gaps_s = {}
+                callback_gaps[field] = max(0.0, now - previous)
+            callback_receipts[field] = now
+        try:
+            self._on_message_impl(field, message, received_at=now)
+        finally:
+            finished = time.monotonic()
+            duration = max(0.0, finished - now)
+            with self._condition:
+                callback_durations = getattr(self, "_callback_durations_s", None)
+                if callback_durations is None:
+                    callback_durations = self._callback_durations_s = {}
+                max_callback_durations = getattr(self, "_max_callback_durations_s", None)
+                if max_callback_durations is None:
+                    max_callback_durations = self._max_callback_durations_s = {}
+                callback_durations[field] = duration
+                max_callback_durations[field] = max(
+                    duration, max_callback_durations.get(field, 0.0)
+                )
+
+    def _on_message_impl(
+        self, field: str, message: Any, *, received_at: Optional[float] = None
+    ) -> None:
+        now = time.monotonic() if received_at is None else received_at
         source_time = _ros_message_timestamp(message) if field == "scan" else None
         with self._condition:
             if field == "camera":
@@ -486,8 +655,23 @@ class RacerRos2:
                 "lap_count", "lap_time", "last_lap_time", "best_lap_time", "collision_count"
             }:
                 value = int(message.data) if field in {"lap_count", "collision_count"} else float(message.data)
-                self._race_metrics = replace(self._race_metrics, **{field: value})
                 self._race_metrics_received.add(field)
+                self._race_metric_update_counts[field] = (
+                    self._race_metric_update_counts.get(field, 0) + 1
+                )
+                update = {field: value}
+                if field == "lap_count":
+                    update["lap_count_update_count"] = self._race_metric_update_counts[field]
+                    update["lap_count_change_count"] = (
+                        self._race_metrics.lap_count_change_count
+                        + int(int(value) != int(self._race_metrics.lap_count))
+                    )
+                    update["last_lap_time_update_count_at_lap_count"] = (
+                        self._race_metric_update_counts.get("last_lap_time", 0)
+                    )
+                elif field == "last_lap_time":
+                    update["last_lap_time_update_count"] = self._race_metric_update_counts[field]
+                self._race_metrics = replace(self._race_metrics, **update)
                 self._condition.notify_all()
                 return
             if field == "scan":
@@ -670,6 +854,75 @@ class RacerRos2:
             self._raise_if_training_reset_cancelled(cancel_check)
             return self._race_metrics
 
+    def wait_for_lap_time_update(
+        self,
+        after_update_count: int,
+        *,
+        timeout_s: Optional[float] = None,
+    ) -> Optional[RaceMetrics]:
+        """Wait for a last-lap-time callback newer than a lap-count event."""
+        timeout = self.frame_timeout_s if timeout_s is None else float(timeout_s)
+        if timeout <= 0:
+            raise ValueError("timeout_s must be positive")
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while self._race_metrics.last_lap_time_update_count <= int(after_update_count):
+                self._check_wait_state()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(min(remaining, 0.05))
+            return self._race_metrics
+
+    def _wait_for_fresh_reset_metrics(
+        self,
+        previous_update_counts: Dict[str, int],
+        *,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> RaceMetrics:
+        """Wait for a stable lap counter and fresh race fields after reset.
+
+        A training reset can move the official lap counter back to zero. The
+        first cached metric snapshot may still contain the pre-reset count, so
+        the environment must not anchor its episode baseline to that snapshot.
+        """
+        required = {
+            "lap_count", "lap_time", "last_lap_time", "best_lap_time",
+            "collision_count",
+        }
+        deadline = time.monotonic() + self.frame_timeout_s
+        stable_lap_updates = 0
+        last_lap_update_count = int(previous_update_counts.get("lap_count", 0))
+        last_lap_value: Optional[int] = None
+        with self._condition:
+            while True:
+                self._raise_if_training_reset_cancelled(cancel_check)
+                self._check_wait_state()
+                counts = getattr(self, "_race_metric_update_counts", {})
+                all_fresh = all(
+                    int(counts.get(name, 0)) > int(previous_update_counts.get(name, 0))
+                    for name in required
+                )
+                lap_update_count = int(counts.get("lap_count", 0))
+                if lap_update_count > last_lap_update_count:
+                    lap_value = int(self._race_metrics.lap_count)
+                    stable_lap_updates = (
+                        stable_lap_updates + 1 if last_lap_value == lap_value else 1
+                    )
+                    last_lap_value = lap_value
+                    last_lap_update_count = lap_update_count
+                if all_fresh and stable_lap_updates >= 2:
+                    return self._race_metrics
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise OfficialRosTransportError(
+                        "Timed out waiting for fresh, stable official race metrics after training reset; "
+                        f"fresh_fields={sorted(name for name in required if int(counts.get(name, 0)) > int(previous_update_counts.get(name, 0)))}, "
+                        f"stable_lap_updates={stable_lap_updates}, lap_count={self._race_metrics.lap_count}; "
+                        + self._transport_diagnostic()
+                    )
+                self._condition.wait(min(remaining, 0.1))
+
     def reset_simulation_for_training(
         self,
         *,
@@ -701,11 +954,15 @@ class RacerRos2:
             if cancel_check is None
             else self.wait_until_ready(cancel_check=cancel_check)
         )
+        reset_metric_update_counts: Dict[str, int] = {}
         for attempt in range(reset_attempts):
             self._raise_if_training_reset_cancelled(cancel_check)
             with self._condition:
                 previous_step = self._step_counter
                 previous_position_update = self._position_update_count
+                reset_metric_update_counts = dict(
+                    getattr(self, "_race_metric_update_counts", {})
+                )
             reset_msg = self._msg_types["Bool"]()
             reset_msg.data = True
             publisher.publish(reset_msg)
@@ -757,6 +1014,11 @@ class RacerRos2:
                     self._condition.wait(min(remaining, 0.1))
             if reached_spawn:
                 break
+        if self.include_race_metrics:
+            self._wait_for_fresh_reset_metrics(
+                reset_metric_update_counts,
+                cancel_check=cancel_check,
+            )
         with self._condition:
             self._last_action_time = 0.0
             self._last_control_scan_receipt = 0.0
@@ -785,14 +1047,21 @@ class RacerRos2:
                 self._telemetry.lidar_scan_rate,
             )
             self._last_action_time = command_time
+            self._last_policy_action = {
+                "throttle": float(throttle), "steering": float(steering)
+            }
             self._command_expired = False
-        if self._publishers:
-            throttle_msg = self._msg_types["Float32"]()
-            throttle_msg.data = float(throttle)
-            steering_msg = self._msg_types["Float32"]()
-            steering_msg.data = float(steering)
-            self._publishers["throttle"].publish(throttle_msg)
-            self._publishers["steering"].publish(steering_msg)
+            # Keep the publish in the same critical section as the closed
+            # check. kill() takes this lock before its terminal neutral, so a
+            # policy action cannot slip onto the DDS topics after shutdown has
+            # released the actuators.
+            if self._publishers:
+                throttle_msg = self._msg_types["Float32"]()
+                throttle_msg.data = float(throttle)
+                steering_msg = self._msg_types["Float32"]()
+                steering_msg.data = float(steering)
+                self._publishers["throttle"].publish(throttle_msg)
+                self._publishers["steering"].publish(steering_msg)
         snap = self._wait_for_control_frame(
             previous_step, command_time=command_time, earliest_time=earliest_time
         )
@@ -858,24 +1127,55 @@ class RacerRos2:
         return None
 
     def kill(self) -> None:
-        if self._cleanup_complete:
+        if getattr(self, "_cleanup_complete", False):
             return
-        with self._condition:
+        condition = getattr(self, "_condition", None)
+        if condition is None:
             self._closed = True
+            self._cleanup_complete = True
+            return
+        with condition:
+            if getattr(self, "_cleanup_complete", False):
+                return
+            # Mark closed before publishing neutral, while holding the same
+            # lock step() uses through its command publish. A concurrent caller
+            # can therefore neither start a new action nor resume with stale
+            # throttle after shutdown begins.
+            self._closed = True
+            self._last_policy_action = {"throttle": 0.0, "steering": 0.0}
+            self._last_action_time = 0.0
+            self._command_expired = True
+            publishers = getattr(self, "_publishers", {})
+            msg_types = getattr(self, "_msg_types", None)
+            if (publishers.get("throttle") is not None
+                    and publishers.get("steering") is not None
+                    and isinstance(msg_types, dict) and msg_types.get("Float32") is not None):
+                publish_errors = {}
+                for actuator in ("throttle", "steering"):
+                    try:
+                        message = msg_types["Float32"]()
+                        message.data = 0.0
+                        publishers[actuator].publish(message)
+                    except Exception as exc:
+                        publish_errors[actuator] = f"{type(exc).__name__}: {exc}"
+                self._shutdown_neutral_publish_errors = publish_errors
             self._condition.notify_all()
-        if self._thread is not None:
+        thread = getattr(self, "_thread", None)
+        if thread is not None:
             # spin_once is bounded to 50 ms. Join it before destroying the node
             # or shutting down the context, avoiding concurrent executor teardown.
-            self._thread.join(timeout=1.0)
-            if self._thread.is_alive():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
                 raise OfficialRosTransportError(
                     "ROS receive thread did not exit after its bounded spin wait; "
                     "node/context were left intact to avoid a teardown race"
                 )
-        if self._owned_node:
+        if (getattr(self, "_owned_node", False)
+                and getattr(self, "node", None) is not None):
             try:
                 self.node.destroy_node()
             finally:
-                if self._rclpy is not None and self._rclpy.ok():
+                rclpy = getattr(self, "_rclpy", None)
+                if rclpy is not None and rclpy.ok():
                     self._rclpy.shutdown()
         self._cleanup_complete = True

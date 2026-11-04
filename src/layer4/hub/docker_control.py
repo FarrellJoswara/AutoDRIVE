@@ -7,12 +7,34 @@ import json
 import os
 import re
 import socket
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 DOCKER_SOCKET = os.environ.get("AICAR_DOCKER_SOCKET", "/var/run/docker.sock")
+DOCKER_HOST = os.environ.get(
+    "AICAR_DOCKER_HOST",
+    "npipe:////./pipe/dockerDesktopLinuxEngine" if os.name == "nt" else "",
+).strip()
 COMPOSE_PROJECT = os.environ.get("AICAR_COMPOSE_PROJECT", "aicar")
+_DOCKER_NPIPE_CLIENT = None
+
+
+def _named_pipe_client():
+    """Return the SDK transport for the Windows Docker Desktop named pipe."""
+    global _DOCKER_NPIPE_CLIENT
+    if not DOCKER_HOST:
+        return None
+    if _DOCKER_NPIPE_CLIENT is None:
+        try:
+            import docker
+        except ImportError as exc:
+            raise RuntimeError(
+                "Windows Docker control requires the docker SDK and pywin32"
+            ) from exc
+        _DOCKER_NPIPE_CLIENT = docker.APIClient(base_url=DOCKER_HOST, version="auto")
+    return _DOCKER_NPIPE_CLIENT
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
@@ -35,6 +57,25 @@ def _request(
     the HTTP client must wait longer than that period or it can report a false
     timeout while Docker is still completing the requested operation.
     """
+    npipe_client = _named_pipe_client()
+    if npipe_client is not None:
+        response = npipe_client.request(
+            method,
+            npipe_client._url(path),
+            json=body,
+            timeout=timeout_s,
+            headers={"Host": "localhost"},
+        )
+        payload = response.content
+        if response.status_code not in range(200, 300) and response.status_code != 304:
+            detail = payload.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Docker API {method} {path}: {response.status_code} {detail}"
+            )
+        if not payload:
+            return None
+        return response.json()
+
     conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=timeout_s)
     try:
         payload = json.dumps(body).encode("utf-8") if body is not None else None
@@ -139,6 +180,13 @@ def create_official_run_container(
         config["NetworkingConfig"] = {
             "EndpointsConfig": {network_name: {"Aliases": [role, name]}}
         }
+    # A loopback-only server hub cannot receive callbacks through the host
+    # gateway. API workers optionally join its control network, while keeping
+    # simulator aliases isolated on the run network.
+    hub_network = os.environ.get("AICAR_HUB_DOCKER_NETWORK", "").strip()
+    if hub_network and role.startswith("api") and hub_network != network_name:
+        config.setdefault("NetworkingConfig", {"EndpointsConfig": {}})
+        config["NetworkingConfig"]["EndpointsConfig"][hub_network] = {"Aliases": [name]}
     if published_ports:
         config["ExposedPorts"] = {f"{int(container_port)}/tcp": {} for container_port in published_ports}
         config["HostConfig"]["PortBindings"] = {
@@ -202,6 +250,34 @@ def remove_official_run_container(container_id: str) -> None:
 
 def official_run_container_logs(container_id: str) -> str:
     """Return all currently buffered stdout/stderr for a run container."""
+    npipe_client = _named_pipe_client()
+    if npipe_client is not None:
+        path = f"/containers/{quote(container_id, safe='')}/logs?stdout=1&stderr=1&timestamps=1"
+        response = npipe_client.get(
+            npipe_client._url(path),
+            headers={"Host": "localhost"},
+            timeout=30.0,
+        )
+        data = response.content
+        if response.status_code not in range(200, 300):
+            raise RuntimeError(
+                f"Docker API GET {path}: {response.status_code} "
+                f"{data.decode('utf-8', errors='replace')}"
+            )
+        chunks: List[bytes] = []
+        offset = 0
+        framed = bool(data) and data[0] in (1, 2)
+        while framed and offset + 8 <= len(data):
+            size = int.from_bytes(data[offset + 4:offset + 8], "big")
+            end = offset + 8 + size
+            if end > len(data):
+                framed = False
+                break
+            chunks.append(data[offset + 8:end])
+            offset = end
+        payload = b"".join(chunks) if framed and offset == len(data) else data
+        return payload.decode("utf-8", errors="replace")
+
     conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=30.0)
     try:
         path = f"/containers/{quote(container_id, safe='')}/logs?stdout=1&stderr=1&timestamps=1"
@@ -230,6 +306,35 @@ def official_run_container_logs(container_id: str) -> str:
         return payload.decode("utf-8", errors="replace")
     finally:
         conn.close()
+
+
+def wait_official_run_container_ready(
+    container_id: str, *, timeout_s: float = 90.0,
+    readiness_event: str = '"event": "ready"',
+) -> str:
+    """Wait for a run supervisor's ready event, failing on early container exit."""
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    last_logs = ""
+    while time.monotonic() < deadline:
+        last_logs = official_run_container_logs(container_id)
+        state = inspect_container(container_id).get("State") or {}
+        if readiness_event in last_logs:
+            if not state.get("Running", False):
+                raise RuntimeError(
+                    "official run container exited after reporting readiness; "
+                    f"exit={state.get('ExitCode')} logs={last_logs[-4000:]}"
+                )
+            return last_logs
+        if not state.get("Running", False):
+            raise RuntimeError(
+                "official run supervisor exited before readiness; "
+                f"exit={state.get('ExitCode')} logs={last_logs[-6000:]}"
+            )
+        time.sleep(0.25)
+    raise TimeoutError(
+        f"official run container did not report {readiness_event!r} within "
+        f"{timeout_s:.1f}s; logs={last_logs[-6000:]}"
+    )
 
 
 def find_host_path_for_container_path(container_path: Path) -> Path:

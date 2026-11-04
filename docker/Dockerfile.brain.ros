@@ -1,0 +1,85 @@
+# ROS Jazzy API/training image. Kept separate from the Mission Control-only API
+# image so the official simulator remains independently pinned and unchanged.
+FROM node:20-bookworm-slim AS web-build
+WORKDIR /web
+COPY src/layer4/web/package.json src/layer4/web/package-lock.json* src/layer4/web/.npmrc* ./
+RUN npm install --no-audit --no-fund --legacy-peer-deps
+COPY src/layer4/web/ ./
+RUN npm run build
+
+FROM ros:jazzy-ros-base@sha256:c26c86a28e1addf9d10a81232869791974a3f7907943d5634742b58b2f26e1a3
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONNOUSERSITE=1 \
+    AICAR_ROS_DISTRO=jazzy
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git python3-venv python3-dev python3-colcon-common-extensions \
+      python3-rosdep ros-jazzy-ros2launch ros-jazzy-launch-ros \
+      ros-jazzy-rclpy ros-jazzy-std-msgs ros-jazzy-geometry-msgs \
+      ros-jazzy-sensor-msgs ros-jazzy-nav-msgs ros-jazzy-tf2-ros \
+      ros-jazzy-cv-bridge ros-jazzy-tf-transformations \
+      python3-opencv python3-pil python3-gevent python3-gevent-websocket \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN python3 -m venv --system-site-packages /opt/aicar-venv
+ENV PATH=/opt/aicar-venv/bin:$PATH
+
+# Keep the CUDA-enabled torch build used by the verified continuation. All
+# other application dependencies follow the repository requirements file.
+COPY requirements.txt /app/requirements.txt
+RUN printf '%s\n' \
+      'torch==2.7.1' \
+      'stable-baselines3==2.8.0' \
+      'gymnasium==1.2.3' \
+      'numpy==1.26.4' \
+      'cloudpickle==3.1.2' \
+      > /tmp/ppo-constraints.txt \
+    && pip install --upgrade pip \
+    && pip install --no-cache-dir 'torch==2.7.1' --index-url https://download.pytorch.org/whl/cu126 \
+    && grep -vE '^[[:space:]]*(torch|opencv-python-headless)([=<>!~]|[[:space:]]*$)' /app/requirements.txt > /tmp/requirements.notorch.txt \
+    && pip install --no-cache-dir -c /tmp/ppo-constraints.txt -r /tmp/requirements.notorch.txt \
+    && python -c "import gymnasium,numpy,stable_baselines3,torch; print('Python PPO stack:', gymnasium.__version__,numpy.__version__,stable_baselines3.__version__,torch.__version__)"
+
+# The official Devkit config imports AttrDict directly. The upstream attrdict
+# package is broken on Python 3.12; attrdict3 provides the compatible module.
+RUN pip install --no-cache-dir attrdict3==2.0.2
+
+# Pin the exact upstream package revision used by the accepted WSL runtime,
+# then reproduce its documented AICAR_DEVKIT_PORT patch for isolated runs.
+ARG AUTODRIVE_DEVKIT_COMMIT=fde15908fcf41f23d0e7519d1682f4a04b5f73cf
+RUN git clone https://github.com/AutoDRIVE-Ecosystem/AutoDRIVE-RoboRacer-Sim-Racing.git /tmp/autodrive-source \
+    && git -C /tmp/autodrive-source checkout --detach "${AUTODRIVE_DEVKIT_COMMIT}" \
+    && mkdir -p /opt/autodrive_ws/src \
+    && cp -a /tmp/autodrive-source/autodrive_devkit /opt/autodrive_ws/src/autodrive_devkit
+COPY docker/patch_official_devkit_port.py /app/docker/patch_official_devkit_port.py
+RUN python /app/docker/patch_official_devkit_port.py \
+      /opt/autodrive_ws/src/autodrive_devkit/autodrive_roboracer/autodrive_bridge.py \
+    && test "$(sha256sum /opt/autodrive_ws/src/autodrive_devkit/autodrive_roboracer/autodrive_bridge.py | cut -d ' ' -f1)" = "6daa7c7ac0e4685b8fef70abf820aa8635ae198e8583b2efda5d3147bf7ba288" \
+    && /bin/bash -lc 'set +u; source /opt/ros/jazzy/setup.bash; cd /opt/autodrive_ws; colcon build --symlink-install'
+
+COPY . /app/
+COPY --from=web-build /web/dist /app/static/mission-control
+COPY --from=web-build /web/dist /app/src/layer4/web/dist
+
+# Optional migration compatibility: preserve authenticated Windows/WSL artifact
+# paths without rewriting checkpoints, lineage records, or their hashes.
+# Both hub and workers see one canonical /runs tree in this mode.
+ARG AICAR_LEGACY_REPO_ROOT=
+RUN if [ -n "$AICAR_LEGACY_REPO_ROOT" ]; then \
+      test ! -e /app/logs && ln -s /runs /app/logs \
+      && mkdir -p "$(dirname "$AICAR_LEGACY_REPO_ROOT")" \
+      && ln -s /app "$AICAR_LEGACY_REPO_ROOT"; \
+    fi
+
+ENV AICAR_AUTODRIVE_WORKSPACE=/opt/autodrive_ws \
+    AICAR_SIMULATOR_PATH="/app/simulator/AutoDRIVE Simulator.x86_64" \
+    READY_PORT=8090 HUB_PORT=8090 HUB_URL=http://127.0.0.1:8090 \
+    MISSION_CONTROL_DIST=/app/static/mission-control
+
+RUN chmod +x /app/docker/entrypoint-brain.sh
+ENTRYPOINT ["/app/docker/entrypoint-brain.sh"]
+CMD ["python", "-m", "uvicorn", "src.layer4.hub.app:app", "--host", "0.0.0.0", "--port", "8090"]

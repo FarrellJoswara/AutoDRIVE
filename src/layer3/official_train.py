@@ -558,7 +558,13 @@ def train_official(
     exploration_max_std_steering: Optional[float] = None,
     behavior_cloning_enabled: bool = True,
     behavior_cloning_only: bool = False,
+    behavior_cloning_collect_only: bool = False,
+    behavior_cloning_dataset_path: Optional[Path] = None,
+    behavior_cloning_acceptance_path: Optional[Path] = None,
     behavior_cloning_steps_per_env: int = 4000,
+    behavior_cloning_wall_timeout_s: float = 1800.0,
+    behavior_cloning_clean_laps: int = 10,
+    behavior_cloning_required_clean_episodes: int = 2,
     behavior_cloning_epochs: int = 8,
     behavior_cloning_batch_size: int = 256,
     behavior_cloning_learning_rate: float = 1e-3,
@@ -669,6 +675,31 @@ def train_official(
         raise ValueError("behavior_cloning_steps_per_env must be >= 2 when cloning is enabled")
     if behavior_cloning_only and (not behavior_cloning_enabled or resume is not None):
         raise ValueError("behavior_cloning_only requires a new run with behavior cloning enabled")
+    if behavior_cloning_collect_only and (
+        not behavior_cloning_enabled or behavior_cloning_only or resume is not None
+        or total_timesteps != 0 or automatic_evaluation_enabled
+    ):
+        raise ValueError(
+            "behavior-cloning collect-only requires fresh BC enabled, zero PPO timesteps, and automatic evaluation disabled"
+        )
+    if behavior_cloning_collect_only and (
+        n_envs != 1 or behavior_cloning_required_clean_episodes < 2
+        or behavior_cloning_clean_laps != race_laps * behavior_cloning_required_clean_episodes
+        or behavior_cloning_wall_timeout_s <= 0 or behavior_cloning_steps_per_env < 2
+    ):
+        raise ValueError(
+            "collect-only requires one env, at least two clean episodes, matching lap goals, and bounded steps/wall time"
+        )
+    if behavior_cloning_dataset_path is not None and (
+        not behavior_cloning_enabled or not behavior_cloning_only
+        or behavior_cloning_acceptance_path is None or resume is not None
+        or total_timesteps != 0 or automatic_evaluation_enabled
+    ):
+        raise ValueError(
+            "offline BC fitting requires accepted dataset/record, fresh BC-only mode, zero PPO timesteps, and automatic evaluation disabled"
+        )
+    if behavior_cloning_collect_only and behavior_cloning_dataset_path is not None:
+        raise ValueError("collect-only and offline-fit modes cannot be combined")
     if behavior_cloning_enabled and (
         behavior_cloning_epochs < 1 or behavior_cloning_batch_size < 1
         or behavior_cloning_learning_rate <= 0 or behavior_teacher_max_speed_mps < 0.2
@@ -701,6 +732,21 @@ def train_official(
         raise ValueError("official terminal penalties must exceed the 120-point progress and centerline reward cap")
     if lap_completion_reward != 0:
         raise ValueError("official lap-learning reward uses verified lap completion as a terminal goal, not a lap bonus")
+
+    if behavior_cloning_dataset_path is not None:
+        from src.layer3.behavior_cloning import fit_accepted_behavior_cloned_dataset
+
+        return fit_accepted_behavior_cloned_dataset(
+            behavior_cloning_dataset_path,
+            behavior_cloning_acceptance_path,
+            Path(out_dir),
+            observation_profile=observation_profile,
+            epochs=behavior_cloning_epochs,
+            batch_size=behavior_cloning_batch_size,
+            learning_rate=behavior_cloning_learning_rate,
+            seed=seed,
+            device=device,
+        )
 
     from stable_baselines3.common.logger import configure
     from stable_baselines3.common.callbacks import BaseCallback
@@ -832,7 +878,7 @@ def train_official(
             return True
 
     stop_requested = threading.Event()
-    from src.layer3.official_tracks import official_frontier_path, verify_windows_scene
+    from src.layer3.official_tracks import WINDOWS_SCENES, official_frontier_path, verify_windows_scene
     selected_frontier_path = official_frontier_path()
     scene_verification = (
         verify_windows_scene(selected_frontier_path)
@@ -878,6 +924,73 @@ def train_official(
                     return False
             return True
 
+    from src.layer3.race_metrics import RaceMetricsJournal
+
+    class _RaceMetricsCallback(BaseCallback):
+        """Persist lap/episode outcomes and post-update checkpoint summaries."""
+
+        def __init__(self, directory: Path, run_id: str, audit_callback: Any) -> None:
+            super().__init__(verbose=0)
+            self.journal = RaceMetricsJournal(directory, run_id)
+            self.audit_callback = audit_callback
+
+        def _on_step(self) -> bool:
+            infos = self.locals.get("infos") or []
+            timestep = int(self.model.num_timesteps)
+            for env_id, raw_info in enumerate(infos):
+                if not isinstance(raw_info, dict):
+                    continue
+                info = raw_info
+                episode_index = self.journal.next_episode_index(env_id)
+                lap_events = info.get("race_lap_events")
+                if isinstance(lap_events, (list, tuple)):
+                    for lap_event in lap_events:
+                        if isinstance(lap_event, dict):
+                            self.journal.record_lap(
+                                timestep=timestep,
+                                env_id=env_id,
+                                episode_index=episode_index,
+                                lap_event=lap_event,
+                                info=info,
+                            )
+                outcome = info.get("race_episode_outcome")
+                if isinstance(outcome, dict):
+                    self.journal.record_episode(
+                        timestep=timestep,
+                        env_id=env_id,
+                        episode_index=episode_index,
+                        outcome=outcome,
+                        info=info,
+                    )
+            return True
+
+        def _record_latest_checkpoint(self) -> None:
+            saved_steps = int(getattr(self.audit_callback, "last_saved_steps", 0))
+            if saved_steps <= 0:
+                return
+            checkpoints = out_dir / "checkpoints"
+            candidates = list(
+                checkpoints.glob(f"post_optimizer_update_*_steps_{saved_steps:012d}.zip")
+            )
+            if not candidates:
+                return
+            target = max(candidates, key=lambda candidate: candidate.name)
+            self.journal.record_checkpoint(
+                timestep=int(self.model.num_timesteps),
+                optimizer_updates=int(getattr(self.model, "_n_updates", 0)),
+                checkpoint_path=target,
+            )
+
+        def _on_rollout_start(self) -> None:
+            # Callback order places this after PostOptimizerAuditCallback, so
+            # any checkpoint saved at this boundary is already durable.
+            self._record_latest_checkpoint()
+
+        def _on_training_end(self) -> None:
+            # The audit callback flushes its final checkpoint before this
+            # callback receives the same lifecycle event.
+            self._record_latest_checkpoint()
+
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "checkpoints").mkdir(exist_ok=True)
@@ -918,6 +1031,150 @@ def train_official(
             training_frontier_stagnation_s=frontier_stagnation_s,
             frontier_path=selected_frontier_path,
         )
+        if behavior_cloning_collect_only:
+            from src.layer3.behavior_cloning import (
+                assess_teacher_collection,
+                collect_centerline_demonstrations,
+            )
+            from src.layer2.route_progress import RouteProgressTracker
+            from src.layer3.expert import CenterlineExpert
+            from src.layer3.official_tracks import official_frontier_path
+
+            practice_route = official_frontier_path(profile="practice").resolve()
+            if selected_frontier_path.resolve() != practice_route:
+                raise ValueError("Porto collection requires AICAR_OFFICIAL_TRACK_PROFILE=practice")
+            runtime_backend = os.environ.get("AICAR_SIMULATOR_BACKEND", "docker")
+            if runtime_backend == "windows_external":
+                executable = os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE", "").strip()
+                if (not executable or not scene_verification
+                        or scene_verification.get("track_profile") != "practice"
+                        or scene_verification.get("scene_sha256") != WINDOWS_SCENES["practice"]
+                        or not scene_verification.get("verified")):
+                    raise ValueError(
+                        "Porto collection requires the verified official Windows practice executable and scene hash"
+                    )
+            elif runtime_backend == "docker":
+                if os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE") != "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice":
+                    raise ValueError("Porto collection requires the verified official practice simulator image")
+            else:
+                raise ValueError(f"Porto collection does not support simulator backend {runtime_backend!r}")
+            route = RouteProgressTracker.from_csv(practice_route)
+            expert = CenterlineExpert(
+                route,
+                max_speed_mps=behavior_teacher_max_speed_mps,
+                lookahead_base_m=0.8,
+            )
+            dataset_path = out_dir / "behavior_cloning_demonstrations.npz"
+            demonstrations, collection = collect_centerline_demonstrations(
+                vec_env,
+                expert,
+                steps=behavior_cloning_steps_per_env,
+                output_path=dataset_path,
+                stagnation_s=frontier_stagnation_s,
+                should_stop=stop_requested.is_set,
+                expected_clean_laps=behavior_cloning_clean_laps,
+                required_clean_episodes=behavior_cloning_required_clean_episodes,
+                laps_per_episode=race_laps,
+                wall_timeout_s=behavior_cloning_wall_timeout_s,
+            )
+            del demonstrations
+            readiness = assess_teacher_collection(
+                collection,
+                expected_clean_laps=behavior_cloning_clean_laps,
+                required_clean_episodes=behavior_cloning_required_clean_episodes,
+                laps_per_episode=race_laps,
+            )
+            collection["readiness"] = readiness
+            collection["status"] = "accepted" if readiness["ready"] else "rejected"
+            (out_dir / "behavior_cloning_collection_summary.json").write_text(
+                json.dumps(collection, indent=2), encoding="utf-8"
+            )
+            boundary_path = Path(collection["collection_boundaries_path"])
+            acceptance_path = out_dir / "behavior_cloning_collection_acceptance.json"
+            if not readiness["ready"]:
+                rejected_dir = out_dir / "rejected_attempts" / "collection_attempt_001"
+                rejected_dir.mkdir(parents=True, exist_ok=True)
+                preserved_paths = {}
+                for name, path in (
+                    ("dataset", dataset_path),
+                    ("trace", out_dir / "teacher_trace.jsonl"),
+                    ("boundaries", boundary_path),
+                ):
+                    if path.is_file():
+                        target = rejected_dir / path.name
+                        path.replace(target)
+                        preserved_paths[name] = str(target)
+                rejection = {
+                    "status": "rejected", "readiness": readiness,
+                    "collection": collection, "preserved_attempt_files": preserved_paths,
+                    "track_profile": "practice", "route_path": str(practice_route),
+                    "route_sha256": _sha256_file(practice_route),
+                }
+                (rejected_dir / "rejection.json").write_text(
+                    json.dumps(rejection, indent=2), encoding="utf-8"
+                )
+                (out_dir / "behavior_cloning_collection_acceptance.json").write_text(
+                    json.dumps(rejection, indent=2), encoding="utf-8"
+                )
+                raise RuntimeError(
+                    "Porto demonstration collection rejected: " + str(readiness.get("reason"))
+                )
+            metadata_path = practice_route.with_name("official_frontier.json")
+            route_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            acceptance = {
+                "status": "accepted", "readiness": readiness,
+                "collection": collection,
+                "dataset_path": str(dataset_path),
+                "dataset_sha256": _sha256_file(dataset_path),
+                "boundaries_path": str(boundary_path),
+                "boundaries_sha256": _sha256_file(boundary_path),
+                "collection_summary_path": str(out_dir / "behavior_cloning_collection_summary.json"),
+                "collection_summary_sha256": _sha256_file(out_dir / "behavior_cloning_collection_summary.json"),
+                "observation_profile": observation_profile,
+                "track_profile": "practice", "route_path": str(practice_route),
+                "route_sha256": _sha256_file(practice_route),
+                "route_metadata_path": str(metadata_path),
+                "route_metadata_sha256": _sha256_file(metadata_path),
+                "simulator_image": (
+                    os.environ.get("AICAR_OFFICIAL_SIMULATOR_IMAGE")
+                    if runtime_backend == "docker" else None
+                ),
+                "simulator_image_digest": (
+                    route_metadata.get("simulator_image_digest")
+                    if runtime_backend == "docker" else None
+                ),
+                "practice_asset_source_image": route_metadata.get("simulator_image"),
+                "practice_asset_source_image_digest": route_metadata.get("simulator_image_digest"),
+                "runtime_identity": {
+                    "simulator_backend": os.environ.get("AICAR_SIMULATOR_BACKEND", "docker"),
+                    "simulator_executable": os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE"),
+                    "scene_verification": scene_verification,
+                },
+                "teacher": {
+                    "controller": type(expert).__name__,
+                    "max_speed_mps": behavior_teacher_max_speed_mps,
+                    "lookahead_m": 0.8,
+                    "seed": seed,
+                },
+                "action_mapping": {
+                    "throttle_mode": throttle_mode,
+                    "negative_throttle_mode": negative_throttle_mode,
+                    "steering_mode": steering_mode,
+                    "steering_action_scale": steering_action_scale,
+                    "straight_throttle_gain": straight_throttle_gain,
+                },
+                "laps_per_episode": race_laps,
+                "required_clean_episodes": behavior_cloning_required_clean_episodes,
+                "expected_clean_laps": behavior_cloning_clean_laps,
+                "step_cap": behavior_cloning_steps_per_env,
+                "wall_time_cap_s": behavior_cloning_wall_timeout_s,
+            }
+            acceptance_path.write_text(json.dumps(acceptance, indent=2), encoding="utf-8")
+            (out_dir / "stop_reason.json").write_text(json.dumps({
+                "reason": "accepted_demonstration_collection_complete",
+                "ppo_rollouts": 0, "dataset": str(dataset_path),
+            }, indent=2), encoding="utf-8")
+            return dataset_path
         # The BC smoke and campaign profiles both freeze these PPO values.
         # Campaign-specific rollout size, learning rate, and horizon still
         # come from its effective config; ordinary runs retain legacy defaults.
@@ -1437,13 +1694,18 @@ def train_official(
                 "run_id": os.environ.get("AICAR_RUN_ID", out_dir.name),
             } if resume_lineage else None,
         )
+        race_metrics_callback = _RaceMetricsCallback(
+            out_dir,
+            os.environ.get("AICAR_RUN_ID", out_dir.name),
+            checkpoint_callback,
+        )
         hub_callback = maybe_hub_callback(
             os.environ.get("AICAR_RUN_ID", out_dir.name),
             runtime="official",
             run_dir=out_dir,
         )
         operator_stop_callback = OperatorStopCallback(stop_requested)
-        callbacks = [checkpoint_callback, operator_stop_callback]
+        callbacks = [checkpoint_callback, race_metrics_callback, operator_stop_callback]
         starting_steps = int(model.num_timesteps)
         if automatic_evaluation_enabled or exploration_settings["profile"] != "standard":
             schedule_origin = _step_cadence_origin(
@@ -1565,7 +1827,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--exploration-max-std-steering", type=float)
     parser.add_argument("--behavior-cloning-enabled", type=int, choices=(0, 1), default=1)
     parser.add_argument("--behavior-cloning-only", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--behavior-cloning-collect-only", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--behavior-cloning-dataset", type=Path, default=None)
+    parser.add_argument("--behavior-cloning-acceptance", type=Path, default=None)
     parser.add_argument("--behavior-cloning-steps-per-env", type=int, default=4000)
+    parser.add_argument("--behavior-cloning-wall-timeout-s", type=float, default=1800.0)
+    parser.add_argument("--behavior-cloning-clean-laps", type=int, default=10)
+    parser.add_argument("--behavior-cloning-required-clean-episodes", type=int, default=2)
     parser.add_argument("--behavior-cloning-epochs", type=int, default=8)
     parser.add_argument("--behavior-cloning-batch-size", type=int, default=256)
     parser.add_argument("--behavior-cloning-learning-rate", type=float, default=1e-3)
@@ -1627,7 +1895,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         exploration_max_std_steering=args.exploration_max_std_steering,
         behavior_cloning_enabled=bool(args.behavior_cloning_enabled),
         behavior_cloning_only=bool(args.behavior_cloning_only),
+        behavior_cloning_collect_only=bool(args.behavior_cloning_collect_only),
+        behavior_cloning_dataset_path=args.behavior_cloning_dataset,
+        behavior_cloning_acceptance_path=args.behavior_cloning_acceptance,
         behavior_cloning_steps_per_env=args.behavior_cloning_steps_per_env,
+        behavior_cloning_wall_timeout_s=args.behavior_cloning_wall_timeout_s,
+        behavior_cloning_clean_laps=args.behavior_cloning_clean_laps,
+        behavior_cloning_required_clean_episodes=args.behavior_cloning_required_clean_episodes,
         behavior_cloning_epochs=args.behavior_cloning_epochs,
         behavior_cloning_batch_size=args.behavior_cloning_batch_size,
         behavior_cloning_learning_rate=args.behavior_cloning_learning_rate,

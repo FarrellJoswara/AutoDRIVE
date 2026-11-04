@@ -27,6 +27,8 @@ class CenterlineExpert:
         max_steer_angle_rad: float = 0.45,
         max_lateral_accel_mps2: float = 0.8,
         lookahead_base_m: float = 1.5,
+        vehicle_half_width_m: float = 0.12,
+        corridor_margin_m: float = 0.05,
     ) -> None:
         self.route = route
         self.max_speed_mps = max(0.2, float(max_speed_mps))
@@ -34,9 +36,48 @@ class CenterlineExpert:
         self.max_steer_angle_rad = max(0.05, float(max_steer_angle_rad))
         self.max_lateral_accel_mps2 = max(0.1, float(max_lateral_accel_mps2))
         self.lookahead_base_m = max(0.5, float(lookahead_base_m))
+        self.vehicle_half_width_m = max(0.0, float(vehicle_half_width_m))
+        self.corridor_margin_m = max(0.0, float(corridor_margin_m))
         self._speed_samples_by_env: Dict[int, list[float]] = {}
         self._last_progress_by_env: Dict[int, float] = {}
         self._last_position_by_env: Dict[int, np.ndarray] = {}
+
+    def route_diagnostics(self, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Return route projection and a vehicle-clearance corridor bound.
+
+        The bound is the narrower interpolated route half-width minus the
+        configured vehicle half-width and safety margin. Route coordinates
+        and official IPS positions are both ROS XY meters.
+        """
+        position = info.get("position")
+        if position is None or len(position) < 2:
+            return {"route_s_m": None, "lateral_error_m": None, "lateral_bound_m": None}
+        x, y = float(position[0]), float(position[1])
+        if not np.isfinite([x, y]).all():
+            return {"route_s_m": None, "lateral_error_m": None, "lateral_bound_m": None}
+        projection = self.route.update(x, y)
+        if not bool(projection.get("current_projection_valid")):
+            return {"route_s_m": None, "lateral_error_m": None, "lateral_bound_m": None}
+        route_s = float(projection["current_progress_m"])
+        lateral_value = self.route.lateral_distance(x, y)
+        if lateral_value is None:
+            return {"route_s_m": route_s, "lateral_error_m": None, "lateral_bound_m": None}
+        lateral = float(lateral_value)
+        local_s = route_s % self.route.length_m if self.route.closed else route_s
+        index = int(np.searchsorted(self.route._cum, local_s, side="right") - 1)
+        index = min(max(index, 0), len(self.route._lengths) - 1)
+        segment_length = float(self.route._lengths[index])
+        fraction = 0.0 if segment_length <= 1e-8 else (local_s - self.route._cum[index]) / segment_length
+        right = (1.0 - fraction) * self.route.widths_right[index] + fraction * self.route.widths_right[index + 1]
+        left = (1.0 - fraction) * self.route.widths_left[index] + fraction * self.route.widths_left[index + 1]
+        bound = max(0.0, min(float(left), float(right)) - self.vehicle_half_width_m - self.corridor_margin_m)
+        return {
+            "route_s_m": route_s,
+            "lateral_error_m": lateral,
+            "lateral_bound_m": bound,
+            "corridor_left_half_width_m": float(left),
+            "corridor_right_half_width_m": float(right),
+        }
 
     @staticmethod
     def _wrap_angle(angle: float) -> float:

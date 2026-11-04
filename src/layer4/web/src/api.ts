@@ -357,6 +357,8 @@ export interface MetricsTelemetry {
 export interface OfficialTrainSettings {
   simulator_backend: "docker" | "windows_external" | "macos_external";
   simulator_display_mode: "gui" | "offscreen";
+  track_profile: "competition" | "practice" | null;
+  simulator_executable: string | null;
   n_envs: number;
   total_timesteps: number;
   stop_on_plateau: boolean;
@@ -375,6 +377,10 @@ export interface OfficialTrainSettings {
   automatic_evaluation_mode: "competitive" | "training_probe";
   behavior_cloning_enabled: boolean;
   behavior_cloning_only: boolean;
+  behavior_cloning_collect_only: boolean;
+  behavior_cloning_clean_laps: number;
+  behavior_cloning_required_clean_episodes: number;
+  behavior_cloning_wall_timeout_s: number;
   behavior_cloning_steps_per_env: number;
   behavior_cloning_epochs: number;
   behavior_cloning_batch_size: number;
