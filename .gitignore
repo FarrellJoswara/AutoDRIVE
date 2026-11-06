@@ -33,6 +33,7 @@ logs/diagnostics/**
 !logs/diagnostics/.gitkeep
 logs/replay/**
 !logs/replay/.gitkeep
+logs/lap_sessions/
 
 # Layer 4 frontend
 src/layer4/web/node_modules/

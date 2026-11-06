@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Set
 
 from fastapi import WebSocket
+from src.layer4.hub.lap_session import LapSessionStore
 
 
 @dataclass
@@ -32,12 +33,17 @@ class TelemetryBus:
     _clients: Set["WSClient"] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _loop: Optional[asyncio.AbstractEventLoop] = None
+    lap_sessions: Optional[LapSessionStore] = None
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
     def publish(self, event_type: str, payload: Dict[str, Any]) -> None:
         """Thread-safe publish (API handlers + TrainJob watcher thread)."""
+        if (event_type in {"telemetry", "replay_telemetry"}
+                and payload.get("kind") == "fleet" and self.lap_sessions is not None):
+            self.lap_sessions.observe(payload)
+            payload = self.lap_sessions.enrich_frame(payload)
         event = {"type": event_type, "payload": payload}
         with self._lock:
             if event_type == "telemetry":

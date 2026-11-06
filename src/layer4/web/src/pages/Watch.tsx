@@ -14,6 +14,7 @@ import {
   type RunSummary,
 } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
+import { LiveLapPanel } from "../components/LiveLapPanel";
 import { ingestOfficialRunTelemetry, setOfficialRunSelection } from "../store";
 
 const ACTIVE = new Set(["starting", "running", "stopping"]);
@@ -444,6 +445,13 @@ export function WatchPage() {
           <label><input type="checkbox" checked={showLidar} onChange={(e) => setShowLidar(e.target.checked)} /> LiDAR</label>
           {cars.length > 0 && <label>Focus <select value={selectedEnvId ?? cars[0].env_id} onChange={(e) => setSelectedEnvId(Number(e.target.value))}><option value={-1}>All cars</option>{cars.map((car) => <option key={car.env_id} value={car.env_id}>Env {car.env_id}</option>)}</select></label>}
         </div>
+        <LiveLapPanel
+          key={`${selectedRun.run_id}:${cameraEnvId}`}
+          runId={selectedRun.run_id}
+          car={cars.find((car) => car.env_id === cameraEnvId) ?? null}
+          age={age}
+          disconnected={Boolean(selectedFrame?.error)}
+        />
         <div className="fleet-layout">
           <div className="fleet-canvas-stack">
             {showTeacherRoute && <p className="meta" style={{ margin: "0 0 0.35rem" }}>

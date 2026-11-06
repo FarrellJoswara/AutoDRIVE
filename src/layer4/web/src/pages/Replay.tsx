@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchReplayModels, getOfficialModelMetadata, getReplayStatus, resetReplay, startReplay, stopReplay, getBestOfficialEvaluation, getOfficialEvaluationHistory,
   getOfficialRunCameraUrl, type ModelCheckpoint, type OfficialModelMetadata, type ReplayStatus, type OfficialChampion, type OfficialEvaluationRecord } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
+import { LiveLapPanel } from "../components/LiveLapPanel";
 
 function modelIdFromPath(path: string | null | undefined, models: ModelCheckpoint[]): string | null {
   if (!path) return null;
@@ -29,6 +30,7 @@ export function ReplayPage() {
   const [metadataRefreshVersion, setMetadataRefreshVersion] = useState(0);
   const [cameraRefresh, setCameraRefresh] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
+  const [selectedReplayEnvId, setSelectedReplayEnvId] = useState(0);
   async function refreshModels() {
     setModelsLoading(true);
     try {
@@ -144,13 +146,26 @@ export function ReplayPage() {
   const fleet = status?.last_fleet ?? null;
   const sourceTime = fleet ? Date.parse(fleet.ts) : NaN;
   const age = Number.isFinite(sourceTime) ? Math.max(0, Date.now() - sourceTime) : Infinity;
+  const replayRunId = status?.run_id ?? fleet?.run_id ?? null;
+  const currentReplayFleet = fleet && replayRunId && fleet.run_id === replayRunId ? fleet : null;
+  const replayCarIds = currentReplayFleet?.cars.map((item) => item.env_id) ?? [];
+  const replayCarIdsKey = replayCarIds.join(",");
+  const replayFrameAge = Number.isFinite(age) ? `${Math.floor(age / 1000)}s ago` : "age unknown";
+  const replayAge = currentReplayFleet
+    ? {
+      stale: age > 1500,
+      text: active
+        ? age > 1500 ? `${replayFrameAge} · replay telemetry` : `Live · ${replayFrameAge}`
+        : `${status?.state ?? "Replay"} · last frame ${replayFrameAge}`,
+    }
+    : { stale: false, text: active ? "Waiting for replay telemetry" : "No current replay frame" };
   const result = status?.evaluation;
   const validationMode = status?.validation_mode ?? result?.validation_mode ?? null;
   const diagnostic = validationMode === "bc_diagnostic" || validationMode === "training_probe";
   const diagnosticLabel = validationMode === "training_probe" ? "Training probe" : "BC diagnostic";
   const diagnosticRun = diagnostic && result ? result.runs[0] : undefined;
   const scoredLapTarget = diagnosticRun?.race_laps_required ?? result?.race_laps_required ?? (validationMode === "training_probe" ? 3 : 10);
-  const car = fleet?.cars.find((item) => item.env_id === 0);
+  const car = currentReplayFleet?.cars.find((item) => item.env_id === selectedReplayEnvId) ?? null;
   const selectedModel = models.find((model) => model.id === modelId);
   const selectedIsBest = Boolean(selectedMetadata && best?.model_sha256 && selectedMetadata.sha256 === best.model_sha256);
   const resultMatchesSelection = Boolean(result?.model_sha256 && selectedMetadata?.sha256 === result.model_sha256);
@@ -159,6 +174,11 @@ export function ReplayPage() {
   const projectionValid = car?.frontier_projection_valid ?? car?.route_projection_valid ?? diagnosticRun?.frontier_projection_valid;
   const seconds = (value?: number | null) => Number.isFinite(value) ? `${value!.toFixed(2)} s` : "—";
   const meters = (value?: number | null) => Number.isFinite(value) ? `${value!.toFixed(2)} m` : "—";
+  useEffect(() => {
+    if (replayCarIds.length > 0 && !replayCarIds.includes(selectedReplayEnvId)) {
+      setSelectedReplayEnvId(replayCarIds[0]);
+    }
+  }, [replayRunId, replayCarIdsKey, selectedReplayEnvId]);
   return <section className="panel fleet-panel">
     <h2>Official evaluation / replay</h2>
     <p className="lede">Run a competitive evaluation with one warm-up lap and ten scored laps across three fresh simulator processes, or select a noncompetitive diagnostic for a single checkpoint.{selectedMetadata?.simulator_backend === "linux_external" ? " Linux competition evaluation uses the separately allowlisted official competition runtime; the practice runtime is for training." : ""}</p>
@@ -184,7 +204,21 @@ export function ReplayPage() {
       <button disabled={busy || active || !status?.run_id} onClick={() => void perform(resetReplay)}>Run another evaluation</button>
       <button disabled={busy || modelsLoading} onClick={() => void refreshAll().catch((reason) => setError(String(reason)))}>Refresh checkpoints and evaluation history</button>
     </div>
-    <p role="status">{status?.state ?? "idle"} · {status?.validation_mode ? `${status.validation_mode} · noncompetitive` : "competitive"} · {status?.attempts_completed ?? 0}/{status?.attempts_required ?? 3} attempts · {status?.run_id ?? "No simulator attempt active"} · {fleet ? (age > 1500 ? "Telemetry stale" : "Live telemetry") : "Waiting for telemetry"}</p>
+    <p role="status">{status?.state ?? "idle"} · {status?.validation_mode ? `${status.validation_mode} · noncompetitive` : "competitive"} · {status?.attempts_completed ?? 0}/{status?.attempts_required ?? 3} attempts · {status?.run_id ?? "No simulator attempt active"} · {currentReplayFleet ? (age > 1500 ? "Telemetry stale" : active ? "Live telemetry" : "Last replay frame") : "Waiting for telemetry"}</p>
+    {replayRunId && <>
+      {replayCarIds.length > 1 && <label className="field" style={{ marginBottom: "0.6rem" }}>Focus environment
+        <select value={selectedReplayEnvId} onChange={(event) => setSelectedReplayEnvId(Number(event.target.value))}>
+          {replayCarIds.map((envId) => <option key={envId} value={envId}>Env {envId}</option>)}
+        </select>
+      </label>}
+      <LiveLapPanel
+        key={`${replayRunId}:${selectedReplayEnvId}`}
+        runId={replayRunId}
+        car={car}
+        age={replayAge}
+        disconnected={Boolean(pollError)}
+      />
+    </>}
     {selectedModel && <div className="meta" aria-label="Selected checkpoint identity">
       <p>Selected checkpoint: <strong>{selectedModel.label}</strong>{status?.model ? ` · evaluated ${status.model}` : ""}</p>
       {selectedMetadata ? <p>SHA-256 <code>{selectedMetadata.sha256}</code>{selectedIsBest ? " · matches current best evaluated model" : ""} · {selectedMetadata.observation_profile} · {selectedMetadata.simulator_backend} · throttle {selectedMetadata.throttle_mode}/{selectedMetadata.negative_throttle_mode} · steering {selectedMetadata.steering_mode}</p>
@@ -211,9 +245,9 @@ export function ReplayPage() {
       <p>Route: official IROS 2026 centerline · projection {projectionValid == null ? "waiting" : projectionValid ? "valid" : "invalid"} · frontier progress {meters(progress)} · scored target {Number.isFinite(progressFraction) ? `${Math.round(progressFraction! * 100)}%` : "—"} · {fleet ? (age > 1500 ? "telemetry stale" : "telemetry current") : "waiting for telemetry"} · camera {car?.camera_fresh === true ? "fresh" : car?.camera_fresh === false ? "stale" : "waiting"}{car?.camera_age_s != null ? ` (${seconds(car.camera_age_s)})` : ""}</p>
       <div className="training-progress-panel" style={{ width: "100%", aspectRatio: "16 / 9", background: "#080d0b", overflow: "hidden", display: "grid", placeItems: "center" }}>
         {status?.run_id && cameraReady
-          ? <img src={getOfficialRunCameraUrl(status.run_id, 0, cameraRefresh)} alt={`Official simulator camera during ${diagnosticLabel.toLowerCase()}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+          ? <img src={getOfficialRunCameraUrl(status.run_id, selectedReplayEnvId, cameraRefresh)} alt={`Official simulator camera during ${diagnosticLabel.toLowerCase()}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           : <span className="meta">{active ? "Waiting for a fresh diagnostic camera frame…" : "No diagnostic camera frame is available."}</span>}
-        {status?.run_id && <img src={getOfficialRunCameraUrl(status.run_id, 0, cameraRefresh)} alt="" aria-hidden="true" onLoad={() => setCameraReady(true)} onError={() => setCameraReady(false)} style={{ display: "none" }} />}
+        {status?.run_id && <img src={getOfficialRunCameraUrl(status.run_id, selectedReplayEnvId, cameraRefresh)} alt="" aria-hidden="true" onLoad={() => setCameraReady(true)} onError={() => setCameraReady(false)} style={{ display: "none" }} />}
       </div>
       {diagnosticRun && <div className="official-metric-grid">
         <div><span>Readiness</span><strong>{result?.readiness_passed ? "Passed" : "Not passed"}</strong></div>
@@ -255,8 +289,8 @@ export function ReplayPage() {
       </li>)}</ol> : <p className="meta">Completed official evaluations will appear here.</p>}
     </section>
     <FleetCanvas fleetSource="replay" showMap={false} showFleet showFrontier={diagnostic} showCurrentProgress={diagnostic} showLidar
-      selectedEnvId={0} mapId="none" mapYamlUrl={null} fleetPanel={fleet}
-      telemetryOverride={fleet} telemetryAgeMs={age} runState={status?.state} />
+      selectedEnvId={selectedReplayEnvId} mapId="none" mapYamlUrl={null} fleetPanel={currentReplayFleet}
+      telemetryOverride={currentReplayFleet} telemetryAgeMs={currentReplayFleet ? age : Infinity} runState={status?.state} />
     {status?.log_path && <p className="meta">Log: {status.log_path}</p>}
   </section>;
 }

@@ -1,0 +1,55 @@
+{
+  "completed_at_utc": "2026-11-06T08:23:45.181Z",
+  "method": "Headless Google Chrome via Playwright; isolated Vite UI and synthetic API on dynamically allocated localhost ports.",
+  "backend_contract": "History fixture generated directly by src/layer4/hub/lap_session.py LapSessionStore.history(); HTTP path/query checked against GET /train/runs/{run_id}/lap-history?env_id=.",
+  "assertions": [
+    "first completed lap has no previous-best delta",
+    "paused current-lap timer holds the last reported elapsed value",
+    "latest lap displays formatted 0:41.900",
+    "session best displays formatted 0:41.900",
+    "new-best indicator appears after a faster completed lap",
+    "new-best visual pulse is exposed on panel",
+    "delta against previous best is shown with faster styling",
+    "new-best indicator clears at its 2.2 second boundary",
+    "per-car selection changes lap panel to Env 1",
+    "selected car current elapsed time shown",
+    "history failure offers a retry action",
+    "session details show actual current session laps",
+    "session details show backend-compatible previous session",
+    "wrong-track session is excluded by actual backend result",
+    "UI requested actual backend route/query contract",
+    "history retries after the synthetic transient backend failure",
+    "disconnect state retains last completed and current lap values",
+    "stale telemetry is labeled and last received timing remains visible",
+    "refresh reloads Watch and requests new telemetry",
+    "browser reports no uncaught page errors",
+    "Replay renders shared lap panel from its current replay fleet",
+    "Replay session identity uses replay run_id, not checkpoint model id",
+    "Replay panel shows its live elapsed current lap",
+    "Replay lap history uses replay run path and actual backend query",
+    "Replay history displays compatible prior session"
+  ],
+  "telemetryRequests": 81,
+  "historyRequestedUrl": "/train/runs/replay_qa-session/lap-history?env_id=0",
+  "historyPayloadShape": [
+    "run_id",
+    "env_id",
+    "track_id",
+    "layout_id",
+    "direction",
+    "laps",
+    "previous_sessions"
+  ],
+  "backendGeneratedCompatibleSessions": [
+    "qa-prior-match",
+    "replay_qa-session"
+  ],
+  "screenshots": [
+    "live-lap-new-best.png",
+    "lap-session-history.png",
+    "lap-ui-disconnected.png",
+    "lap-ui-stale-after-refresh.png",
+    "replay-live-lap-history.png"
+  ],
+  "pageErrors": []
+}

@@ -7,6 +7,7 @@ import json
 import math
 import hashlib
 import sys
+from functools import lru_cache
 from os import scandir
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,7 @@ from src.layer4.hub.campaign_deadline import (
 )
 from src.layer4.hub.official_models import list_official_models, official_model_metadata
 from src.layer4.hub.telemetry import TelemetryBus, WSClient
+from src.layer4.hub.lap_session import LapSessionStore
 from src.layer4.hub.watch_utils import watch_snapshot_age_ms as _watch_snapshot_age_ms
 from src.layer4.official_settings import (
     OfficialTrainSettings,
@@ -65,7 +67,7 @@ HUB_HOST = os.environ.get("HUB_HOST", "0.0.0.0")
 HUB_PORT = int(os.environ.get("HUB_PORT", os.environ.get("READY_PORT", "8090")))
 HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
-bus = TelemetryBus()
+bus = TelemetryBus(lap_sessions=LapSessionStore(ROOT / "logs" / "lap_sessions"))
 def _default_run_backend() -> str:
     # WSL keeps the Windows-player bridge; native Linux uses its extracted
     # official practice player. macOS keeps the Docker Devkit/ROS trainer.
@@ -647,6 +649,8 @@ def _run_telemetry(run_id: str) -> Dict[str, Any]:
         return value
 
     fleet = latest.get("last_fleet") or persisted.get("last_fleet") or read_snapshot("watch_latest.json")
+    if isinstance(fleet, dict) and bus.lap_sessions is not None:
+        fleet = bus.lap_sessions.enrich_frame(fleet)
     latest_metrics = latest.get("last_metrics") or persisted.get("last_metrics") or read_snapshot("latest_telemetry.json")
     phase = latest.get("last_train_phase") or persisted.get("last_train_phase") or read_snapshot("latest_training_phase.json")
     evaluator_live = latest.get("last_evaluator_live") or persisted.get("last_evaluator_live")
@@ -676,6 +680,75 @@ def _run_telemetry(run_id: str) -> Dict[str, Any]:
         "last_evaluation": evaluation,
         "map_id": persisted.get("map_id", "none"),
     }
+
+
+@lru_cache(maxsize=256)
+def _cached_track_layout(
+    run_id: str, track_id: str, route_candidates: tuple[Optional[str], ...],
+) -> tuple[Optional[str], Optional[str]]:
+    """Hash route/map files once per immutable run identity, not per fleet frame."""
+    layout_id: Optional[str] = None
+    direction: Optional[str] = None
+    for route_candidate in route_candidates:
+        if not isinstance(route_candidate, str) or not route_candidate:
+            continue
+        route_path = Path(route_candidate)
+        if not route_path.is_absolute():
+            route_path = ROOT / route_path
+        try:
+            resolved_route = route_path.resolve()
+            if resolved_route.is_file() and resolved_route.is_relative_to(ROOT.resolve()):
+                layout_id = "route:" + hashlib.sha256(resolved_route.read_bytes()).hexdigest()[:16]
+                break
+        except OSError:
+            continue
+    map_dir = (MAPS_DIR / track_id).resolve()
+    if map_dir.is_relative_to(MAPS_DIR.resolve()):
+        occupancy = map_dir / "occupancy"
+        if not occupancy.is_dir():
+            occupancy = map_dir
+        try:
+            metadata = json.loads((occupancy / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            metadata = {}
+        if isinstance(metadata, dict):
+            layout_id = layout_id or metadata.get("layout_id")
+            direction = metadata.get("direction")
+        if not layout_id:
+            try:
+                layout_id = "centerline:" + hashlib.sha256(
+                    (occupancy / "centerline.csv").read_bytes()
+                ).hexdigest()[:16]
+            except OSError:
+                pass
+    return layout_id, direction
+
+
+def _fleet_lap_metadata(payload: Dict[str, Any], run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Resolve comparable identity, with file content cached once per run."""
+    config = run.get("config") if isinstance(run, dict) and isinstance(run.get("config"), dict) else {}
+    track_id = payload.get("track_id") or payload.get("map_id")
+    track_id = track_id or (run or {}).get("map_id") or config.get("map_id") or config.get("track_id")
+    layout_id = payload.get("layout_id") or (run or {}).get("layout_id") or config.get("layout_id")
+    direction = payload.get("direction") or (run or {}).get("direction") or config.get("direction")
+    if isinstance(track_id, str) and track_id and track_id != "none":
+        evaluation_options = (run or {}).get("evaluation_options")
+        candidates = (
+            evaluation_options.get("frontier_path") if isinstance(evaluation_options, dict) else None,
+            config.get("route_path"), config.get("centerline_path"),
+        )
+        cached_layout, cached_direction = _cached_track_layout(
+            str(payload.get("run_id") or (run or {}).get("run_id") or "unscoped"),
+            track_id, tuple(str(value) if value else None for value in candidates),
+        )
+        layout_id = layout_id or cached_layout
+        direction = direction or cached_direction
+        # LapTracker follows the stored centerline orientation.
+        if (not direction and layout_id
+                and any(isinstance(car, dict) and car.get("lap_supported")
+                        for car in payload.get("cars", []))):
+            direction = "forward"
+    return {"map_id": track_id, "layout_id": layout_id, "direction": direction}
 
 
 def _run_output_dir(run_id: str) -> Path:
@@ -1079,8 +1152,25 @@ async def replay_model_metadata(model_id: str) -> Dict[str, Any]:
 
 @app.get("/api/replay/status")
 async def replay_status() -> Dict[str, Any]:
-    result = replay_job.status()
+    result = dict(replay_job.status())
+    run_id = result.get("run_id")
+    status_fleet = result.get("last_fleet")
+    if not (run_id and isinstance(status_fleet, dict) and status_fleet.get("run_id") == run_id):
+        result.pop("last_fleet", None)
+    live_fleet = bus.last_replay_fleet
+    if run_id and isinstance(live_fleet, dict) and live_fleet.get("run_id") == run_id:
+        result["last_fleet"] = live_fleet
+    if bus.lap_sessions is not None:
+        result = bus.lap_sessions.enrich_status(result)
     return result
+
+
+@app.get("/train/runs/{run_id}/lap-history")
+async def lap_history(run_id: str, env_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return durable completed-lap history for a run, optionally one car."""
+    if bus.lap_sessions is None:
+        raise HTTPException(status_code=503, detail="lap history is unavailable")
+    return bus.lap_sessions.history(run_id, env_id)
 
 
 @app.post("/api/replay/start")
@@ -1171,6 +1261,12 @@ async def post_telemetry(request: Request) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="invalid JSON") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be object")
+    if payload.get("kind") == "fleet" and payload.get("run_id"):
+        try:
+            run = official_runs.get_run(str(payload["run_id"]))
+        except KeyError:
+            run = None
+        payload = {**payload, **_fleet_lap_metadata(payload, run)}
     if payload.get("run_id"):
         official_runs.ingest_telemetry(payload)
     bus.publish("replay_telemetry" if payload.get("channel") == "replay" else "telemetry", payload)

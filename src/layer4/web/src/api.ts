@@ -691,6 +691,16 @@ export interface FleetCar {
   last_lap_time_s?: number | null;
   best_lap_time_s?: number | null;
   lap_elapsed_s?: number | null;
+  /** Compact run-scoped summary, persisted across episode resets. */
+  lap_session?: {
+    completed_laps: number;
+    latest_lap_time_s: number | null;
+    best_lap_time_s: number | null;
+    /** Latest completed split minus the best split before it; null for lap one. */
+    last_lap_delta_s: number | null;
+    current_lap_number: number | null;
+    current_lap_elapsed_s: number | null;
+  };
   /** Best rolling ten-lap total for this fixed-model replay session. */
   best_10_lap_time_s?: number | null;
   lidar?: number[];
@@ -714,6 +724,32 @@ export interface FleetTelemetry {
   lidar_range_max?: number;
   /** Backend-computed virtual finish gate in map world (x,z) coordinates. */
   lap_gate?: [[number, number], [number, number]] | null;
+}
+
+export interface LapSessionRecord {
+  run_id?: string;
+  env_id?: number | string;
+  track_id: string | null;
+  layout_id: string | null;
+  direction: string | null;
+  completed_at?: string | null;
+  episode?: number;
+  laps: Array<{ lap_number: number; time_s: number; episode: number; completed_at?: string | null }>;
+}
+
+export interface LapHistoryResponse {
+  run_id: string;
+  env_id: number | string | null;
+  track_id: string | null;
+  layout_id: string | null;
+  direction: string | null;
+  laps: Array<{ lap_number: number; time_s: number; episode: number; completed_at?: string | null }>;
+  previous_sessions: LapSessionRecord[];
+}
+
+/** Full lap history is fetched only when the driver opens session details. */
+export function getLapHistory(runId: string, envId: number): Promise<LapHistoryResponse> {
+  return jsonFetch(`/train/runs/${encodeURIComponent(runId)}/lap-history?env_id=${encodeURIComponent(envId)}`);
 }
 
 export type ConnState = "live" | "reconnecting" | "offline";

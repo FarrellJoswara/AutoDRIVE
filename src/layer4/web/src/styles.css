@@ -497,6 +497,169 @@ label.check {
   overflow-wrap: anywhere;
 }
 
+.live-lap-panel {
+  margin: 0.2rem 0 0.85rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--bg1) 78%, transparent);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.live-lap-panel[data-new-best="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0.9rem color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.live-lap-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem 1rem;
+}
+
+.live-lap-heading h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.live-lap-heading .meta {
+  display: block;
+  font-size: 0.72rem;
+}
+
+.live-lap-heading .meta[data-stale="true"] {
+  color: var(--warn);
+}
+
+.live-lap-primary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.6rem;
+}
+
+.live-lap-primary > div {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.45rem 0.6rem;
+  border-left: 2px solid var(--line);
+}
+
+.live-lap-primary > div:last-child {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+
+.live-lap-primary span,
+.live-lap-secondary {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.live-lap-primary strong {
+  color: var(--text);
+  font: 600 clamp(1.35rem, 3vw, 2rem) var(--font-mono);
+  letter-spacing: 0.015em;
+}
+
+.live-lap-primary .is-new-best strong,
+.lap-best-pulse {
+  color: var(--accent);
+}
+
+.lap-best-pulse {
+  font-weight: 700;
+  animation: lap-best-in 220ms ease-out;
+}
+
+.live-lap-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+  margin-top: 0.6rem;
+}
+
+.live-lap-secondary strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.live-lap-secondary .lap-delta-faster {
+  color: var(--accent);
+}
+
+.live-lap-secondary .lap-delta-slower {
+  color: var(--warn);
+}
+
+.live-lap-details-btn {
+  margin-top: 0.65rem;
+  padding: 0.3rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.live-lap-details-btn:hover {
+  text-decoration: underline;
+}
+
+.lap-history-details {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.lap-history-details h4 {
+  margin: 0.65rem 0 0.3rem;
+  font-size: 0.82rem;
+}
+
+.lap-history-list {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1.6rem;
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.lap-history-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.15rem 0.2rem;
+  font-size: 0.78rem;
+}
+
+.lap-history-list strong {
+  font-family: var(--font-mono);
+}
+
+.previous-lap-session + .previous-lap-session {
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+}
+
+.previous-lap-session > p {
+  margin: 0.2rem 0;
+}
+
+.live-lap-note {
+  margin: 0.55rem 0 0;
+  color: var(--warn);
+  font: 0.72rem/1.5 var(--font-mono);
+}
+
+@keyframes lap-best-in {
+  from { opacity: 0.35; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .watch-empty {
   border: 1px dashed var(--line);
   border-radius: 0.5rem;

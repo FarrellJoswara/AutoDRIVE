@@ -1,0 +1,91 @@
+# Live lap timing verification
+
+**Status:** all scoped QA checks pass. Evidence collected 2026-11-06 on `codex/live-lap-performance`.
+
+## Scope and environment
+
+Checks use the real `LapSessionStore`, `TelemetryBus`/`WSClient`, and Layer 2 `LapTracker` modules with synthetic fleet telemetry matching the current producer fields (`kind`, `run_id`, fleet `episode`, `cars[].env_id`, `lap_times_s`, `lap_elapsed_s`, and `reset`). The lap tracker check supplies a deterministic closed-route fixture. No simulator, physical car, hardware, or training was started.
+
+System Python is 3.12.3 and Node is 18.19.0. Chrome 157 and frontend dependencies are installed. `/tmp/f1tenth-live-lap-venv` provides pytest, FastAPI, Pydantic, NumPy, and Gymnasium but lacks Torch and HTTPX. `/tmp/aicar-venv-s507t485` provides Torch but lacks HTTPX and `typing_extensions`; combining the first venv's site-packages on `PYTHONPATH` allowed an isolated import of the actual hub app. Route requests below use direct ASGI dispatch, so HTTPX was not required. The standalone integration test scopes fallback imports and leaves no fake production package entries in `sys.modules`.
+
+## Commands and results
+
+`PYTHONPATH=. /tmp/f1tenth-live-lap-venv/bin/python tests/test_live_lap_integration.py`
+
+- **10 passed** in the latest run.
+- Passed: incomplete elapsed time is not stored as a completed lap; completed history persists and does not duplicate after store reload; public snapshots are deep copies; completed lap events are recorded before WebSocket fleet-frame coalescing; compact latest/best/delta summary survives in the coalesced frame; history comparisons require matching known track/layout/direction; an exact full-route gate crossing completes one lap with interpolated simulator time; starting mid-lap arms at the first gate crossing and excludes the partial lap; terminal reset telemetry does not duplicate its finished episode's split array.
+- Vector-env evidence: when the fleet episode counter increments for Env 0, Env 1's existing split cursor and episode label remain unchanged.
+- A car-local episode advances after reset even if the previous episode had no completed splits.
+
+`PYTHONPATH=. /tmp/f1tenth-live-lap-venv/bin/pytest -q scripts/test_live_lap_session.py`
+
+- **8 passed.**
+
+`AICAR_RUN_BACKEND=test PYTHONPATH=.:/tmp/f1tenth-live-lap-venv/lib/python3.12/site-packages /tmp/aicar-venv-s507t485/bin/python -m unittest scripts.test_live_lap_replay_routes`
+
+- **1 passed.** Exercises POST `/telemetry`, Replay status live fallback, missing-status recovery, and run isolation through the actual ASGI app with managers mocked.
+
+`LIVE_LAP_ROUTE_QA_ISOLATED=1 PYTHONPATH=.:/tmp/f1tenth-live-lap-venv/lib/python3.12/site-packages /tmp/aicar-venv-s507t485/bin/python tests/test_live_lap_integration_routes.py`
+
+- **1 passed.** Actual FastAPI ASGI dispatch verified `/train/runs/{run_id}/telemetry` enriches a live frame and recovers/enriches a persisted raw frame. `/api/replay/status` enriched an authoritative raw `last_fleet`; a mismatched `bus.last_replay_fleet` from another run did not replace it.
+
+## Findings
+
+### Resolved in the current working tree
+
+- Session history is keyed by `run_id` and car `env_id`, persists across store reload, and keeps best lap state across episode resets.
+- The history endpoint now matches the frontend path `/train/runs/{run_id}/lap-history?env_id=...`.
+- `TelemetryBus` enriches fleet frames with the compact per-car `lap_session` shape consumed by the UI. The synthetic integration check verifies completed count, latest lap, best lap, `-0.5s` previous-best delta, current lap number, and retention while two intermediate fleet frames are coalesced.
+- Unknown track/layout/direction metadata yields no comparison candidates. Known metadata returns only previous runs with matching identity and the selected car.
+- Completed lap records come from lap split arrays; elapsed-only in-progress attempts do not enter completed history.
+- The Layer 2 `LapTracker` test confirms no lap before one full route length and no partial-lap credit when timing starts between gates.
+- In production, `AutodriveEnv._progress_time` reads `Racer.simulation_time()` first; the lap tracker uses the supplied route clock. The UI displays reported elapsed telemetry and does not extrapolate it from browser wall time.
+- The session store keeps a car-local episode label when the fleet-wide episode counter advances because another vector environment reset.
+- The actual Watch telemetry route enriches both current bus frames and recovered persisted frames with the durable lap summary.
+- Replay status selects a matching live replay frame or preserves its authoritative raw `last_fleet`, then enriches that frame from the durable session store. The route check supplies an actual-shaped status object and a mismatched bus frame.
+
+### Limits
+
+- Browser UI checks use synthetic API responses and the history fixture is generated by `LapSessionStore.history()`; they do not contact a running hub.
+- HTTPX is unavailable, so route requests were dispatched directly through the actual FastAPI ASGI app. The managers/status object were mocked to exercise route selection and persistence recovery; no TCP listener, server lifespan, training, or replay job was started. Browser API calls also used synthetic responses; the history fixture came from `LapSessionStore.history()`.
+- No physical-car or hardware validation was performed.
+
+## Browser evidence
+
+The browser harness uses Headless Google Chrome via Playwright, an isolated Vite UI, and synthetic API responses; it does not contact the live hub. `results.json` reports **25 passing assertions**, including Replay panel rendering/history, timer pause behavior, retry, stale/disconnect, new-best delta and pulse, and page error checks. This verifies the frontend against the API contract fixture, not the actual Replay hub route.
+
+- [Browser QA script](../scripts/verify_lap_ui.mjs)
+- [Browser assertion results (25 passed)](../outputs/lap-ui-browser-qa/results.json)
+- [New best lap](../outputs/lap-ui-browser-qa/live-lap-new-best.png)
+- [Persistent lap history](../outputs/lap-ui-browser-qa/lap-session-history.png)
+- [Disconnected telemetry](../outputs/lap-ui-browser-qa/lap-ui-disconnected.png)
+- [Stale telemetry after refresh](../outputs/lap-ui-browser-qa/lap-ui-stale-after-refresh.png)
+- [Replay live lap history](../outputs/lap-ui-browser-qa/replay-live-lap-history.png)
+
+## Reproduction
+
+Run the independent synthetic integration suite from the repository root:
+
+```bash
+python tests/test_live_lap_integration.py
+```
+
+Run the actual FastAPI ASGI route check in an isolated process. The backend venv has FastAPI/Pydantic but not Torch; this read-only runtime combines its site-packages with the Torch-enabled alternate venv. HTTPX is absent, so the test dispatches requests through the actual ASGI app without opening a TCP listener or entering FastAPI lifespan:
+
+```bash
+LIVE_LAP_ROUTE_QA_ISOLATED=1 \
+PYTHONPATH=.:/tmp/f1tenth-live-lap-venv/lib/python3.12/site-packages \
+/tmp/aicar-venv-s507t485/bin/python tests/test_live_lap_integration_routes.py
+```
+
+Expected result: `Ran 1 test ... OK`. The replay fixture includes a raw `last_fleet` and a wrong-run bus frame; the route must return the raw fleet enriched with its own persisted lap history.
+
+The backend-owned Replay route regression suite can also be run with:
+
+```bash
+AICAR_RUN_BACKEND=test \
+PYTHONPATH=.:/tmp/f1tenth-live-lap-venv/lib/python3.12/site-packages \
+/tmp/aicar-venv-s507t485/bin/python -m unittest scripts.test_live_lap_replay_routes
+```
+
+Both route commands pass. One verifies raw status `last_fleet` enrichment and ignores a wrong-run bus frame; the other covers POST telemetry ingestion, missing-status fleet fallback, recovery, and run isolation.
