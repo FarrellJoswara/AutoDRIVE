@@ -265,6 +265,34 @@ Almost every field on Settings maps to `python -m src.layer3.train …`:
 | `stop_sims_on_train_exit` | Stop compose **sim** containers when train exits (default on) |
 | `stop_stack_on_train_exit` | Stop **whole** compose project (kills UI too) |
 
+### Periodic trajectory clips
+
+When telemetry is enabled, training also records compact, replayable car
+trajectory clips under `<run_dir>/trajectory_clips/`. The first clip starts
+immediately; later clips are sampled periodically. Recording is asynchronous
+and contains poses, headings, speed, collision flashes, reset events, and lap
+counts—not screenshots—so it does not block vehicle control.
+
+Configure it with environment variables:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `AICAR_TRAJECTORY_INTERVAL_S` | `300` | Seconds between clip starts |
+| `AICAR_TRAJECTORY_DURATION_S` | `20` | Seconds captured per clip; `0` disables |
+
+Render a clip after a run (MP4 requires ffmpeg; GIF uses Pillow):
+
+```bash
+python scripts/render_trajectory_video.py \
+  runs/<run>/trajectory_clips/clip-000001.jsonl \
+  --map-image simulator/maps/porto/occupancy/Porto.pgm \
+  --map-yaml simulator/maps/porto/occupancy/Porto.yaml \
+  --output comparison.mp4
+```
+
+Use `--tail 100` to show only each car's recent trail. The JSONL files can
+also be analyzed directly to compare policies without rendering a video.
+
 ## Browser pages
 
 | Tab | Job |

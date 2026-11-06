@@ -159,6 +159,7 @@ def _resume_effective_settings(
         ("automatic_evaluation_trigger", "trigger"),
         ("automatic_evaluation_interval", "interval"),
         ("automatic_evaluation_mode", "mode"),
+        ("cooperative_pause_enabled", "enabled"),
         ("behavior_cloning_enabled", "enabled"),
         ("observation_profile", "observation_profile"),
         ("simulator_backend", "simulator_backend"),
@@ -167,6 +168,7 @@ def _resume_effective_settings(
             continue
         section = (
             saved.get("automatic_evaluation", {}) if public.startswith("automatic_evaluation_")
+            else saved.get("cooperative_pause", {}) if public == "cooperative_pause_enabled"
             else saved.get("behavior_cloning", {}) if public == "behavior_cloning_enabled"
             else saved
         )

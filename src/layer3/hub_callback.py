@@ -228,6 +228,14 @@ class HubTelemetryCallback(BaseCallback):
         self._wall_total_elapsed_by_env: Dict[int, float] = {}
         self._clock_lap_count_by_env: Dict[int, int] = {}
         self._clock_lap_comparisons: List[Dict[str, float]] = []
+        self._trajectory_recorder = None
+        if self.run_dir is not None:
+            from src.layer3.trajectory_recorder import TrajectoryRecorder
+            self._trajectory_recorder = TrajectoryRecorder(
+                self.run_dir / "trajectory_clips",
+                interval_s=_env_float("AICAR_TRAJECTORY_INTERVAL_S", 300.0),
+                duration_s=_env_float("AICAR_TRAJECTORY_DURATION_S", 20.0),
+            )
         self._last_camera_frame_t = 0.0
         self._camera_interval_s = 1.0
 
@@ -469,6 +477,8 @@ class HubTelemetryCallback(BaseCallback):
             self._last_fleet_t = now
             fleet = self._build_fleet_sample(infos, dones, episode_collision_counts)
             if fleet is not None:
+                if self._trajectory_recorder is not None:
+                    self._trajectory_recorder.submit(fleet)
                 self._pub.enqueue(fleet)
 
         return True
@@ -753,6 +763,9 @@ class HubTelemetryCallback(BaseCallback):
             self._publish_phase("stopped")
             self._pub.stop(join_timeout=2.0)
             self._pub = None
+        if self._trajectory_recorder is not None:
+            self._trajectory_recorder.close()
+            self._trajectory_recorder = None
 
 
 def maybe_hub_callback(

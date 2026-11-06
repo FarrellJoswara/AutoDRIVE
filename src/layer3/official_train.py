@@ -549,6 +549,7 @@ def train_official(
     automatic_evaluation_trigger: str = "steps",
     automatic_evaluation_interval: int = 50_000,
     automatic_evaluation_mode: str = "competitive",
+    cooperative_pause_enabled: bool = True,
     exploration_profile: Optional[str] = None,
     exploration_initial_std_throttle: Optional[float] = None,
     exploration_initial_std_steering: Optional[float] = None,
@@ -824,6 +825,12 @@ def train_official(
                         return
             hub_url = os.environ.get("HUB_URL", "").rstrip("/")
             run_id = os.environ.get("AICAR_RUN_ID", "")
+            if not cooperative_pause_enabled:
+                print(
+                    "Automatic evaluation snapshot saved without queueing: "
+                    "cooperative pause is disabled.", flush=True
+                )
+                return
             payload = json.dumps({
                 "model_path": str(snapshot), "trigger": automatic_evaluation_trigger,
                 "step": trigger_step, "episode": completed_episodes,
@@ -1639,7 +1646,7 @@ def train_official(
                 "record": "ppo_optimizer_audit.jsonl",
             },
             "cooperative_pause": {
-                "enabled": True,
+                "enabled": cooperative_pause_enabled,
                 "request_file": "evaluation_pause.request.json",
                 "ack_file": "evaluation_pause.ack.json",
                 "resume_request_file": "evaluation_resume.request.json",
@@ -1720,15 +1727,16 @@ def train_official(
             )
         stop_callback = _TrainingStopCallback(starting_steps, time.monotonic())
         callbacks.append(stop_callback)
-        cooperative_pause_callback = CooperativePauseCallback(
-            out_dir,
-            os.environ.get("AICAR_RUN_ID", out_dir.name),
-            stop_requested,
-            checkpoint_callback,
-            resume_request_wait_timeout_s=9000.0,
-            resume_freshness_timeout_s=120.0,
-        )
-        callbacks.append(cooperative_pause_callback)
+        if cooperative_pause_enabled:
+            cooperative_pause_callback = CooperativePauseCallback(
+                out_dir,
+                os.environ.get("AICAR_RUN_ID", out_dir.name),
+                stop_requested,
+                checkpoint_callback,
+                resume_request_wait_timeout_s=9000.0,
+                resume_freshness_timeout_s=120.0,
+            )
+            callbacks.append(cooperative_pause_callback)
         try:
             model.learn(
                 total_timesteps=total_timesteps if total_timesteps > 0 else sys.maxsize,
@@ -1818,6 +1826,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--automatic-evaluation-trigger", choices=("steps", "episodes"), default="steps")
     parser.add_argument("--automatic-evaluation-interval", type=int, default=50_000)
     parser.add_argument("--automatic-evaluation-mode", choices=("competitive", "training_probe"), default="competitive")
+    parser.add_argument("--cooperative-pause-enabled", type=int, choices=(0, 1), default=1)
     parser.add_argument("--exploration-profile", choices=("standard", "bc_smoke", "bc_campaign"))
     parser.add_argument("--exploration-initial-std-throttle", type=float)
     parser.add_argument("--exploration-initial-std-steering", type=float)
@@ -1886,6 +1895,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         automatic_evaluation_trigger=args.automatic_evaluation_trigger,
         automatic_evaluation_interval=args.automatic_evaluation_interval,
         automatic_evaluation_mode=args.automatic_evaluation_mode,
+        cooperative_pause_enabled=bool(args.cooperative_pause_enabled),
         exploration_profile=args.exploration_profile,
         exploration_initial_std_throttle=args.exploration_initial_std_throttle,
         exploration_initial_std_steering=args.exploration_initial_std_steering,

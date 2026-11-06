@@ -427,6 +427,7 @@ class NativeOfficialBackend:
             "--time-cost-per-simulated-second", value("AICAR_TRAIN_TIME_COST", "0"),
             "--frontier-stagnation-s", value("AICAR_TRAIN_FRONTIER_STAGNATION_S", "5"),
             "--automatic-evaluation-mode", value("AICAR_AUTO_EVALUATION_MODE", "competitive"),
+            "--cooperative-pause-enabled", value("AICAR_COOPERATIVE_PAUSE_ENABLED", "1"),
             "--collision-penalty-magnitude", value("AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE", "200"),
             "--collision-reward-percent", value("AICAR_TRAIN_COLLISION_REWARD_PERCENT", "0"),
             "--lap-completion-reward", value("AICAR_TRAIN_LAP_COMPLETION_REWARD", "0"),

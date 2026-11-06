@@ -92,6 +92,7 @@ class OfficialTrainSettings(BaseModel):
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
     automatic_evaluation_mode: Literal["competitive", "training_probe"] = "competitive"
+    cooperative_pause_enabled: bool = True
     behavior_cloning_enabled: bool = True
     behavior_cloning_only: bool = False
     behavior_cloning_collect_only: bool = False
@@ -162,6 +163,7 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_AUTO_EVALUATION_TRIGGER": self.automatic_evaluation_trigger,
             "AICAR_AUTO_EVALUATION_INTERVAL": str(self.automatic_evaluation_interval),
             "AICAR_AUTO_EVALUATION_MODE": self.automatic_evaluation_mode,
+            "AICAR_COOPERATIVE_PAUSE_ENABLED": "1" if self.cooperative_pause_enabled else "0",
             "AICAR_BEHAVIOR_CLONING_ENABLED": "1" if self.behavior_cloning_enabled else "0",
             "AICAR_BEHAVIOR_CLONING_ONLY": "1" if self.behavior_cloning_only else "0",
             "AICAR_BEHAVIOR_CLONING_COLLECT_ONLY": "1" if self.behavior_cloning_collect_only else "0",

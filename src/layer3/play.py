@@ -166,6 +166,26 @@ def rollout(
     hub_url = os.environ.get("HUB_URL", "").strip()
     run_id = f"replay_{int(time.time())}"
     publisher = ReplayPublisher(hub_url, run_id) if hub_url else None
+    from src.layer3.trajectory_recorder import TrajectoryRecorder
+    try:
+        trajectory_interval = float(os.environ.get("AICAR_TRAJECTORY_INTERVAL_S", "300"))
+    except ValueError:
+        trajectory_interval = 300.0
+    try:
+        trajectory_duration = float(os.environ.get("AICAR_TRAJECTORY_DURATION_S", "20"))
+    except ValueError:
+        trajectory_duration = 20.0
+    trajectory_root = Path(
+        os.environ.get(
+            "AICAR_TRAJECTORY_DIR",
+            str(model_path.parent / "trajectory_clips" / run_id),
+        )
+    )
+    recorder = TrajectoryRecorder(
+        trajectory_root,
+        interval_s=trajectory_interval,
+        duration_s=trajectory_duration,
+    )
     try:
         model = PPO.load(str(model_path), env=env, device=device)
         obs, info = env.reset(seed=seed)
@@ -206,16 +226,18 @@ def rollout(
                                 else min(best_10_lap_time_s, total)
                             )
                 observed_laps_this_episode = len(raw_lap_times)
+            fleet = _telemetry(
+                obs,
+                info,
+                step=i,
+                episode=episode,
+                run_id=run_id,
+                episode_return=episode_return,
+                best_10_lap_time_s=best_10_lap_time_s,
+            )
+            recorder.submit(fleet)
             if publisher is not None:
-                publisher.enqueue(_telemetry(
-                    obs,
-                    info,
-                    step=i,
-                    episode=episode,
-                    run_id=run_id,
-                    episode_return=episode_return,
-                    best_10_lap_time_s=best_10_lap_time_s,
-                ))
+                publisher.enqueue(fleet)
             if i == 0 or (i + 1) % 50 == 0:
                 print(
                     f"  step {i + 1}: v_long={info.get('v_long', float('nan')):.3f} "
@@ -230,6 +252,7 @@ def rollout(
         print("play: stopped" if stop_requested else "play: done")
         return 0
     finally:
+        recorder.close()
         if publisher is not None:
             publisher.close()
         env.close()
