@@ -47,6 +47,18 @@ is newer. It does not rebuild or pull the large CUDA brain image on normal start
 **Requirements:** Docker Desktop running. The first run builds an image only if it is missing; this can take a while.
 **UI:** http://127.0.0.1:8090 — Train · Maps · Watch · Replay
 
+### Native Linux GPU server
+
+For the native ROS 2/Python environment and Mission Control launcher, follow
+the [native Linux quickstart](docs/native-linux.md). Linux PPO training is
+verified on the official practice release; competition-track training is not
+available. Automatic competitive evaluation from Linux practice training has
+passed one bounded pause, retire, competition inference, relaunch, and resume
+cycle. The evaluation was stopped before a valid competition result; no full
+race score is claimed. The prior 448-step cycle reached its training limit
+before completing the pause handshake. See the [native Linux quickstart](docs/native-linux.md)
+for tested scope, migration limits, and ephemeral runtime paths.
+
 The Docker simulator player is included under `simulator/` for an out-of-box
 clone. If the Linux player is missing, `main.py` downloads the
 [`autodrive-simulator.zip` release](https://github.com/FarrellJoswara/AutoDRIVE/releases/tag/simulator-binaries)

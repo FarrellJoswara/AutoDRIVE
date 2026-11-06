@@ -115,6 +115,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           ...configuredSettings,
           timeout_s: configuredSettings.simulator_backend === "windows_external"
               || configuredSettings.simulator_backend === "macos_external"
+              || configuredSettings.simulator_backend === "linux_external"
             ? Math.max(180, configuredSettings.timeout_s)
             : configuredSettings.timeout_s,
         });
@@ -181,7 +182,7 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
     setForm((current) => {
       if (!current) return current;
       const next = { ...current, [key]: value };
-      if (key === "simulator_backend" && (value === "windows_external" || value === "macos_external")) {
+      if (key === "simulator_backend" && (value === "windows_external" || value === "macos_external" || value === "linux_external")) {
         next.timeout_s = Math.max(180, next.timeout_s);
       }
       if (key === "simulator_backend" && value === "macos_external") {
@@ -494,8 +495,13 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: "pointer", fontWeight: 650, padding: "6px 0" }}>Simulator, observations, and controls</summary>
             <div className="grid" style={{ alignItems: "start", marginTop: 10 }}>
-              <Field label="Simulator" help="On this Mac, macos_external launches your downloaded native AutoDRIVE practice .app. The ROS 2 Devkit/trainer still runs in Docker because that stack is not available natively on macOS.">
+              <Field label="Simulator" help={form.simulator_backend === "linux_external"
+                ? "Native Linux training uses the pinned official AutoDRIVE practice simulator, ROS 2 Devkit bridge, and learner as local processes; Docker is not used. Competition-track training is unavailable. Official competition evaluation is a separate Replay workflow and requires its allowlisted runtime."
+                : form.simulator_backend === "macos_external"
+                  ? "On this Mac, macos_external launches your downloaded native AutoDRIVE practice .app. The ROS 2 Devkit/trainer still runs in Docker because that stack is not available natively on macOS."
+                  : "Choose the official Windows simulator or the Docker simulator runtime."}>
                 <select value={form.simulator_backend} onChange={(event) => setChoice("simulator_backend", event.target.value as OfficialTrainSettings["simulator_backend"])}>
+                  <option value="linux_external">Official Linux simulator (native)</option>
                   <option value="macos_external">Official macOS simulator (native Apple Silicon)</option>
                   <option value="windows_external">Official Windows simulator (camera)</option>
                   <option value="docker">Docker Linux simulator (emulated on Mac)</option>
@@ -566,9 +572,11 @@ export const TrainPage = forwardRef<TrainPageHandle, TrainPageProps>(function Tr
       {error && <p className="msg err" role="alert">{error}</p>}
       {selectedPhase && <p className="meta" role="status">Selected run stage: {{ demonstration_collection: "Collecting official teacher examples", behavior_cloning: "Initializing PPO from teacher examples", behavior_cloning_ready: "BC policy saved for official evaluation", behavior_cloning_rejected: "BC rejected; PPO did not start", rollout: "Collecting PPO rollout", ppo_update: "Updating PPO", stopped: "Training stopped" }[selectedPhase.phase] ?? selectedPhase.phase}{selectedPhase.reason ? ` · ${selectedPhase.reason}` : ""} · step {formatCount(selectedPhase.step)}.</p>}
       {selectedRun?.stop_reason && <p className="meta">Selected run result: {selectedRun.stop_reason}</p>}
-      {(selectedRun?.simulator_backend === "windows_external" || selectedRun?.simulator_backend === "macos_external") && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="External simulator connections" style={{ marginTop: 14 }}>
+      {(selectedRun?.simulator_backend === "windows_external" || selectedRun?.simulator_backend === "macos_external" || selectedRun?.simulator_backend === "linux_external") && selectedRun.simulator_connections?.length ? <section className="panel" aria-label="External simulator connections" style={{ marginTop: 14 }}>
         <h3 style={{ marginTop: 0 }}>Official simulator connections</h3>
-        <p className="meta">{selectedRun.simulator_backend === "macos_external"
+        <p className="meta">{selectedRun.simulator_backend === "linux_external"
+          ? "Mission Control starts the pinned official Linux practice simulator, ROS 2 Devkit bridge, and shared PPO learner locally. Camera frames and sensors feed practice training; competition-track training is unavailable."
+          : selectedRun.simulator_backend === "macos_external"
           ? "Mission Control starts your native macOS AutoDRIVE practice simulator against the Docker Devkit relay. LiDAR and state feed PPO; the Unity process itself is not emulated."
           : "Mission Control starts one official Windows simulator per environment and connects it to its native WSL bridge. Camera frames and sensors feed the shared PPO learner."}</p>
         <ol>{selectedRun.simulator_connections.map((connection) => <li key={connection.environment}>Environment {connection.environment}: <code>{connection.host}:{connection.port}</code> (ROS domain {connection.ros_domain_id})</li>)}</ol>

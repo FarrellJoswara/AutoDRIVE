@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 
 OFFICIAL_COMPETITION_ROUTE_SHA256 = "62307684f1fd2813e50222f0c97e3545dc7c2808ef8544c1e161f7744d1ba4fb"
+OFFICIAL_COMPETITION_ROUTE_REFERENCE = "outputs/migration/aicar-source-migration.tar.gz#competition/iros2026/tracks/competition/official_centerline.csv"
+OFFICIAL_COMPETITION_ROUTE_ARCHIVE_SHA256 = "bc350d1f3211083c251d292de20fef6f9024ca5b6fe4a02a4985a754df727954"
 OFFICIAL_PORTO_PRACTICE_ROUTE_SHA256 = "87d26be59ccc88ff6fc273905038906b8ed9e883b111c33de008a38f83a15bb3"
 
 
@@ -237,6 +239,27 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verified_competition_route_bytes(route_bytes: bytes) -> Dict[str, Any]:
+    """Accept the pinned route bytes or their exact LF-only checkout form."""
+    raw_sha256 = hashlib.sha256(route_bytes).hexdigest()
+    if raw_sha256 == OFFICIAL_COMPETITION_ROUTE_SHA256:
+        normalized = False
+    else:
+        lf_bytes = route_bytes.replace(b"\r\n", b"\n")
+        # Reject lone CR bytes and any coordinate/content change. The only
+        # accepted alternate representation reconstructs the pinned CRLF bytes.
+        if b"\r" in lf_bytes or hashlib.sha256(lf_bytes.replace(b"\n", b"\r\n")).hexdigest() != OFFICIAL_COMPETITION_ROUTE_SHA256:
+            raise ValueError("official competition centerline bytes do not match the verified route")
+        normalized = True
+    return {
+        "route_sha256": OFFICIAL_COMPETITION_ROUTE_SHA256,
+        "route_file_sha256": raw_sha256,
+        "route_hash_reference": OFFICIAL_COMPETITION_ROUTE_REFERENCE,
+        "route_hash_reference_archive_sha256": OFFICIAL_COMPETITION_ROUTE_ARCHIVE_SHA256,
+        "route_line_ending_normalized": normalized,
+    }
+
+
 def _route_monitor_identity(
     *, output_path: Optional[Path], frontier_path: Path, expected_run_id: str,
 ) -> Dict[str, Any]:
@@ -255,9 +278,49 @@ def _route_monitor_identity(
     ).resolve()
     if route != expected_route or not route.is_file():
         raise ValueError("route monitor accepts only the fixed official competition centerline")
-    route_sha256 = _sha256(route)
-    if route_sha256 != OFFICIAL_COMPETITION_ROUTE_SHA256:
-        raise ValueError("official competition centerline bytes do not match the verified route")
+    route_provenance = _verified_competition_route_bytes(route.read_bytes())
+    route_sha256 = route_provenance["route_sha256"]
+    if os.environ.get("AICAR_SIMULATOR_BACKEND") == "linux_external":
+        manifest_path = Path(output_path).resolve().parent / "linux_simulator_processes.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError("native Linux competition process identity manifest is unavailable") from exc
+        records = manifest.get("processes") if isinstance(manifest, dict) else None
+        if manifest.get("run_id") != expected_run_id or not isinstance(records, list) or len(records) != 1:
+            raise ValueError("native Linux competition process identity does not match this run")
+        record = records[0]
+        executable = Path(str(record.get("executable", ""))).resolve()
+        runtime = executable.parents[3] if len(executable.parents) > 3 else Path("/")
+        from src.layer4.hub.linux_official_simulators import (
+            _proc_group_id, _proc_start_ticks, validate_linux_simulator_paths,
+        )
+        try:
+            validate_linux_simulator_paths({"track_profile": "competition", "native_runtime": str(runtime), "simulator_executable": str(executable)})
+        except RuntimeError as exc:
+            raise ValueError(f"native Linux competition runtime identity is invalid: {exc}") from exc
+        marker = json.loads((runtime / "IMAGE-IDENTITY.json").read_text(encoding="utf-8"))
+        pid = int(record.get("simulator_pid", 0)); leader = int(record.get("pid", 0))
+        if (record.get("simulator_image") != f"{marker['repository']}:{marker['tag']}"
+                or record.get("simulator_image_digest") != marker["digest"]
+                or marker.get("tag") != "2026-iros-compete"
+                or marker.get("digest") != "sha256:749fbef07942109d18497cbcf6ffe9452e06ae487f2bfc915e92440bc4b4663d"
+                or record.get("simulator_starttime_ticks") != _proc_start_ticks(pid)
+                or record.get("process_starttime_ticks") != _proc_start_ticks(leader)
+                or record.get("process_group_id") != _proc_group_id(pid)
+                or record.get("executable_sha256") != _sha256(executable)):
+            raise ValueError("native Linux competition process does not match the pinned competition runtime")
+        return {
+            "official_scene_sha256": route_sha256, "official_scene_path": str(route),
+            "route_sha256": route_sha256, "route_path": str(route), "track_profile": "competition",
+            "route_monitor_only": True,
+            "simulator_identity": {"pid": pid, "executable_path": str(executable), "port": record.get("port"), "manifest_sha256": _sha256(manifest_path)},
+            "simulator_image": f"{marker['repository']}:{marker['tag']}",
+            "simulator_image_digest": marker["digest"],
+            "runtime_identity_path": str(runtime / "IMAGE-IDENTITY.json"),
+            "runtime_identity_sha256": _sha256(runtime / "IMAGE-IDENTITY.json"),
+            **route_provenance,
+        }
     manifest_path = Path(output_path).resolve().parent / "windows_simulator_processes.json"
     if not manifest_path.is_file():
         raise ValueError(f"route monitor requires the run-local simulator identity manifest: {manifest_path}")
@@ -296,6 +359,7 @@ def _route_monitor_identity(
             "port": port,
             "manifest_sha256": _sha256(manifest_path),
         },
+        **route_provenance,
     }
 
 
@@ -420,7 +484,80 @@ def _verified_porto_practice_runtime(route_identity: Dict[str, Any]) -> Dict[str
             "simulator_image": route_identity["practice_asset_source_image"],
             "simulator_image_digest": route_identity["practice_asset_source_image_digest"],
         }
-    raise ValueError("Porto practice diagnostic requires the Windows external or official Docker simulator backend")
+    if backend == "linux_external":
+        output_value = os.environ.get("AICAR_EVALUATION_OUTPUT", "").strip()
+        run_id = os.environ.get("AICAR_RUN_ID", "").strip()
+        if not output_value or not run_id:
+            raise ValueError("native Linux practice evaluation requires its run-local output path and run identity")
+        output_path = Path(output_value).resolve()
+        manifest_path = output_path.parent / "linux_simulator_processes.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError("native Linux simulator process identity manifest is unavailable") from exc
+        records = manifest.get("processes") if isinstance(manifest, dict) else None
+        if (not isinstance(manifest, dict) or manifest.get("run_id") != run_id
+                or not isinstance(records, list) or len(records) != 1):
+            raise ValueError("native Linux simulator process identity does not match this evaluation run")
+        from src.layer4.hub.linux_official_simulators import (
+            _proc_group_id,
+            _proc_start_ticks,
+            validate_linux_simulator_paths,
+        )
+        runtime, executable, _wrapper = validate_linux_simulator_paths()
+        marker_path = runtime / "IMAGE-IDENTITY.json"
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        record = records[0]
+        leader_pid = int(record.get("pid", 0))
+        player_pid = int(record.get("simulator_pid", 0))
+        expected_player_ticks = record.get("simulator_starttime_ticks")
+        player_ticks = _proc_start_ticks(player_pid)
+        try:
+            player_cmdline = Path(f"/proc/{player_pid}/cmdline").read_bytes().replace(
+                b"\0", b" "
+            ).decode(errors="replace")
+        except OSError:
+            player_cmdline = ""
+        leader_ticks = _proc_start_ticks(leader_pid)
+        leader_cmdline = ""
+        try:
+            leader_cmdline = Path(f"/proc/{leader_pid}/cmdline").read_bytes().replace(
+                b"\0", b" "
+            ).decode(errors="replace")
+        except OSError:
+            pass
+        executable_hash = _sha256(executable)
+        port = int(record.get("port", 0))
+        if (leader_ticks != record.get("process_starttime_ticks")
+                or str(record.get("wrapper", "")) not in leader_cmdline
+                or player_ticks != expected_player_ticks
+                or _proc_group_id(player_pid) != int(record.get("process_group_id", -1))
+                or (str(executable) not in player_cmdline
+                    and str(Path(f"/proc/{player_pid}/exe").resolve()) != str(executable))
+                or record.get("executable") != str(executable)
+                or record.get("executable_sha256") != executable_hash
+                or marker.get("simulator_sha256") != executable_hash
+                or record.get("simulator_image_digest") != marker.get("digest")
+                or record.get("simulator_image") != f"{marker.get('repository')}:{marker.get('tag')}"
+                or not (1 <= port <= 65535)):
+            raise ValueError("native Linux simulator process, executable, or pinned image identity did not verify")
+        return {
+            "simulator_backend": backend,
+            "simulator_image": f"{marker['repository']}:{marker['tag']}",
+            "simulator_image_digest": marker["digest"],
+            "runtime_identity_path": str(marker_path),
+            "runtime_identity_sha256": _sha256(marker_path),
+            "simulator_executable": str(executable),
+            "simulator_executable_sha256": executable_hash,
+            "simulator_process_id": player_pid,
+            "simulator_process_starttime_ticks": player_ticks,
+            "simulator_process_group_id": int(record["process_group_id"]),
+            "simulator_port": port,
+            "simulator_manifest_path": str(manifest_path),
+            "simulator_manifest_sha256": _sha256(manifest_path),
+            "run_id": run_id,
+        }
+    raise ValueError("Porto practice diagnostic requires the Windows external, native Linux, or official Docker simulator backend")
 
 
 def _camera_topic_age_s(env: Any) -> Optional[float]:
@@ -1251,6 +1388,9 @@ def evaluate(
             if porto_runtime_identity.get("simulator_backend") == "docker":
                 result["simulator_image"] = porto_route_identity["practice_asset_source_image"]
                 result["simulator_image_digest"] = porto_route_identity["practice_asset_source_image_digest"]
+            elif porto_runtime_identity.get("simulator_backend") == "linux_external":
+                result["simulator_image"] = porto_runtime_identity["simulator_image"]
+                result["simulator_image_digest"] = porto_runtime_identity["simulator_image_digest"]
             result["fresh_simulator_attempt_required"] = True
             result["practice_diagnostic_passed"] = bool(
                 len(runs) == 1

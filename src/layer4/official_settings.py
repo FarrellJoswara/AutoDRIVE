@@ -16,9 +16,11 @@ from src.layer4.settings import ROOT
 OFFICIAL_SETTINGS_PATH = ROOT / "logs" / "layer4" / "official_train_settings.json"
 
 
-def _default_simulator_backend() -> Literal["docker", "windows_external", "macos_external"]:
+def _default_simulator_backend() -> Literal["docker", "windows_external", "macos_external", "linux_external"]:
     if sys.platform == "darwin":
         return "macos_external"
+    if sys.platform == "linux" and "microsoft" not in Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8", errors="ignore").lower():
+        return "linux_external"
     return "windows_external"
 
 
@@ -36,6 +38,18 @@ def _default_display_mode() -> Literal["gui", "offscreen"]:
     return "gui"
 
 
+def _default_automatic_evaluation_enabled() -> bool:
+    if sys.platform == "darwin":
+        return False
+    if sys.platform == "linux":
+        try:
+            if "microsoft" not in Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8").lower():
+                return False
+        except OSError:
+            return False
+    return True
+
+
 class OfficialTrainSettings(BaseModel):
     """Competition settings accepted by the official-only run manager.
 
@@ -44,7 +58,7 @@ class OfficialTrainSettings(BaseModel):
     """
 
     # Zero means no timestep ceiling; plateau and optional wall-clock stop rules still apply.
-    simulator_backend: Literal["docker", "windows_external", "macos_external"] = Field(
+    simulator_backend: Literal["docker", "windows_external", "macos_external", "linux_external"] = Field(
         default_factory=_default_simulator_backend
     )
     # Windows offscreen keeps the GPU graphics device; macOS offscreen uses batch/nographics.
@@ -74,7 +88,7 @@ class OfficialTrainSettings(BaseModel):
     device: Literal["cpu", "cuda"] = "cpu"
     resume: Optional[str] = None
     checkpoint_every: int = Field(default=10_000, ge=1)
-    automatic_evaluation_enabled: bool = Field(default_factory=lambda: sys.platform != "darwin")
+    automatic_evaluation_enabled: bool = Field(default_factory=_default_automatic_evaluation_enabled)
     automatic_evaluation_trigger: Literal["steps", "episodes"] = "steps"
     automatic_evaluation_interval: int = Field(default=50_000, ge=1)
     automatic_evaluation_mode: Literal["competitive", "training_probe"] = "competitive"
@@ -257,6 +271,11 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
             raw.setdefault("simulator_display_mode", "offscreen")
             if "automatic_evaluation_enabled" not in raw:
                 raw["automatic_evaluation_enabled"] = False
+        elif sys.platform == "linux" and "microsoft" not in Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8", errors="ignore").lower():
+            if raw.get("simulator_backend") in {None, "docker", "windows_external", "macos_external"}:
+                raw["simulator_backend"] = "linux_external"
+            raw.setdefault("simulator_display_mode", "offscreen")
+            raw.setdefault("automatic_evaluation_enabled", False)
         if legacy_reward_schema:
             raw.update({
                 "warmup_laps": 0,

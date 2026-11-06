@@ -75,8 +75,7 @@ class _RecoveredProcess:
                 try:
                     os.kill(self.pid, 0)
                 except ProcessLookupError:
-                    self.returncode = 0
-                    return self.returncode
+                    return self._leader_exited()
                 except PermissionError:
                     return None
                 # Procfs may be temporarily unreadable or malformed. A PID
@@ -84,16 +83,19 @@ class _RecoveredProcess:
                 return None
             if (self.process_starttime_ticks is not None
                     and stat.get("starttime_ticks") != self.process_starttime_ticks):
-                self.returncode = 0
-                return self.returncode
+                return self._leader_exited()
             if stat.get("state") not in {"Z", "X"}:
                 return None
         except ProcessLookupError:
-            self.returncode = 0
-            return self.returncode
+            return self._leader_exited()
         except (PermissionError, OSError, ValueError, TypeError):
             # A transient procfs read failure is not evidence that the process
             # exited. Keep it alive until a later poll can establish state.
+            return None
+        return self._leader_exited()
+
+    def _leader_exited(self) -> int | None:
+        if _owned_process_group_alive(self.process_group_id) is not False:
             return None
         self.returncode = self.returncode or 0
         return self.returncode
@@ -119,9 +121,57 @@ class _RecoveredProcess:
         return int(self.returncode or 0)
 
 
+def _owned_process_group_alive(process_group_id: int) -> bool | None:
+    """Return whether a process group still exists, failing closed on uncertainty."""
+    if int(process_group_id) <= 1:
+        return False
+    try:
+        os.killpg(int(process_group_id), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+class _OwnedProcessGroupPopen:
+    """Popen handle that remains live until its isolated group is gone."""
+
+    def __init__(self, process: subprocess.Popen[Any]):
+        self._process = process
+        self.pid = int(process.pid)
+        self.process_group_id = self.pid
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._process, name)
+
+    def poll(self) -> int | None:
+        returncode = self._process.poll()
+        if returncode is None:
+            return None
+        if _owned_process_group_alive(self.process_group_id) is not False:
+            return None
+        return returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        remaining = timeout
+        returncode = self._process.wait(timeout=remaining)
+        while _owned_process_group_alive(self.process_group_id) is not False:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(min(0.05, remaining) if remaining is not None else 0.05)
+        return int(returncode)
+
+
 def _signal_process_group(process: Any, sig: int) -> None:
     try:
-        os.killpg(int(process.pid), sig)
+        process_group_id = int(getattr(process, "process_group_id", process.pid))
+        os.killpg(process_group_id, sig)
     except (ProcessLookupError, PermissionError):
         if sig == signal.SIGTERM:
             try:
@@ -133,8 +183,13 @@ def _signal_process_group(process: Any, sig: int) -> None:
 class NativeOfficialBackend:
     """Drop-in lifecycle backend used by OfficialRunManager without Docker."""
 
-    def __init__(self, *, ros_workspace: Path | None = None, startup_timeout_s: float = 45.0):
+    def __init__(
+        self, *, ros_workspace: Path | None = None,
+        ros_setup_script: Path | None = None,
+        startup_timeout_s: float = 45.0,
+    ):
         self.ros_workspace = Path(ros_workspace or Path.home() / "autodrive_ws")
+        self.ros_setup_script = Path(ros_setup_script or "/opt/ros/jazzy/setup.bash")
         self.startup_timeout_s = float(startup_timeout_s)
         self.simulator_host = subprocess.run(
             ["hostname", "-I"], check=True, stdout=subprocess.PIPE,
@@ -229,8 +284,9 @@ class NativeOfficialBackend:
 
     def _native_policy_command(self, command: list[str]) -> list[str]:
         """Run the policy process with the same ROS setup as its bridge pair."""
+        ros_setup_script = getattr(self, "ros_setup_script", Path("/opt/ros/jazzy/setup.bash"))
         setup = (
-            "set +u; source /opt/ros/jazzy/setup.bash; "
+            f"set +u; source {shlex.quote(str(ros_setup_script))}; "
             f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; "
             'set -u; exec "$@"'
         )
@@ -466,7 +522,7 @@ class NativeOfficialBackend:
         child_env["PYTHONUNBUFFERED"] = "1"
         child_env["PYTHONFAULTHANDLER"] = "1"
         child_env["PYTHONNOUSERSITE"] = "1"
-        child_env["AICAR_SIMULATOR_BACKEND"] = "windows_external"
+        child_env.setdefault("AICAR_SIMULATOR_BACKEND", "windows_external")
         run_dir = Path(metadata_labels["aicar.output_dir"])
         run_dir.mkdir(parents=True, exist_ok=True)
         records: list[dict[str, Any]] = []
@@ -652,16 +708,17 @@ class NativeOfficialBackend:
             "PYTHONNOUSERSITE": "1",
         })
         bridge_log = (run_dir / f"devkit_env{index}.log").open("ab", buffering=0)
+        ros_setup_script = getattr(self, "ros_setup_script", Path("/opt/ros/jazzy/setup.bash"))
         setup = (
-            "set +u; source /opt/ros/jazzy/setup.bash; "
-            f"source '{self.ros_workspace}/install/setup.bash'; set -u; "
+            f"set +u; source {shlex.quote(str(ros_setup_script))}; "
+            f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; set -u; "
             "exec ros2 launch autodrive_roboracer bringup_headless.launch.py"
         )
-        devkit = subprocess.Popen(
+        devkit = _OwnedProcessGroupPopen(subprocess.Popen(
             ["bash", "-lc", setup], cwd=ROOT, env=bridge_env,
             stdin=subprocess.DEVNULL, stdout=bridge_log, stderr=subprocess.STDOUT,
             start_new_session=True,
-        )
+        ))
         records.append({"role": f"devkit-{index}", "process": devkit,
                         "process_group_id": int(devkit.pid),
                         "process_starttime_ticks": (
@@ -679,7 +736,7 @@ class NativeOfficialBackend:
         relay_log = (run_dir / f"relay_env{index}.log").open("ab", buffering=0)
         relay = subprocess.Popen(
             [sys.executable, "-m", "src.layer1.official_bridge_relay",
-             "--host", "0.0.0.0", "--port", str(relay_port),
+             "--host", str(getattr(self, "relay_bind_host", "0.0.0.0")), "--port", str(relay_port),
              "--devkit-url", f"http://127.0.0.1:{devkit_port}"],
             cwd=ROOT, env=relay_env, stdin=subprocess.DEVNULL,
             stdout=relay_log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -731,8 +788,9 @@ class NativeOfficialBackend:
         script = ROOT / "scripts" / "native_prelaunch_neutral_barrier.py"
         if not script.is_file():
             raise FileNotFoundError(f"native Porto neutral barrier helper is missing: {script}")
+        ros_setup_script = getattr(self, "ros_setup_script", Path("/opt/ros/jazzy/setup.bash"))
         setup = (
-            "set +u; source /opt/ros/jazzy/setup.bash; "
+            f"set +u; source {shlex.quote(str(ros_setup_script))}; "
             f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; "
             "set -u; export PYTHONNOUSERSITE=1; exec \"$@\""
         )

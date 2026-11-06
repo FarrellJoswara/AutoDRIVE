@@ -7,7 +7,32 @@ case "${1:-help}" in
   doctor)
     test "$(uname -s)" = Linux || { echo 'Linux is required'; exit 1; }
     test "$(uname -m)" = x86_64 || { echo 'Official simulator requires x86_64'; exit 1; }
-    docker info >/dev/null
+
+    if ! command -v docker >/dev/null 2>&1; then
+      echo 'Docker CLI is missing. Install/enable the administrator-approved Docker Engine and Compose v2, then rerun doctor.' >&2
+      exit 1
+    fi
+    compose_version=$(docker compose version --short 2>&1) || {
+      echo "Docker Compose v2 is unavailable ($compose_version). Install/enable the Compose v2 plugin, then rerun doctor." >&2
+      exit 1
+    }
+    compose_major=${compose_version%%.*}
+    if [[ ! "$compose_major" =~ ^[0-9]+$ ]] || (( compose_major < 2 )); then
+      echo "Docker Compose v2 is required; found '$compose_version'." >&2
+      exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+      echo 'Docker daemon is unavailable or this account cannot access it. Ask the host administrator to start/enable the approved daemon and grant this account access; do not install or enable a privileged service from this script.' >&2
+      exit 1
+    fi
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+      echo 'nvidia-smi is missing. An administrator must provide a working NVIDIA driver before GPU simulator/training checks.' >&2
+      exit 1
+    fi
+    if ! nvidia-smi >/dev/null 2>&1; then
+      echo 'nvidia-smi cannot communicate with the host NVIDIA driver. Ask the host administrator to repair GPU driver access.' >&2
+      exit 1
+    fi
     "${compose[@]}" config --quiet
     nvidia-smi
     docker run --rm --gpus all --entrypoint /bin/bash aicar-server-runtime:local -lc '

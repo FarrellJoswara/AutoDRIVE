@@ -12,6 +12,7 @@ import threading
 import time
 import math
 import os
+import json
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, Optional
 
@@ -265,6 +266,8 @@ class RacerRos2:
         self._race_metrics_received: set[str] = set()
         self._race_metric_update_counts: Dict[str, int] = {}
         self._position_update_count = 0
+        self._position_received_unix_ns = 0
+        self._position_history: list[Dict[str, Any]] = []
         self._last_scan_receipt = 0.0
         self._last_scan_source_time: Optional[float] = None
         self._last_control_source_time: Optional[float] = None
@@ -649,6 +652,14 @@ class RacerRos2:
                 )
                 self._race_metrics_received.add(field)
                 self._position_update_count += 1
+                self._position_received_unix_ns = time.time_ns()
+                self._position_history.append({
+                    "callback_count": self._position_update_count,
+                    "received_monotonic_s": now,
+                    "received_unix_ns": self._position_received_unix_ns,
+                    "position_xy": [float(message.x), float(message.y)],
+                })
+                self._position_history = self._position_history[-256:]
                 self._condition.notify_all()
                 return
             if field in {
@@ -955,6 +966,47 @@ class RacerRos2:
             else self.wait_until_ready(cancel_check=cancel_check)
         )
         reset_metric_update_counts: Dict[str, int] = {}
+        diagnostic_path = os.environ.get("AICAR_RESET_DIAGNOSTICS_PATH")
+        environment_index = os.environ.get("AICAR_ENV_INDEX", "0")
+        target = (
+            None if expected_position is None
+            else (float(expected_position[0]), float(expected_position[1]))
+        )
+        attempts_diagnostics: list[Dict[str, Any]] = []
+        final_validated_snapshot: Optional[Dict[str, Any]] = None
+
+        def wait_for_stable_pose(after_count: int, timeout_s: float) -> tuple[bool, list[dict[str, Any]]]:
+            """Require three distinct recent IPS callbacks clustered inside the existing guard."""
+            deadline = time.monotonic() + timeout_s
+            samples: list[dict[str, Any]] = []
+            last_count = after_count
+            with self._condition:
+                while True:
+                    self._raise_if_training_reset_cancelled(cancel_check)
+                    self._check_wait_state()
+                    history = getattr(self, "_position_history", [])
+                    unseen = [sample for sample in history if int(sample["callback_count"]) > last_count]
+                    for received in unseen:
+                        position_xy = received["position_xy"]
+                        distance = math.dist(position_xy, target) if target is not None else 0.0
+                        samples.append({**received, "distance_m": distance})
+                        samples = samples[-3:]
+                        last_count = int(received["callback_count"])
+                    if target is None or (
+                        len(samples) == 3
+                        and all(sample["distance_m"] <= position_tolerance_m for sample in samples)
+                        and max(
+                            math.dist(a["position_xy"], b["position_xy"])
+                            for index, a in enumerate(samples)
+                            for b in samples[index + 1:]
+                        ) <= 0.10
+                    ):
+                        return True, samples
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False, samples
+                    self._condition.wait(min(remaining, 0.1))
+
         for attempt in range(reset_attempts):
             self._raise_if_training_reset_cancelled(cancel_check)
             with self._condition:
@@ -963,62 +1015,180 @@ class RacerRos2:
                 reset_metric_update_counts = dict(
                     getattr(self, "_race_metric_update_counts", {})
                 )
-            reset_msg = self._msg_types["Bool"]()
-            reset_msg.data = True
-            publisher.publish(reset_msg)
-            # The official simulator samples this command during its update
-            # loop. Hold it across several 40 Hz ticks, then deassert it.
-            deadline = time.monotonic() + 0.1
+                # A collision or stalled episode can leave the last learner
+                # command active when this restricted reset is requested.
+                # Neutralize it under the same lock used by step() before
+                # teleporting, so stale throttle cannot carry the car away
+                # from the validated spawn while reset telemetry settles.
+                self._publish_neutral_command()
+                self._last_policy_action = {"throttle": 0.0, "steering": 0.0}
+                self._last_action_time = 0.0
+                self._command_expired = True
+                reset_msg = self._msg_types["Bool"]()
+                reset_msg.data = True
+                reset_requested_at_unix_ns = time.time_ns()
+                reset_publish_unix_ns = []
+                reset_publish_monotonic = []
+            # Devkit stores only the latest Bool and includes it in the next
+            # Bridge packet. Re-publish True across several packet intervals
+            # so a single delayed/lost ROS delivery cannot consume the reset.
+            pulse_deadline = time.monotonic() + min(0.30, max(0.12, self.frame_timeout_s))
             try:
-                while time.monotonic() < deadline:
+                publisher.publish(reset_msg)
+                reset_publish_unix_ns.append(time.time_ns())
+                reset_publish_monotonic.append(time.monotonic())
+                while time.monotonic() < pulse_deadline:
                     self._raise_if_training_reset_cancelled(cancel_check)
                     with self._condition:
                         self._check_wait_state()
-                        self._condition.wait(min(0.02, deadline - time.monotonic()))
+                        remaining = pulse_deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        self._condition.wait(min(0.05, remaining))
+                        if time.monotonic() < pulse_deadline:
+                            publisher.publish(reset_msg)
+                            reset_publish_unix_ns.append(time.time_ns())
+                            reset_publish_monotonic.append(time.monotonic())
             finally:
                 reset_msg.data = False
                 publisher.publish(reset_msg)
+                reset_deasserted_unix_ns = time.time_ns()
             snap = (
                 self._wait_for_scan_after(previous_step)
                 if cancel_check is None
                 else self._wait_for_scan_after(previous_step, cancel_check=cancel_check)
             )
 
-            if expected_position is None or not self.include_race_metrics:
+            if target is None or not self.include_race_metrics:
                 break
-            target = (float(expected_position[0]), float(expected_position[1]))
-            position_deadline = time.monotonic() + self.frame_timeout_s
-            reached_spawn = False
-            with self._condition:
-                while True:
-                    self._raise_if_training_reset_cancelled(cancel_check)
-                    self._check_wait_state()
-                    position = self._race_metrics.position
-                    is_fresh = self._position_update_count > previous_position_update
-                    if is_fresh and position is not None:
-                        distance = math.dist(position[:2], target)
-                        if distance <= position_tolerance_m:
-                            reached_spawn = True
-                            break
-                    remaining = position_deadline - time.monotonic()
-                    if remaining <= 0:
-                        if attempt + 1 >= reset_attempts:
-                            actual = self._race_metrics.position
-                            raise OfficialRosTransportError(
-                                "Official training reset did not reach the configured IPS spawn "
-                                f"after {reset_attempts} attempts; expected={target}, "
-                                f"actual={actual}, fresh_position={is_fresh}; "
-                                + self._transport_diagnostic()
-                            )
-                        break
-                    self._condition.wait(min(remaining, 0.1))
+            attempt_diagnostic: Dict[str, Any] = {
+                "attempt": attempt + 1,
+                "command_delivery": "publisher calls recorded; Devkit exposes no delivery acknowledgment",
+                "reset_true_publish_count": len(reset_publish_unix_ns),
+                "reset_requested_unix_ns": reset_requested_at_unix_ns,
+                "reset_published_unix_ns": reset_publish_unix_ns,
+                "reset_published_monotonic_s": reset_publish_monotonic,
+                "reset_deasserted_unix_ns": reset_deasserted_unix_ns,
+                "position_callback_count_before": previous_position_update,
+                "configured_ips_spawn_xy": list(target),
+                "guard_limit_m": position_tolerance_m,
+                "position_sequence": [],
+                "metrics_result": "pending",
+                "final_pose_result": "pending",
+            }
+            reached_spawn, pose_sequence = wait_for_stable_pose(
+                previous_position_update, self.frame_timeout_s
+            )
+            attempt_diagnostic["position_sequence"] = pose_sequence
             if reached_spawn:
-                break
-        if self.include_race_metrics:
+                try:
+                    self._wait_for_fresh_reset_metrics(
+                        reset_metric_update_counts,
+                        cancel_check=cancel_check,
+                    )
+                    attempt_diagnostic["metrics_result"] = "fresh_stable_metrics"
+                    with self._condition:
+                        post_metrics_position_count = self._position_update_count
+                    final_in_range, final_sequence = wait_for_stable_pose(
+                        post_metrics_position_count, self.frame_timeout_s
+                    )
+                    attempt_diagnostic["final_pose_sequence"] = final_sequence
+                    if final_in_range:
+                        with self._condition:
+                            final_position = self._race_metrics.position
+                            final_count = int(self._position_update_count)
+                            final_received_unix_ns = int(
+                                getattr(self, "_position_received_unix_ns", 0)
+                            )
+                            final_distance = (
+                                math.dist(final_position[:2], target)
+                                if final_position is not None else math.inf
+                            )
+                            newest_validated = final_sequence[-1]
+                            still_stable = (
+                                final_position is not None
+                                and final_distance <= position_tolerance_m
+                                and math.dist(
+                                    final_position[:2], newest_validated["position_xy"]
+                                ) <= 0.10
+                            )
+                            if still_stable:
+                                final_validated_snapshot = {
+                                    "position_xy": list(final_position[:2]),
+                                    "callback_count": final_count,
+                                    "received_unix_ns": final_received_unix_ns,
+                                    "distance_m": final_distance,
+                                }
+                        attempt_diagnostic["final_pose_result"] = (
+                            "stable_in_range" if still_stable else "drifted_after_stable_sequence"
+                        )
+                    else:
+                        attempt_diagnostic["final_pose_result"] = "timeout_or_unstable"
+                    if final_validated_snapshot is not None:
+                        attempts_diagnostics.append(attempt_diagnostic)
+                        break
+                except OfficialRosTransportError as exc:
+                    if isinstance(exc, OfficialTrainingResetCancelled):
+                        raise
+                    attempt_diagnostic["metrics_result"] = f"failed: {type(exc).__name__}: {exc}"
+                    attempt_diagnostic["final_pose_result"] = "skipped_metrics_failed"
+            else:
+                attempt_diagnostic["metrics_result"] = "not_waited_pose_not_stable"
+                attempt_diagnostic["final_pose_result"] = "initial_pose_timeout_or_unstable"
+            attempts_diagnostics.append(attempt_diagnostic)
+            if attempt + 1 >= reset_attempts:
+                with self._condition:
+                    actual = self._race_metrics.position
+                    callback_count = int(self._position_update_count)
+                result = {
+                    "result": "failed",
+                    "environment_index": environment_index,
+                    "ros_domain_id": os.environ.get("ROS_DOMAIN_ID"),
+                    "simulator_port": os.environ.get("AICAR_SIMULATOR_PORT") or os.environ.get("AUTODRIVE_PORT") or os.environ.get("PORT"),
+                    "configured_ips_spawn_xy": list(target),
+                    "guard_limit_m": position_tolerance_m,
+                    "attempts": attempts_diagnostics,
+                    "final_position_xy": None if actual is None else list(actual[:2]),
+                    "final_position_callback_count": callback_count,
+                }
+                if diagnostic_path:
+                    try:
+                        with open(diagnostic_path, "a", encoding="utf-8") as stream:
+                            stream.write(json.dumps(result, sort_keys=True) + "\n")
+                    except OSError as exc:
+                        print(f"WARNING: Could not append reset diagnostic {diagnostic_path}: {exc}")
+                raise OfficialRosTransportError(
+                    "Official training reset failed stable spawn/metrics validation "
+                    f"after {reset_attempts} attempts; expected={target}, actual={actual}; "
+                    + self._transport_diagnostic()
+                )
+        else:
+            attempts_diagnostics.append({"attempt": attempt + 1, "result": "not_pose_validated"})
+        if target is None and self.include_race_metrics:
             self._wait_for_fresh_reset_metrics(
                 reset_metric_update_counts,
                 cancel_check=cancel_check,
             )
+        if diagnostic_path and target is not None and self.include_race_metrics:
+            assert final_validated_snapshot is not None
+            result = {
+                "result": "success",
+                "environment_index": environment_index,
+                "ros_domain_id": os.environ.get("ROS_DOMAIN_ID"),
+                "simulator_port": os.environ.get("AICAR_SIMULATOR_PORT") or os.environ.get("AUTODRIVE_PORT") or os.environ.get("PORT"),
+                "configured_ips_spawn_xy": list(target),
+                "guard_limit_m": position_tolerance_m,
+                "attempts": attempts_diagnostics,
+                "final_position_xy": final_validated_snapshot["position_xy"],
+                "final_position_callback_count": final_validated_snapshot["callback_count"],
+                "final_position_received_unix_ns": final_validated_snapshot["received_unix_ns"],
+                "final_position_distance_m": final_validated_snapshot["distance_m"],
+            }
+            try:
+                with open(diagnostic_path, "a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(result, sort_keys=True) + "\n")
+            except OSError as exc:
+                print(f"WARNING: Could not append reset diagnostic {diagnostic_path}: {exc}")
         with self._condition:
             self._last_action_time = 0.0
             self._last_control_scan_receipt = 0.0

@@ -161,7 +161,7 @@ export function ReplayPage() {
   const meters = (value?: number | null) => Number.isFinite(value) ? `${value!.toFixed(2)} m` : "—";
   return <section className="panel fleet-panel">
     <h2>Official evaluation / replay</h2>
-    <p className="lede">Run a competitive evaluation with one warm-up lap and ten scored laps across three fresh simulator processes, or select a noncompetitive diagnostic for a single checkpoint.</p>
+    <p className="lede">Run a competitive evaluation with one warm-up lap and ten scored laps across three fresh simulator processes, or select a noncompetitive diagnostic for a single checkpoint.{selectedMetadata?.simulator_backend === "linux_external" ? " Linux competition evaluation uses the separately allowlisted official competition runtime; the practice runtime is for training." : ""}</p>
     <p className="meta">Diagnostics run without teacher control or PPO updates. BC diagnostics require an authenticated behavior-cloning checkpoint and use one warm-up plus ten scored laps. Training probes require authenticated PPO lineage with an approved BC ancestor and use one warm-up plus three scored laps. Both are noncompetitive and never promote a champion.</p>
     <section className="panel" aria-label="Best official model">
       <h3 style={{ marginTop: 0 }}>Best official model across runs</h3>
@@ -191,11 +191,19 @@ export function ReplayPage() {
         : !metadataError ? <p>Checking the selected checkpoint’s file hash and saved settings…</p> : null}
       {metadataError && <p className="error" role="alert">{metadataError}</p>}
     </div>}
-    {(status?.simulator_backend === "windows_external" || status?.simulator_backend === "macos_external") && status.simulator_connections?.length ? <section className="panel" aria-label="External simulator connection" style={{ marginTop: 12 }}>
-      <h3 style={{ marginTop: 0 }}>Connect the official Windows simulator</h3>
-      <p className="meta">This checkpoint was trained with the graphics-enabled official Windows simulator. Start it on the assigned bridge port so replay uses the same camera and sensor workflow.</p>
+    {(status?.simulator_backend === "windows_external" || status?.simulator_backend === "macos_external" || status?.simulator_backend === "linux_external") && status.simulator_connections?.length ? <section className="panel" aria-label="External simulator connection" style={{ marginTop: 12 }}>
+      <h3 style={{ marginTop: 0 }}>{status.simulator_backend === "linux_external"
+        ? "Official Linux simulator connection"
+        : status.simulator_backend === "macos_external"
+          ? "Official macOS simulator connection"
+          : "Connect the official Windows simulator"}</h3>
+      <p className="meta">{status.simulator_backend === "linux_external"
+        ? "Mission Control launches the pinned official Linux runtime and ROS bridge for this evaluation. Linux competition evaluation requires the separately allowlisted competition release."
+        : status.simulator_backend === "macos_external"
+          ? "Mission Control launches the native macOS practice simulator automatically for this replay."
+          : "This checkpoint was trained with the graphics-enabled official Windows simulator. Start it on the assigned bridge port so replay uses the same camera and sensor workflow."}</p>
       <p>Environment 0: <code>{status.simulator_connections[0].host}:{status.simulator_connections[0].port}</code></p>
-      <p className="meta">Run <code>scripts/start_official_windows_simulators.ps1 -SimulatorExePath &lt;AutoDRIVE Simulator.exe&gt; -Ports {status.simulator_connections.map((connection) => connection.port).join(",")} -RunId {status.run_id} -HubUrl {window.location.origin}</code> in PowerShell.</p>
+      {status.simulator_backend === "windows_external" && <p className="meta">Run <code>scripts/start_official_windows_simulators.ps1 -SimulatorExePath &lt;AutoDRIVE Simulator.exe&gt; -Ports {status.simulator_connections.map((connection) => connection.port).join(",")} -RunId {status.run_id} -HubUrl {window.location.origin}</code> in PowerShell.</p>}
     </section> : null}
     {(error || status?.error || pollError) && <p className="error" role="alert">{error || status?.error || pollError}</p>}
     {diagnostic && <section className="panel" aria-label={`${diagnosticLabel} telemetry`}>

@@ -8,6 +8,19 @@ If this is a university scheduler-managed machine without Docker access, use an
 administrator-approved runtime rather than these commands. Do not run the WSL
 Windows launcher on a Linux-only server.
 
+### Host preflight handoff
+
+On the inspected host (`cycle3.eecs.ku.edu`, Ubuntu 24.04, x86_64, NVIDIA L40),
+the official Docker route is currently blocked: Docker/Compose and a daemon
+socket are absent, sudo requires a password, rootless user namespaces are
+denied, and the installed LXD client cannot reach an LXD server. No official
+simulator images are cached. The local Unity player is not a substitute for
+the official practice/competition images. Before continuing, ask the machine
+administrator to provision Docker Engine with Compose v2 and NVIDIA container
+GPU support, and grant this account daemon access; alternatively, ask for the
+institution's approved container runtime and a supported deployment procedure.
+Do not attempt privileged installation or daemon changes from this account.
+
 The server image uses the repository's ROS Jazzy/CUDA 12.6 PyTorch runtime,
 pinned AutoDRIVE Devkit commit, and bundled frontend. The application requirements
 are not a full transitive lockfile. Record the built image IDs/digests for a run;
@@ -94,8 +107,10 @@ bash scripts/server.sh status
 
 `build` may take substantial time and disk space. It builds one ROS training/hub
 image and pulls the official practice and competition simulator images.
-`doctor` checks architecture, Docker, host NVIDIA status, ROS/Python imports,
-and an actual CUDA tensor operation inside the training image. It does not
+`doctor` checks architecture, Docker CLI and Compose v2 availability, daemon
+access, host NVIDIA status, and Compose configuration before running any image
+commands. It then checks ROS/Python imports and an actual CUDA tensor operation
+inside the training image. It does not
 prove Unity graphics or camera correctness. Host ROS, Python venvs, and Node
 are not required; the image contains them. Docker GPU access must already be
 configured by the machine administrator. This repository does not change host

@@ -46,7 +46,7 @@ EVALUATION_SIM_IMAGE = os.environ.get(
     or "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete",
 )
 GPU_API_IMAGE = os.environ.get("AICAR_OFFICIAL_API_GPU_IMAGE", "aicar-iros2026:cuda")
-EXTERNAL_SIMULATOR_BACKENDS = frozenset({"windows_external", "macos_external"})
+EXTERNAL_SIMULATOR_BACKENDS = frozenset({"windows_external", "macos_external", "linux_external"})
 PORTO_PRACTICE_SIM_IMAGE = "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
 OFFICIAL_COMPETITION_SIM_IMAGE = "autodriveecosystem/autodrive_roboracer_sim:2026-iros-compete"
 RUNS_ROOT = ROOT / "logs" / "rl"
@@ -248,7 +248,7 @@ def normalize_official_config(
             # in Unity batchmode on this runtime. Preserve real camera rendering.
             result["simulator_display_mode"] = "gui"
     if result["simulator_backend"] == "docker" and result.get("simulator_executable"):
-        raise ValueError("simulator_executable is only supported by the windows_external backend")
+        raise ValueError("simulator_executable is only supported by an external simulator backend")
     validate_bc_teacher_action_mapping(
         behavior_cloning_enabled=result["behavior_cloning_enabled"],
         resume=result["resume"],
@@ -329,6 +329,10 @@ def _training_simulator_image(config: Dict[str, Any]) -> str:
     the separate official release label.
     """
     profile = config.get("track_profile")
+    if config.get("simulator_backend") == "linux_external":
+        if profile == "competition":
+            return "official AutoDRIVE 2026 IROS Linux competition release (pinned extracted runtime)"
+        return "official AutoDRIVE 2026 IROS Linux practice release (pinned extracted runtime)"
     if profile == "practice":
         if config.get("simulator_backend") == "windows_external":
             return "official AutoDRIVE IROS 2026 Windows practice release"
@@ -588,6 +592,55 @@ class OfficialRunManager:
             # API/hash consistency; restore the historical Docker default for
             # legacy direct manager callers that omitted their backend.
             config["timeout_s"] = float(official_config.get("timeout_s", TRAIN_DEFAULTS["timeout_s"]))
+        required_simulator_backend = getattr(self.backend, "required_simulator_backend", None)
+        if required_simulator_backend and config["simulator_backend"] != required_simulator_backend:
+            raise ValueError(
+                f"run backend requires simulator_backend={required_simulator_backend!r}; "
+                f"received {config['simulator_backend']!r}"
+            )
+        if config["simulator_backend"] == "linux_external":
+            if not getattr(self.backend, "supports_linux_external", False):
+                raise RuntimeError(
+                    "linux_external requires the native_linux run backend; Docker cannot launch its local bridges"
+                )
+            if kind == "training" and config.get("track_profile") == "competition":
+                raise ValueError(
+                    "native Linux training supports only the official practice track; "
+                    "competition-track training is unavailable"
+                )
+            competitive_linux_evaluation = (
+                kind == "evaluation"
+                and evaluation_options.get("route_monitor_only") is True
+                and evaluation_options.get("validation_mode") is None
+            )
+            linux_training_probe = (
+                kind == "evaluation"
+                and evaluation_options.get("validation_mode") == "training_probe"
+            )
+            practice_linux_diagnostic = (
+                kind == "evaluation"
+                and evaluation_options.get("validation_mode") == "porto_practice_diagnostic"
+            )
+            if kind == "evaluation" and not (
+                competitive_linux_evaluation or linux_training_probe or practice_linux_diagnostic
+            ):
+                raise ValueError(
+                    "native Linux evaluation requires the official competition route monitor, "
+                    "validation_mode='training_probe', or validation_mode='porto_practice_diagnostic'"
+                )
+            if linux_training_probe:
+                expected_competition_route = (
+                    ROOT / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv"
+                ).resolve()
+                if Path(str(evaluation_options.get("frontier_path", ""))).resolve() != expected_competition_route:
+                    raise ValueError("native Linux training_probe requires the fixed official competition route")
+            linux_profile = (
+                "practice" if evaluation_options.get("validation_mode") == "porto_practice_diagnostic"
+                else "competition" if evaluation_options.get("route_monitor_only") is True or linux_training_probe
+                else config.get("track_profile") or "practice"
+            )
+            config = {**config, "track_profile": linux_profile}
+            self.backend.validate_linux_runtime(config)
         admission_context = (
             {"normalized_config": config, "new_hub_identity": supplied_identity}
             if isinstance(supplied_identity, dict) else None
@@ -642,12 +695,35 @@ class OfficialRunManager:
                     for index in range(config["n_envs"])
                 ]
             backend_name = config.get("simulator_backend", "docker")
+            practice_diagnostic = (
+                kind == "evaluation"
+                and evaluation_options.get("validation_mode") == "porto_practice_diagnostic"
+            )
+            competitive_evaluation = (
+                kind == "evaluation" and evaluation_options.get("route_monitor_only") is True
+            )
+            selected_track_profile = (
+                "practice" if practice_diagnostic
+                else "competition" if competitive_evaluation or evaluation_options.get("validation_mode") == "training_probe"
+                else config.get("track_profile")
+            )
+            runtime_config = {**config, "track_profile": selected_track_profile}
             if backend_name == "windows_external":
-                simulator_image = "official AutoDRIVE IROS 2026 Windows simulator"
+                simulator_image = (
+                    _training_simulator_image(runtime_config)
+                    if selected_track_profile == "practice"
+                    else "official AutoDRIVE IROS 2026 Windows simulator"
+                )
             elif backend_name == "macos_external":
                 simulator_image = "official AutoDRIVE IROS 2026 macOS practice simulator"
+            elif backend_name == "linux_external":
+                simulator_image = _training_simulator_image(runtime_config)
             else:
-                simulator_image = EVALUATION_SIM_IMAGE if kind == "evaluation" else TRAIN_SIM_IMAGE
+                simulator_image = (
+                    _training_simulator_image(runtime_config)
+                    if selected_track_profile is not None or kind != "evaluation"
+                    else EVALUATION_SIM_IMAGE
+                )
             row: Dict[str, Any] = {
                 "run_id": run_id,
                 "display_name": display,
@@ -665,12 +741,13 @@ class OfficialRunManager:
                 "config": config,
                 # Map identity is pinned to the selected runtime route.
                 "map_id": (
-                    "iros2026_official" if backend_name == "windows_external"
-                    else "porto" if backend_name == "macos_external"
-                    else "porto" if config.get("track_profile") == "practice"
+                    "porto" if backend_name == "macos_external"
+                    else "porto" if backend_name == "linux_external"
+                    else "porto" if selected_track_profile == "practice"
                     and backend_name in {"docker", "windows_external"}
-                    else "none"
-                ),
+                    else "iros2026_official" if selected_track_profile == "competition"
+                    and backend_name in {"docker", "windows_external"}
+                    else "iros2026_official" if backend_name == "windows_external"
                     else "none"
                 ),
                 "output_dir": str(run_dir),
@@ -709,7 +786,7 @@ class OfficialRunManager:
                 if row.get("state") != "starting":
                     raise RuntimeError("run was stopped while its network was starting")
                 self._persist()
-            env = self._api_environment(config, run_id)
+            env = self._api_environment(runtime_config, run_id)
             external_simulators = config.get("simulator_backend", "docker") in EXTERNAL_SIMULATOR_BACKENDS
             external_base_port = row["simulator_connections"][0]["port"] if external_simulators else None
             if external_simulators:
@@ -799,8 +876,8 @@ class OfficialRunManager:
                         network_name=row["network_name"],
                         binds=[f"{host_logs}:/runs"] if role.startswith("api") else None,
                         env=([
-                            f"ROS_DOMAIN_ID={ros_domain_base + index}",
-                            f"AICAR_ROS_DOMAIN_ID_BASE={ros_domain_base}",
+                            f"ROS_DOMAIN_ID={(ros_domain_base if ros_domain_base is not None else 0) + index}",
+                            f"AICAR_ROS_DOMAIN_ID_BASE={ros_domain_base if ros_domain_base is not None else 0}",
                             f"AICAR_OFFICIAL_ENV_INDEX={index}",
                             f"AICAR_RUN_ID={run_id}",
                             f"AICAR_TRAIN_OUT=/runs/rl/official_run_{run_id}",
@@ -840,6 +917,7 @@ class OfficialRunManager:
                     gpu=True,
                 )
                 policy_gate = Path(host_logs) / "rl" / f"official_run_{run_id}" / "policy-start.gate"
+                policy_gate.parent.mkdir(parents=True, exist_ok=True)
                 policy_gate.write_text(json.dumps({
                     "released_at": _utc_now(),
                     "simulator_container_id": sim_id,

@@ -22,6 +22,7 @@ scratch/
 temp/
 
 # Runtime artifacts
+.native-linux
 logs/trajectories/*.csv
 !logs/trajectories/.gitkeep
 logs/rl/**

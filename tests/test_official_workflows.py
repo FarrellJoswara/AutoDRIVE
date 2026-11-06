@@ -143,6 +143,7 @@ def test_docker_practice_run_uses_official_porto_image_and_stays_bound_to_porto(
 
     run = manager.create_run(config)
     assert run["map_id"] == "porto"
+    assert run["simulator_image"] == "autodriveecosystem/autodrive_roboracer_sim:2026-iros-practice"
     assert manager.telemetry(run["run_id"])["map_id"] == "porto"
 
 
@@ -156,6 +157,7 @@ def test_native_windows_practice_run_stays_bound_to_porto(manager):
 
     run = manager.create_run(config)
     assert run["map_id"] == "porto"
+    assert run["simulator_image"] == "official AutoDRIVE IROS 2026 Windows practice release"
     assert manager.telemetry(run["run_id"])["map_id"] == "porto"
 
 
@@ -222,8 +224,9 @@ def test_parallel_pairs_have_separate_ros_domains_and_one_trainer(manager):
     assert apis["api"]["AICAR_TRAIN_N_ENVS"] == "3"
     assert apis["api"]["AICAR_MODE"] == "train"
     assert apis["api"]["AICAR_OFFICIAL_SIMULATOR_IMAGE"].endswith(":2026-iros-practice")
-    assert apis["api-1"]["ROS_DOMAIN_ID"] == "1"
-    assert apis["api-2"]["ROS_DOMAIN_ID"] == "2"
+    base_domain = int(apis["api"]["ROS_DOMAIN_ID"])
+    assert apis["api-1"]["ROS_DOMAIN_ID"] == str(base_domain + 1)
+    assert apis["api-2"]["ROS_DOMAIN_ID"] == str(base_domain + 2)
     assert all(apis[role]["AICAR_MODE"] == "bridge" for role in ("api-1", "api-2"))
     simulator_images = {
         item["kwargs"]["image"] for item in containers
@@ -492,10 +495,15 @@ def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_pa
     assert "ros_ws/install/setup.bash" in spawned_commands[0][2].replace("\\", "/")
     assert spawned_commands[2][:2] == ["bash", "-lc"]
     assert spawned_commands[2][3:] == ["aicar-native-policy", "evaluate"]
-    assert all(
-        record["original_process_handle_class"].endswith("SimpleNamespace")
+    handles_by_role = {
+        record["role"]: record["original_process_handle_class"].rsplit(".", 1)[-1]
         for record in backend._groups[next(iter(backend._groups))]["records"]
-    )
+    }
+    assert handles_by_role == {
+        "trainer": "SimpleNamespace",
+        "devkit-0": "_OwnedProcessGroupPopen",
+        "relay-0": "SimpleNamespace",
+    }
 
 
 def test_native_exit_snapshot_persists_each_process_exit_and_log_tail(tmp_path):
@@ -858,7 +866,7 @@ def test_external_run_creation_error_is_reported_and_cleaned_up(manager, monkeyp
     assert not manager.backend.networks
 
 
-def test_docker_api_binds_external_bridge_ports_to_loopback_only(monkeypatch):
+def test_docker_api_publishes_external_bridge_ports_on_all_host_interfaces(monkeypatch):
     from src.layer4.hub import docker_control
 
     calls = []
@@ -873,8 +881,10 @@ def test_docker_api_binds_external_bridge_ports_to_loopback_only(monkeypatch):
     )
     body = calls[0][2]["body"]
     assert body["ExposedPorts"] == {"4568/tcp": {}}
+    # Preserve Docker Desktop's host-published relay path for native external
+    # simulators; narrowing this binding requires a platform-aware host path.
     assert body["HostConfig"]["PortBindings"] == {
-        "4568/tcp": [{"HostIp": "127.0.0.1", "HostPort": "48123"}]
+        "4568/tcp": [{"HostIp": "0.0.0.0", "HostPort": "48123"}]
     }
 
 
@@ -1109,7 +1119,7 @@ def test_replay_rejects_checkpoint_without_provenance(manager, tmp_path):
 
 
 def test_official_settings_bound_worker_count():
-    settings = OfficialTrainSettings(n_envs=2)
+    settings = OfficialTrainSettings(n_envs=2, automatic_evaluation_enabled=True)
     environment = settings.to_container_env(hub_url="http://hub", run_id="r")
     assert environment["AICAR_TRAIN_N_ENVS"] == "2"
     assert settings.frontier_stagnation_s == 5.0
@@ -1242,4 +1252,6 @@ def test_rejected_behavior_cloning_run_is_failed_not_completed(manager):
     assert result["state"] == "failed"
     assert result["stop_reason"].startswith("behavior_cloning_rejected:")
     assert "behavior_cloning_rejected" in result["error"]
-    assert result["map_id"] == "none"
+    # A failed run still reports the route it was configured to use. The
+    # default Windows external route is the official competition map.
+    assert result["map_id"] == "iros2026_official"

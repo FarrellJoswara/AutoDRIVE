@@ -67,12 +67,19 @@ HUB_PUBLIC_URL = os.environ.get("HUB_URL", f"http://127.0.0.1:{HUB_PORT}")
 
 bus = TelemetryBus()
 def _default_run_backend() -> str:
-    # NativeOfficialBackend is the WSL + Windows-simulator path. On macOS the
-    # Devkit/ROS trainer still runs in Docker while the practice .app is native.
+    # WSL keeps the Windows-player bridge; native Linux uses its extracted
+    # official practice player. macOS keeps the Docker Devkit/ROS trainer.
     if os.environ.get("AICAR_RUN_BACKEND"):
         return os.environ["AICAR_RUN_BACKEND"].strip().lower()
     if sys.platform == "darwin":
         return "docker"
+    if sys.platform == "linux":
+        try:
+            release = Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8").lower()
+        except OSError:
+            release = ""
+        if "microsoft" not in release:
+            return "native_linux"
     return "native" if os.name != "nt" else "docker"
 
 
@@ -85,10 +92,14 @@ if _run_backend == "test":
     official_runs = OfficialRunManager(backend=_OfflineTestBackend())
 elif _run_backend == "native":
     official_runs = OfficialRunManager(backend=NativeOfficialBackend())
+elif _run_backend == "native_linux":
+    from src.layer4.hub.native_linux_official_backend import NativeLinuxOfficialBackend
+
+    official_runs = OfficialRunManager(backend=NativeLinuxOfficialBackend())
 elif _run_backend == "docker":
     official_runs = OfficialRunManager()
 else:
-    raise RuntimeError("AICAR_RUN_BACKEND must be 'native', 'docker', or 'test'")
+    raise RuntimeError("AICAR_RUN_BACKEND must be 'native', 'native_linux', 'docker', or 'test'")
 official_evaluations = OfficialEvaluationService(official_runs)
 replay_job = OfficialReplayJob(
     official_runs, on_status=lambda s: bus.publish_replay_status(s),
@@ -105,6 +116,8 @@ def _hub_runtime_identity() -> Dict[str, Any]:
         "src.layer4.hub.official_evaluation_service",
         "src.layer4.hub.official_run_manager",
         "src.layer4.hub.native_official_backend",
+        "src.layer4.hub.native_linux_official_backend",
+        "src.layer4.hub.linux_official_simulators",
         "src.layer4.hub.campaign_deadline",
         "src.layer3.official_evaluate",
         "src.layer2.official_race_env",

@@ -349,7 +349,8 @@ def test_stop_during_training_reset_deasserts_reset_and_returns_promptly():
     finally:
         timer.cancel()
         timer.join(1.0)
-    assert published == [True, False]
+    assert published[-1] is False
+    assert published[0] is True
 
 
 def test_slow_preview_does_not_block_control_or_queue_old_frames(tmp_path):

@@ -287,6 +287,56 @@ class OfficialRunManagerTests(unittest.TestCase):
         self.assertEqual(config["throttle_mode"], "bidirectional")
         self.assertFalse(config["behavior_cloning_only"])
 
+    def test_evaluation_profile_selects_matching_simulator_image_and_map(self) -> None:
+        import src.layer4.hub.official_run_manager as run_manager
+
+        logs = self.root / "logs"
+        checkpoint = logs / "rl" / "model.zip"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.touch()
+        practice_frontier = self.root / "competition" / "iros2026" / "official_centerline.csv"
+        practice_frontier.parent.mkdir(parents=True)
+        practice_frontier.write_text("x,y\n0,0\n1,1\n", encoding="utf-8")
+        competitive_frontier = (
+            self.root / "competition" / "iros2026" / "tracks" / "competition" / "official_centerline.csv"
+        )
+        competitive_frontier.parent.mkdir(parents=True)
+        competitive_frontier.write_text("x,y\n0,0\n1,1\n", encoding="utf-8")
+        with patch.object(run_manager, "ROOT", self.root):
+            competitive = self.manager.create_run(
+                {"resume": str(checkpoint), "simulator_backend": "docker", "track_profile": "practice"},
+                kind="evaluation",
+                evaluation_options={
+                    "route_monitor_only": True,
+                    "frontier_path": str(competitive_frontier),
+                },
+            )
+            self.assertEqual(competitive["simulator_image"], run_manager.OFFICIAL_COMPETITION_SIM_IMAGE)
+            self.assertEqual(competitive["map_id"], "iros2026_official")
+            competitive_api = next(
+                item for item in self.backend.containers.values()
+                if item["Labels"].get("aicar.run_id") == competitive["run_id"]
+                and item["Labels"].get("aicar.role") == "api"
+            )
+            competitive_env = dict(value.split("=", 1) for value in competitive_api["kwargs"]["env"])
+            self.assertEqual(competitive_env["AICAR_OFFICIAL_TRACK_PROFILE"], "competition")
+            self.manager.stop_run(competitive["run_id"])
+
+            practice = self.manager.create_run(
+                {"resume": str(checkpoint), "simulator_backend": "docker", "track_profile": "practice"},
+                kind="evaluation",
+                evaluation_options={
+                    "validation_mode": "porto_practice_diagnostic",
+                    "lap_progress_timeout_s": 240,
+                    "lap_progress_wall_timeout_s": 240,
+                    "frontier_stall_after_s": 5,
+                    "frontier_path": str(practice_frontier),
+                },
+            )
+
+        self.assertEqual(practice["simulator_image"], run_manager.PORTO_PRACTICE_SIM_IMAGE)
+        self.assertEqual(practice["map_id"], "porto")
+
     def test_bc_only_requires_new_cloning_run_without_automatic_ppo_evaluation(self) -> None:
         config = normalize_official_config({
             "behavior_cloning_only": True,
@@ -300,7 +350,12 @@ class OfficialRunManagerTests(unittest.TestCase):
                 "automatic_evaluation_enabled": False,
             })
         with self.assertRaisesRegex(ValueError, "disable automatic PPO evaluation"):
-            normalize_official_config({"behavior_cloning_only": True})
+            # Assert the BC-only invariant directly, independent of the
+            # platform-specific automatic-evaluation default.
+            normalize_official_config({
+                "behavior_cloning_only": True,
+                "automatic_evaluation_enabled": True,
+            })
 
     def test_resume_checkpoint_is_mapped_to_persistent_container_mount(self) -> None:
         source = self.root / "logs" / "rl" / "source.zip"

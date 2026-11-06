@@ -5,8 +5,10 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.layer1.ros2_racer import (
+    OfficialRosTransportError,
     RaceMetrics,
     RacerRos2,
     _encoder_forward_speed_mps,
@@ -441,11 +443,13 @@ def test_evaluation_racer_stores_ips_separately_from_policy_telemetry():
     racer = object.__new__(RacerRos2)
     racer.include_race_metrics = True
     racer._condition = threading.Condition()
+    racer._raw = {}
+    racer._raw_receipts = {}
     racer._race_metrics = RaceMetrics()
     racer._race_metrics_received = set()
     racer._position_update_count = 0
-    racer._raw = {}
-    racer._raw_receipts = {}
+    racer._position_history = []
+    racer._position_received_unix_ns = 0
     racer._on_message("position", _vector(1.0, 2.0, 3.0))
     assert racer.race_metrics.position == (1.0, 2.0, 3.0)
     assert "position" in racer._race_metrics_received
@@ -1146,52 +1150,260 @@ def test_official_policy_transport_cannot_reset_the_simulator():
         racer.reset_simulation_for_training()
 
 
-def test_training_reset_accepts_persistent_official_race_counters():
-    class BoolMessage:
-        data = False
+def _reset_test_racer(on_reset_true, on_metrics, *, frame_timeout_s=0.07):
+    from types import SimpleNamespace
 
     class Publisher:
-        owner = None
-        positions = [(5.0, 8.0, 0.0), (0.8, 3.1583, 0.0)]
-
-        def __init__(self):
+        def __init__(self, name):
+            self.name = name
             self.values = []
 
         def publish(self, message):
-            self.values.append(message.data)
-            if message.data:
-                self.owner._position_update_count += 1
-                self.owner._race_metrics = RaceMetrics(
-                    lap_count=2,
-                    collision_count=3,
-                    position=self.positions.pop(0),
-                )
+            value = message.data
+            self.values.append(value)
+            racer.published.append((self.name, value))
+            if self.name == "training_reset":
+                if value:
+                    on_reset_true()
+                else:
+                    racer.reset_attempt_index += 1
 
     racer = object.__new__(RacerRos2)
     racer.allow_training_reset = True
     racer.include_race_metrics = True
-    racer._publishers = {"training_reset": Publisher()}
-    racer._publishers["training_reset"].owner = racer
-    racer._msg_types = {"Bool": BoolMessage}
+    racer.published = []
+    racer.reset_attempt_index = 0
+    racer._publishers = {
+        name: Publisher(name) for name in ("training_reset", "throttle", "steering")
+    }
+    racer._msg_types = {
+        "Bool": lambda: SimpleNamespace(data=False),
+        "Float32": lambda: SimpleNamespace(data=0.0),
+    }
     racer._condition = threading.Condition()
+    racer._raw = {}
+    racer._raw_receipts = {}
     racer._step_counter = 1
     racer._race_metrics = RaceMetrics(lap_count=2, collision_count=3)
+    racer._race_metrics_received = set()
     racer._position_update_count = 0
+    racer._position_received_unix_ns = 0
+    racer._position_history = []
+    racer._last_policy_action = {"throttle": 0.5, "steering": -0.1}
+    racer._last_action_time = time.monotonic()
+    racer._command_expired = False
     racer._closed = False
-    racer.frame_timeout_s = 0.5
+    racer.frame_timeout_s = frame_timeout_s
+    racer.timeout_s = 0.2
     racer._last_scan_source_time = None
     racer._check_wait_state = lambda: None
     racer._transport_diagnostic = lambda *args, **kwargs: "test transport"
     racer._race_metric_update_counts = {}
-    racer._wait_for_fresh_reset_metrics = lambda *args, **kwargs: racer._race_metrics
+    racer._wait_for_fresh_reset_metrics = lambda *args, **kwargs: on_metrics()
     snap = _snapshot(lap=2, last_lap=0.0, collisions=3)
-    racer.wait_until_ready = lambda: snap
-    racer._wait_for_scan_after = lambda previous_step: snap
+    racer.wait_until_ready = lambda **kwargs: snap
+    racer._wait_for_scan_after = lambda previous_step, **kwargs: snap
 
+    def emit_pose(position):
+        racer._on_message_impl(
+            "position", SimpleNamespace(x=position[0], y=position[1], z=0.0)
+        )
+
+    racer.emit_pose = emit_pose
+    return racer, snap
+
+
+def test_training_reset_retries_missed_command_and_records_delayed_stable_pose(monkeypatch, tmp_path):
+    diagnostic_path = tmp_path / "reset-diagnostics.jsonl"
+    monkeypatch.setenv("AICAR_RESET_DIAGNOSTICS_PATH", str(diagnostic_path))
+    monkeypatch.setenv("AICAR_ENV_INDEX", "0")
+    monkeypatch.setenv("ROS_DOMAIN_ID", "86")
+    monkeypatch.setenv("PORT", "4567")
+    racer_ref = {}
+    delivered = [False]
+
+    def on_true():
+        racer = racer_ref["racer"]
+        attempt = racer.reset_attempt_index
+        if attempt == 1 and not delivered[0]:
+            delivered[0] = True
+            for x, y in ((0.80, 3.1583), (0.81, 3.1583), (0.80, 3.16)):
+                racer.emit_pose((x, y))
+
+    def on_metrics():
+        racer = racer_ref["racer"]
+        timer = threading.Timer(
+            0.005,
+            lambda: [racer.emit_pose((0.80, 3.1583)) for _ in range(3)],
+        )
+        timer.daemon = True
+        timer.start()
+        return racer._race_metrics
+
+    racer, snap = _reset_test_racer(on_true, on_metrics)
+    racer_ref["racer"] = racer
     assert racer.reset_simulation_for_training(
         expected_position=(0.8, 3.1583), position_tolerance_m=0.75
     ) is snap
-    assert racer._publishers["training_reset"].values == [True, False, True, False]
+    assert racer.reset_attempt_index == 2
+    assert racer._publishers["training_reset"].values.count(True) > 2
+    assert racer._publishers["training_reset"].values[-1] is False
+    assert racer.published[:3] == [("throttle", 0.0), ("steering", 0.0), ("training_reset", True)]
+    record = json.loads(diagnostic_path.read_text().splitlines()[-1])
+    assert record["result"] == "success"
+    assert len(record["attempts"]) == 2
+    assert record["attempts"][0]["final_pose_result"] == "initial_pose_timeout_or_unstable"
+    second = record["attempts"][1]
+    assert second["metrics_result"] == "fresh_stable_metrics"
+    assert second["final_pose_result"] == "stable_in_range"
+    assert len(second["position_sequence"]) == 3
+    assert len(second["reset_published_unix_ns"]) > 1
+    assert all(item["received_unix_ns"] > 0 for item in second["position_sequence"])
+    assert record["final_position_callback_count"] == second["final_pose_sequence"][-1]["callback_count"]
+    assert record["final_position_received_unix_ns"] == second["final_pose_sequence"][-1]["received_unix_ns"]
+    assert record["environment_index"] == "0"
+    assert record["ros_domain_id"] == "86"
+    assert record["simulator_port"] == "4567"
+
+
+def test_training_reset_rejects_queued_good_trio_followed_by_out_of_range_pose(monkeypatch, tmp_path):
+    diagnostic_path = tmp_path / "reset-diagnostics.jsonl"
+    monkeypatch.setenv("AICAR_RESET_DIAGNOSTICS_PATH", str(diagnostic_path))
+    racer_ref = {}
+
+    def on_true():
+        racer = racer_ref["racer"]
+        if racer.reset_attempt_index == 0:
+            for _ in range(3):
+                racer.emit_pose((0.8, 3.1583))
+            racer.emit_pose((1.7, 3.1583))
+        elif racer.reset_attempt_index == 1:
+            for _ in range(3):
+                racer.emit_pose((0.8, 3.1583))
+
+    def on_metrics():
+        racer = racer_ref["racer"]
+        timer = threading.Timer(
+            0.005,
+            lambda: [racer.emit_pose((0.8, 3.1583)) for _ in range(3)],
+        )
+        timer.daemon = True
+        timer.start()
+        return racer._race_metrics
+
+    racer, snap = _reset_test_racer(on_true, on_metrics)
+    racer_ref["racer"] = racer
+    assert racer.reset_simulation_for_training(
+        expected_position=(0.8, 3.1583), position_tolerance_m=0.75,
+        reset_attempts=2,
+    ) is snap
+    record = json.loads(diagnostic_path.read_text().splitlines()[-1])
+    assert len(record["attempts"]) == 2
+    first = record["attempts"][0]["position_sequence"]
+    assert len(first) == 3
+    assert first[-1]["distance_m"] > 0.75
+    assert record["attempts"][0]["final_pose_result"] == "initial_pose_timeout_or_unstable"
+    assert record["attempts"][1]["final_pose_result"] == "stable_in_range"
+
+
+def test_training_reset_revalidates_after_metrics_drift_and_retries(monkeypatch, tmp_path):
+    diagnostic_path = tmp_path / "reset-diagnostics.jsonl"
+    monkeypatch.setenv("AICAR_RESET_DIAGNOSTICS_PATH", str(diagnostic_path))
+    racer_ref = {}
+
+    def on_true():
+        racer = racer_ref["racer"]
+        if racer.reset_attempt_index == 0:
+            for _ in range(3):
+                racer.emit_pose((0.8, 3.1583))
+        else:
+            for _ in range(3):
+                racer.emit_pose((0.8, 3.1583))
+
+    metric_waits = [0]
+
+    def on_metrics():
+        racer = racer_ref["racer"]
+        metric_waits[0] += 1
+        if metric_waits[0] == 1:
+            racer.emit_pose((1.65, 3.1583))
+        else:
+            timer = threading.Timer(
+                0.005,
+                lambda: [racer.emit_pose((0.8, 3.1583)) for _ in range(3)],
+            )
+            timer.daemon = True
+            timer.start()
+        return racer._race_metrics
+
+    racer, snap = _reset_test_racer(on_true, on_metrics)
+    racer_ref["racer"] = racer
+    assert racer.reset_simulation_for_training(
+        expected_position=(0.8, 3.1583), position_tolerance_m=0.75,
+        reset_attempts=2,
+    ) is snap
+    record = json.loads(diagnostic_path.read_text().splitlines()[-1])
+    assert record["result"] == "success"
+    assert record["attempts"][0]["final_pose_result"] == "timeout_or_unstable"
+    assert record["attempts"][1]["final_pose_result"] == "stable_in_range"
+
+
+def test_training_reset_requires_stable_samples_and_reports_bounded_timeout(monkeypatch, tmp_path):
+    diagnostic_path = tmp_path / "reset-diagnostics.jsonl"
+    monkeypatch.setenv("AICAR_RESET_DIAGNOSTICS_PATH", str(diagnostic_path))
+    racer, _ = _reset_test_racer(lambda: None, lambda: racer._race_metrics, frame_timeout_s=0.03)
+    with pytest.raises(OfficialRosTransportError, match="after 2 attempts"):
+        racer.reset_simulation_for_training(
+            expected_position=(0.8, 3.1583), position_tolerance_m=0.75,
+            reset_attempts=2,
+        )
+    record = json.loads(diagnostic_path.read_text().splitlines()[-1])
+    assert record["result"] == "failed"
+    assert len(record["attempts"]) == 2
+    assert all(item["final_pose_result"] == "initial_pose_timeout_or_unstable" for item in record["attempts"])
+
+
+def test_training_reset_accepts_stable_success(monkeypatch, tmp_path):
+    diagnostic_path = tmp_path / "reset-diagnostics.jsonl"
+    monkeypatch.setenv("AICAR_RESET_DIAGNOSTICS_PATH", str(diagnostic_path))
+    racer_ref = {}
+
+    def on_true():
+        racer = racer_ref["racer"]
+        if racer.reset_attempt_index == 0:
+            for _ in range(3):
+                racer.emit_pose((0.8, 3.1583))
+
+    def on_metrics():
+        racer = racer_ref["racer"]
+        timer = threading.Timer(
+            0.005,
+            lambda: [racer.emit_pose((0.8, 3.1583)) for _ in range(3)],
+        )
+        timer.daemon = True
+        timer.start()
+        return racer._race_metrics
+
+    racer, snap = _reset_test_racer(on_true, on_metrics)
+    racer_ref["racer"] = racer
+    assert racer.reset_simulation_for_training(
+        expected_position=(0.8, 3.1583), position_tolerance_m=0.75
+    ) is snap
+    record = json.loads(diagnostic_path.read_text().splitlines()[-1])
+    assert record["result"] == "success"
+    assert len(record["attempts"]) == 1
+    assert record["attempts"][0]["final_pose_result"] == "stable_in_range"
+
+
+def test_training_reset_attempts_false_publish_when_true_publish_raises():
+    def fail_true():
+        raise RuntimeError("simulated publisher failure")
+
+    racer, _ = _reset_test_racer(fail_true, lambda: None)
+    with pytest.raises(RuntimeError, match="simulated publisher failure"):
+        racer.reset_simulation_for_training(expected_position=None)
+    reset_values = racer._publishers["training_reset"].values
+    assert reset_values == [True, False]
 
 
 def test_bridge_relay_neutralizes_only_the_incomplete_startup_packet():

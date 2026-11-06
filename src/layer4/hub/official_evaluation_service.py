@@ -450,7 +450,8 @@ class OfficialEvaluationService:
         )
         if porto_diagnostic:
             config["warmup_laps"] = 0
-            config["simulator_backend"] = "docker"
+            if config.get("simulator_backend") != "linux_external":
+                config["simulator_backend"] = "docker"
         scores: list[float] = []
         for attempt_index in range(1, self.ATTEMPTS + 1):
             attempts_required = int(job.get("attempts_required", self.ATTEMPTS))
