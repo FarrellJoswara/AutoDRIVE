@@ -15,6 +15,7 @@ import {
 } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
 import { LiveLapPanel } from "../components/LiveLapPanel";
+import { CameraFeedControl, CameraFeedPlaceholder, useCameraFeedEnabled } from "../components/CameraFeedControl";
 import { ingestOfficialRunTelemetry, setOfficialRunSelection } from "../store";
 
 const ACTIVE = new Set(["starting", "running", "stopping"]);
@@ -267,6 +268,7 @@ export function WatchPage() {
   const [selectedEnvId, setSelectedEnvId] = useState<number | null>(null);
   const [cameraRefresh, setCameraRefresh] = useState(() => Date.now());
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraFeedEnabled] = useCameraFeedEnabled();
   const selectedRunRef = useRef<string | null>(null);
 
   const selectedRun = runList.runs.find((run) => run.run_id === selectedRunId) ?? null;
@@ -307,11 +309,16 @@ export function WatchPage() {
     // A run can finish before its first camera request succeeds. Refresh once
     // on every selected-run state change (especially active → completed) so
     // the saved final frame is fetched after the simulator has stopped writing it.
+    if (!cameraFeedEnabled) return;
     setCameraRefresh(Date.now());
     if (viewMode !== "focus" || !selectedRun || !hasCamera || !ACTIVE.has(selectedRun.state)) return;
     const timer = window.setInterval(() => setCameraRefresh(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [viewMode, selectedRun?.run_id, selectedRun?.state, hasCamera]);
+  }, [cameraFeedEnabled, viewMode, selectedRun?.run_id, selectedRun?.state, cameraEnvId, hasCamera]);
+
+  useEffect(() => {
+    if (!cameraFeedEnabled) setCameraReady(false);
+  }, [cameraFeedEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -402,6 +409,7 @@ export function WatchPage() {
             <button type="button" aria-pressed={viewMode === "overview"} onClick={() => setViewMode("overview")}>All active</button>
             <button type="button" aria-pressed={viewMode === "focus"} onClick={() => setViewMode("focus")}>Focus run</button>
           </div>
+          <CameraFeedControl />
           {viewMode === "focus" && <label className="field watch-run-select">Run
             <select value={selectedRunId ?? ""} onChange={(event) => setSelectedRunId(event.target.value || null)}>
               <option value="">Select an official run</option>
@@ -467,7 +475,7 @@ export function WatchPage() {
           <aside className="fleet-side">
             <section aria-label="Front camera" style={{ marginBottom: 16 }}>
               <h3 style={{ marginTop: 0 }}>Front camera · Env {cameraEnvId}</h3>
-              {hasCamera ? <>
+              {hasCamera && cameraFeedEnabled ? <>
                 <div style={{ width: "100%", aspectRatio: "16 / 9", background: "#080d0b", border: "1px solid var(--line, #263b34)", borderRadius: 6, overflow: "hidden", display: "grid", placeItems: "center" }}>
                   <img
                     src={getOfficialRunCameraUrl(selectedRun.run_id, cameraEnvId, cameraRefresh)}
@@ -483,7 +491,9 @@ export function WatchPage() {
                       : active ? "Waiting for the first saved camera frame…" : "No saved camera frame for this environment."}</span>}
                 </div>
                 <small className="meta">{active ? "Live frame · refreshes every second" : "Last saved frame"}</small>
-              </> : <p className="meta">This run was created without camera observations.</p>}
+              </> : cameraFeedEnabled
+                ? <p className="meta">This run was created without camera observations.</p>
+                : <CameraFeedPlaceholder />}
             </section>
             <h3>Run telemetry</h3>
             {teacherTelemetry && <section aria-label="Layer 1 driving telemetry" className="training-progress-panel" style={{ marginBottom: 12 }}>

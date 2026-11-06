@@ -3,6 +3,7 @@ import { fetchReplayModels, getOfficialModelMetadata, getReplayStatus, resetRepl
   getOfficialRunCameraUrl, type ModelCheckpoint, type OfficialModelMetadata, type ReplayStatus, type OfficialChampion, type OfficialEvaluationRecord } from "../api";
 import { FleetCanvas } from "../fleet/FleetCanvas";
 import { LiveLapPanel } from "../components/LiveLapPanel";
+import { CameraFeedControl, CameraFeedPlaceholder, useCameraFeedEnabled } from "../components/CameraFeedControl";
 
 function modelIdFromPath(path: string | null | undefined, models: ModelCheckpoint[]): string | null {
   if (!path) return null;
@@ -28,8 +29,9 @@ export function ReplayPage() {
   const [selectedMetadata, setSelectedMetadata] = useState<OfficialModelMetadata | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [metadataRefreshVersion, setMetadataRefreshVersion] = useState(0);
-  const [cameraRefresh, setCameraRefresh] = useState(0);
+  const [cameraRefresh, setCameraRefresh] = useState(() => Date.now());
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraFeedEnabled] = useCameraFeedEnabled();
   const [selectedReplayEnvId, setSelectedReplayEnvId] = useState(0);
   async function refreshModels() {
     setModelsLoading(true);
@@ -115,10 +117,12 @@ export function ReplayPage() {
     return () => { cancelled = true; };
   }, [modelId, metadataRefreshVersion]);
   useEffect(() => {
-    const timer = window.setInterval(() => setCameraRefresh((value) => value + 1), 1000);
+    if (!cameraFeedEnabled) return;
+    setCameraReady(false);
+    setCameraRefresh(Date.now());
+    const timer = window.setInterval(() => setCameraRefresh(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, []);
-  useEffect(() => { setCameraReady(false); }, [status?.run_id]);
+  }, [cameraFeedEnabled, status?.run_id, selectedReplayEnvId]);
   async function perform(action: () => Promise<ReplayStatus>) {
     setBusy(true); setError(null);
     try { setStatus(await action()); } catch (reason) { setError(String(reason)); }
@@ -181,6 +185,7 @@ export function ReplayPage() {
   }, [replayRunId, replayCarIdsKey, selectedReplayEnvId]);
   return <section className="panel fleet-panel">
     <h2>Official evaluation / replay</h2>
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.65rem" }}><CameraFeedControl /></div>
     <p className="lede">Run a competitive evaluation with one warm-up lap and ten scored laps across three fresh simulator processes, or select a noncompetitive diagnostic for a single checkpoint.{selectedMetadata?.simulator_backend === "linux_external" ? " Linux competition evaluation uses the separately allowlisted official competition runtime; the practice runtime is for training." : ""}</p>
     <p className="meta">Diagnostics run without teacher control or PPO updates. BC diagnostics require an authenticated behavior-cloning checkpoint and use one warm-up plus ten scored laps. Training probes require authenticated PPO lineage with an approved BC ancestor and use one warm-up plus three scored laps. Both are noncompetitive and never promote a champion.</p>
     <section className="panel" aria-label="Best official model">
@@ -243,11 +248,13 @@ export function ReplayPage() {
     {diagnostic && <section className="panel" aria-label={`${diagnosticLabel} telemetry`}>
       <h3>{diagnosticLabel} · noncompetitive</h3>
       <p>Route: official IROS 2026 centerline · projection {projectionValid == null ? "waiting" : projectionValid ? "valid" : "invalid"} · frontier progress {meters(progress)} · scored target {Number.isFinite(progressFraction) ? `${Math.round(progressFraction! * 100)}%` : "—"} · {fleet ? (age > 1500 ? "telemetry stale" : "telemetry current") : "waiting for telemetry"} · camera {car?.camera_fresh === true ? "fresh" : car?.camera_fresh === false ? "stale" : "waiting"}{car?.camera_age_s != null ? ` (${seconds(car.camera_age_s)})` : ""}</p>
-      <div className="training-progress-panel" style={{ width: "100%", aspectRatio: "16 / 9", background: "#080d0b", overflow: "hidden", display: "grid", placeItems: "center" }}>
-        {status?.run_id && cameraReady
+      <div className="training-progress-panel" style={{ width: "100%", aspectRatio: cameraFeedEnabled ? "16 / 9" : undefined, background: "#080d0b", overflow: "hidden", display: "grid", placeItems: "center" }}>
+        {!cameraFeedEnabled
+          ? <CameraFeedPlaceholder />
+          : status?.run_id && cameraReady
           ? <img src={getOfficialRunCameraUrl(status.run_id, selectedReplayEnvId, cameraRefresh)} alt={`Official simulator camera during ${diagnosticLabel.toLowerCase()}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           : <span className="meta">{active ? "Waiting for a fresh diagnostic camera frame…" : "No diagnostic camera frame is available."}</span>}
-        {status?.run_id && <img src={getOfficialRunCameraUrl(status.run_id, selectedReplayEnvId, cameraRefresh)} alt="" aria-hidden="true" onLoad={() => setCameraReady(true)} onError={() => setCameraReady(false)} style={{ display: "none" }} />}
+        {cameraFeedEnabled && status?.run_id && <img src={getOfficialRunCameraUrl(status.run_id, selectedReplayEnvId, cameraRefresh)} alt="" aria-hidden="true" onLoad={() => setCameraReady(true)} onError={() => setCameraReady(false)} style={{ display: "none" }} />}
       </div>
       {diagnosticRun && <div className="official-metric-grid">
         <div><span>Readiness</span><strong>{result?.readiness_passed ? "Passed" : "Not passed"}</strong></div>

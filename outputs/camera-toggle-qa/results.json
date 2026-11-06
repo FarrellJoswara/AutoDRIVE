@@ -1,0 +1,114 @@
+{
+  "completed_at_utc": "2026-11-06T09:05:16.605Z",
+  "method": "Headless Google Chrome via Playwright; isolated Vite UI and synthetic API on dynamically allocated localhost ports.",
+  "fixture": {
+    "camera_runs": [
+      {
+        "run_id": "qa-camera-one",
+        "observation_profile": "official_sensors_camera"
+      },
+      {
+        "run_id": "qa-camera-two",
+        "observation_profile": "official_sensors_camera"
+      }
+    ],
+    "replay_run_id": "replay_qa-camera-diagnostic",
+    "replay_validation_mode": "training_probe",
+    "environments": [
+      0,
+      1
+    ]
+  },
+  "assertions": [
+    "camera preference defaults on and Watch requests the selected run / Env 0",
+    "Watch off state persists false and unmounts camera images",
+    "Watch off produced zero camera requests for more than two refresh intervals",
+    "Watch telemetry continued updating while camera feed was off",
+    "off preference remains in force after Watch environment and run changes",
+    "reenabling Watch immediately requests current run / Env 1 with a fresh cachebuster",
+    "Watch environment selector remains on Env 1 after reenable",
+    "refresh restores camera feed preference from storage",
+    "Replay inherits the off preference and mounts no visible or hidden probe camera images",
+    "Replay off produced zero camera requests for over two refresh intervals",
+    "Replay diagnostic telemetry continued polling while camera feed was off",
+    "Replay reenable immediately requests the active diagnostic run / selected Env 1",
+    "Replay probe image markup includes visible and hidden feed while enabled",
+    "reload while off restores persisted false in Replay",
+    "after off-state reload, Replay still makes zero requests for more than two refresh intervals",
+    "after off-state reload, Replay diagnostic telemetry continues polling",
+    "off preference after reload also carries into Watch with no camera image",
+    "off preference follows page navigation back to Watch",
+    "camera setting still switches off cleanly when localStorage reads and writes throw",
+    "no uncaught browser page errors"
+  ],
+  "camera_request_count": 9,
+  "camera_requests": [
+    {
+      "run_id": "qa-camera-one",
+      "env_id": 0,
+      "cachebuster": "1793955903761",
+      "at": "2026-11-06T09:05:03.802Z"
+    },
+    {
+      "run_id": "qa-camera-two",
+      "env_id": 1,
+      "cachebuster": "1793955903761",
+      "at": "2026-11-06T09:05:07.205Z"
+    },
+    {
+      "run_id": "qa-camera-two",
+      "env_id": 1,
+      "cachebuster": "1793955907197",
+      "at": "2026-11-06T09:05:07.218Z"
+    },
+    {
+      "run_id": "qa-camera-one",
+      "env_id": 0,
+      "cachebuster": "1793955908184",
+      "at": "2026-11-06T09:05:08.220Z"
+    },
+    {
+      "run_id": "qa-camera-two",
+      "env_id": 0,
+      "cachebuster": "1793955908234",
+      "at": "2026-11-06T09:05:08.268Z"
+    },
+    {
+      "run_id": "replay_qa-camera-diagnostic",
+      "env_id": 1,
+      "cachebuster": "1793955908448",
+      "at": "2026-11-06T09:05:11.221Z"
+    },
+    {
+      "run_id": "replay_qa-camera-diagnostic",
+      "env_id": 1,
+      "cachebuster": "1793955911215",
+      "at": "2026-11-06T09:05:11.232Z"
+    },
+    {
+      "run_id": "qa-camera-one",
+      "env_id": 0,
+      "cachebuster": "1793955916174",
+      "at": "2026-11-06T09:05:16.249Z"
+    },
+    {
+      "run_id": "qa-camera-one",
+      "env_id": 0,
+      "cachebuster": "1793955916243",
+      "at": "2026-11-06T09:05:16.261Z"
+    }
+  ],
+  "telemetry_requests": 138,
+  "replay_status_polls": 19,
+  "persisted_preference_key": "aicar.camera-feed.enabled",
+  "screenshots": [
+    "watch-camera-on.png",
+    "watch-camera-off.png",
+    "watch-camera-reenabled-current-run.png",
+    "watch-camera-off-after-refresh.png",
+    "replay-camera-off.png",
+    "replay-camera-on.png",
+    "storage-denied-camera-off.png"
+  ],
+  "page_errors": []
+}

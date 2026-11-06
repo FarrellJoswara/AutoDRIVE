@@ -207,6 +207,30 @@ label.check {
   cursor: not-allowed;
 }
 
+.camera-feed-button {
+  color: var(--text);
+  border-radius: 0.35rem;
+}
+
+.camera-feed-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg2));
+}
+
+.camera-feed-button[aria-pressed="false"] {
+  border-color: var(--muted);
+  background: var(--bg0);
+}
+
+.camera-feed-button:hover {
+  border-color: var(--accent);
+}
+
+.camera-feed-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .badge {
   display: inline-block;
   font-family: var(--font-mono);
