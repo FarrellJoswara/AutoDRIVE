@@ -1191,10 +1191,10 @@ async def replay_start(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="device must be auto, cpu, or cuda")
     if not 0 <= trace_steps <= 500:
         raise HTTPException(status_code=400, detail="trace_steps must be between 0 and 500")
-    if validation_mode is not None and validation_mode not in {"bc_diagnostic", "training_probe"}:
+    if validation_mode is not None and validation_mode not in {"bc_diagnostic", "training_probe", "porto_practice_diagnostic"}:
         raise HTTPException(
             status_code=400,
-            detail="validation_mode must be bc_diagnostic or training_probe when provided",
+            detail="validation_mode must be bc_diagnostic, training_probe, or porto_practice_diagnostic when provided",
         )
     models_root = (ROOT / "logs" / "rl").resolve()
     model_path = (models_root / model_id).resolve()

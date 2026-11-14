@@ -250,6 +250,7 @@ class RacerRos2:
         else:
             self._msg_types = None
         self.node = node
+        self.vehicle_id = str(vehicle_id)
         self._condition = threading.Condition()
         self._raw: Dict[str, Any] = {}
         self._raw_receipts: Dict[str, float] = {}
@@ -282,6 +283,7 @@ class RacerRos2:
         self.neutral_fallback_count = 0
         self._neutral_fallback_diagnostic: Optional[Dict[str, Any]] = None
         self._callback_receipts: Dict[str, float] = {}
+        self._callback_counts: Dict[str, int] = {}
         self._callback_gaps_s: Dict[str, float] = {}
         self._callback_durations_s: Dict[str, float] = {}
         self._max_callback_durations_s: Dict[str, float] = {}
@@ -537,6 +539,7 @@ class RacerRos2:
                 and age <= (camera_max_age if name == "camera" else self.frame_timeout_s)
                 for name, age in topic_age_s.items()
             )
+            node = getattr(self, "node", None)
             return {
                 "spin_state": self._spin_state,
                 "spin_error": None if self._spin_error is None else str(self._spin_error),
@@ -546,6 +549,18 @@ class RacerRos2:
                     None if not self._last_scan_receipt else max(0.0, now - self._last_scan_receipt)
                 ),
                 "topic_age_s": topic_age_s,
+                # Some tests and integrations construct a partially initialized
+                # racer with __new__; missing diagnostics should read as zero.
+                "callback_count": {
+                    name: int(getattr(self, "_callback_counts", {}).get(name, 0))
+                    for name in required
+                },
+                "bridge_identity": {
+                    "node_name": str(node.get_name()) if callable(getattr(node, "get_name", None)) else None,
+                    "node_namespace": str(node.get_namespace()) if callable(getattr(node, "get_namespace", None)) else None,
+                    "vehicle_id": getattr(self, "vehicle_id", None),
+                    "ros_domain_id": os.environ.get("ROS_DOMAIN_ID"),
+                },
                 "topic_fresh": fresh,
                 "required_topics": required,
                 "command_expiry_diagnostic": getattr(
@@ -608,6 +623,10 @@ class RacerRos2:
                     callback_gaps = self._callback_gaps_s = {}
                 callback_gaps[field] = max(0.0, now - previous)
             callback_receipts[field] = now
+            callback_counts = getattr(self, "_callback_counts", None)
+            if callback_counts is None:
+                callback_counts = self._callback_counts = {}
+            callback_counts[field] = callback_counts.get(field, 0) + 1
         try:
             self._on_message_impl(field, message, received_at=now)
         finally:

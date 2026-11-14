@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import threading
 import time
@@ -267,9 +268,11 @@ class OfficialEvaluationService:
             raise ValueError("automatic training_probe requires its parent training run")
         if validation_mode in {"bc_diagnostic", "porto_practice_diagnostic"}:
             verified = verify_bc_checkpoint(model_path)
+            if verified is None and validation_mode == "porto_practice_diagnostic":
+                verified = verify_ppo_lineage_checkpoint(model_path)
             if verified is None:
                 raise ValueError(
-                    "BC diagnostic requires a checkpoint authenticated by its adjacent ready summary, canonical path, and SHA-256"
+                    "diagnostic requires an authenticated BC checkpoint or, for Porto practice, an authenticated PPO descendant"
                 )
         elif validation_mode == "training_probe":
             if source == "automatic":
@@ -450,7 +453,17 @@ class OfficialEvaluationService:
         )
         if porto_diagnostic:
             config["warmup_laps"] = 0
-            if config.get("simulator_backend") != "linux_external":
+            if os.environ.get("AICAR_RUN_BACKEND", "").strip().lower() == "native":
+                executable = os.environ.get("AICAR_OFFICIAL_SIMULATOR_EXE", "").strip()
+                if not executable:
+                    raise ValueError("Set AICAR_OFFICIAL_SIMULATOR_EXE to the Windows Porto practice executable")
+                config.update(
+                    simulator_backend="windows_external",
+                    simulator_executable=executable,
+                    simulator_display_mode="gui",
+                    track_profile="practice",
+                )
+            elif config.get("simulator_backend") != "linux_external":
                 config["simulator_backend"] = "docker"
         scores: list[float] = []
         for attempt_index in range(1, self.ATTEMPTS + 1):

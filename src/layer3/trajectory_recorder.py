@@ -25,11 +25,13 @@ class TrajectoryRecorder:
         self,
         directory: Path,
         *,
+        map_id: Optional[str] = None,
         interval_s: float = 300.0,
         duration_s: float = 20.0,
         max_queue: int = 128,
     ) -> None:
         self.directory = Path(directory)
+        self.map_id = str(map_id or "none")
         self.interval_s = max(0.0, float(interval_s))
         self.duration_s = max(0.0, float(duration_s))
         self._next_start = 0.0
@@ -61,6 +63,7 @@ class TrajectoryRecorder:
                 "format": 1,
                 "run_id": fleet.get("run_id"),
                 "runtime": fleet.get("runtime", "custom"),
+                "map_id": self.map_id,
                 "clip": self._clip_index,
                 "started_at": fleet.get("ts"),
             }

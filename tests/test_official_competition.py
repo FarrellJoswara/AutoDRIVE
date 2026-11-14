@@ -993,7 +993,8 @@ def test_official_training_rewards_frontier_and_completed_laps(tmp_path):
     assert info["termination_reason"] == "collision"
 
 
-def test_official_training_centerline_shaping_teaches_recovery_without_speed_reward(tmp_path):
+@pytest.mark.parametrize("centerline_strength", [0.0, 20.0])
+def test_official_training_centerline_shaping_teaches_recovery_without_speed_reward(tmp_path, centerline_strength):
     class TrainingRacer(FakeRacer):
         def __init__(self):
             start = _snapshot(lap=0, last_lap=0.0, collisions=0, position=(1.0, 0.6, 0.0))
@@ -1019,6 +1020,7 @@ def test_official_training_centerline_shaping_teaches_recovery_without_speed_rew
     env = OfficialRaceEnv(
         racer=TrainingRacer(), training_mode=True, training_timeout_s=0.0,
         frontier_path=route,
+        training_centerline_shaping_strength=centerline_strength,
     )
     env.reset()
 
@@ -1028,13 +1030,19 @@ def test_official_training_centerline_shaping_teaches_recovery_without_speed_rew
     assert stationary_reward == 0.0
 
     _, recovery_reward, _, _, recovery_info = env.step(np.zeros(2, dtype=np.float32))
-    assert recovery_info["training_centerline_shaping"] > 0.0
+    if centerline_strength:
+        assert recovery_info["training_centerline_shaping"] > 0.0
+    else:
+        assert recovery_info["training_centerline_shaping"] == 0.0
     assert recovery_reward == recovery_info["training_centerline_shaping"]
 
     _, collision_reward, terminated, _, collision_info = env.step(
         np.zeros(2, dtype=np.float32)
     )
-    assert collision_info["training_centerline_shaping"] < 0.0
+    if centerline_strength:
+        assert collision_info["training_centerline_shaping"] < 0.0
+    else:
+        assert collision_info["training_centerline_shaping"] == 0.0
     assert collision_info["training_reward_components"]["collision"] == -200.0
     assert collision_reward < 0.0
     assert terminated

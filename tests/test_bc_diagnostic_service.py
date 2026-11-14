@@ -430,7 +430,7 @@ def test_automatic_training_probe_uses_competitive_nonrecursive_child_settings(
 
 def test_training_probe_run_requires_authenticated_resume_parent(tmp_path):
     with pytest.raises(ValueError, match="requires an authenticated BC"):
-        normalize_official_config({"automatic_evaluation_mode": "training_probe"})
+        normalize_official_config({"automatic_evaluation_mode": "training_probe", "automatic_evaluation_enabled": True})
 
     checkpoint = tmp_path / "logs" / "rl" / "bc-bundle" / "behavior_cloned_policy.zip"
     checkpoint.parent.mkdir(parents=True)
@@ -444,6 +444,7 @@ def test_training_probe_run_requires_authenticated_resume_parent(tmp_path):
          patch("src.layer4.hub.official_run_manager.verify_bc_checkpoint", return_value=authenticated_bc) as verify:
         config = normalize_official_config({
             "automatic_evaluation_mode": "training_probe",
+            "automatic_evaluation_enabled": True,
             "resume": str(checkpoint),
         })
     assert config["automatic_evaluation_mode"] == "training_probe"
@@ -467,6 +468,7 @@ def test_training_probe_accepts_authenticated_ppo_descendant_resume(tmp_path):
          patch("src.layer4.hub.official_run_manager.verify_ppo_lineage_checkpoint", return_value=verified) as verify:
         config = normalize_official_config({
             "automatic_evaluation_mode": "training_probe",
+            "automatic_evaluation_enabled": True,
             "resume": str(checkpoint),
         })
     assert config["resume"] == "/runs/rl/ppo-smoke/official_policy_latest.zip"
@@ -557,6 +559,55 @@ def test_training_probe_authenticates_lineage_and_never_scores_or_promotes(
         assert options["lap_progress_wall_timeout_s"] == 240
         assert options["frontier_stall_after_s"] == 5
         assert service.champion() is None
+    finally:
+        service.close()
+
+
+def test_porto_practice_accepts_only_authenticated_ppo_descendants(manager, tmp_path):
+    checkpoint = _checkpoint(tmp_path)
+    with patch.object(OfficialEvaluationService, "_worker_loop", lambda self: None):
+        service = OfficialEvaluationService(
+            manager, registry_path=tmp_path / "evaluations.json",
+            champion_dir=tmp_path / "best", model_root=tmp_path / "logs" / "rl",
+        )
+    try:
+        with patch("src.layer4.hub.official_evaluation_service.verify_bc_checkpoint", return_value=None), \
+             patch("src.layer4.hub.official_evaluation_service.verify_ppo_lineage_checkpoint", return_value={"verified": True}):
+            result = service.submit(checkpoint, source="manual", validation_mode="porto_practice_diagnostic")
+            assert result["attempts_required"] == 3
+        with patch("src.layer4.hub.official_evaluation_service.verify_bc_checkpoint", return_value=None), \
+             patch("src.layer4.hub.official_evaluation_service.verify_ppo_lineage_checkpoint", return_value=None):
+            with pytest.raises(ValueError, match="authenticated"):
+                service.submit(checkpoint, source="manual", validation_mode="porto_practice_diagnostic")
+    finally:
+        service.close()
+
+
+def test_porto_practice_uses_local_windows_player_for_native_hub(manager, tmp_path, monkeypatch):
+    executable = r"C:\AutoDRIVE\AutoDRIVE Simulator.exe"
+    monkeypatch.setenv("AICAR_RUN_BACKEND", "native")
+    monkeypatch.setenv("AICAR_OFFICIAL_SIMULATOR_EXE", executable)
+    checkpoint = _checkpoint(tmp_path)
+    with patch.object(OfficialEvaluationService, "_worker_loop", lambda self: None):
+        service = OfficialEvaluationService(
+            manager, registry_path=tmp_path / "evaluations.json",
+        )
+    job = {
+        "validation_mode": "porto_practice_diagnostic",
+        "settings": {"simulator_backend": "linux_external"},
+        "model_path": str(checkpoint),
+        "trace_steps": 0,
+    }
+    try:
+        with patch.object(manager, "create_run", side_effect=RuntimeError("capture")) as create:
+            with pytest.raises(RuntimeError, match="capture"):
+                service._run_batch(job)
+        config = create.call_args.args[0]
+        assert config["simulator_backend"] == "windows_external"
+        assert config["simulator_executable"] == executable
+        assert config["simulator_display_mode"] == "gui"
+        assert config["track_profile"] == "practice"
+        assert (config["warmup_laps"], config["race_laps"]) == (0, 3)
     finally:
         service.close()
 

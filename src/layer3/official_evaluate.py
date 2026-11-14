@@ -850,7 +850,9 @@ def evaluate_attempt(
         debug = getattr(model, "last_debug", {})
         policy_throttle.append(command[0])
         policy_steering.append(command[1])
+        step_started = time.perf_counter()
         obs, _, terminated, _, info = env.step(action)
+        step_returned = time.perf_counter()
         if len(action_trace) < max(0, int(trace_steps)):
             next_observation_trace = _policy_observation_trace(obs)
             action_trace.append({
@@ -862,6 +864,10 @@ def evaluate_attempt(
                 "applied_throttle": float(info.get("throttle_command", 0.0)),
                 "applied_steering": float(info.get("steering_command", 0.0)),
                 "policy_inference_latency_s": inference_latency_s,
+                "step_started_monotonic_s": step_started,
+                "step_returned_monotonic_s": step_returned,
+                "control_interval_wall_s": info.get("control_interval_wall_s"),
+                "control_sensor_interval_s": info.get("control_interval_s"),
                 "camera_age_s": camera_age_s,
                 "camera_fresh": camera_fresh,
                 "next_observation_state": next_observation_trace["observation_state"],

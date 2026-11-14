@@ -56,6 +56,11 @@ def _windows_simulator_mode_args(config: dict[str, Any] | None) -> list[str]:
     return ["-BatchMode"] if (config or {}).get("simulator_display_mode", "gui") == "offscreen" else []
 
 
+def _devkit_node_is_visible(returncode: int, output: str) -> bool:
+    """Require the official bridge node in the assigned ROS domain."""
+    return returncode == 0 and "/autodrive_bridge" in output.splitlines()
+
+
 class _RecoveredProcess:
     """Small Popen-compatible handle for a child adopted after hub restart."""
 
@@ -180,6 +185,29 @@ def _signal_process_group(process: Any, sig: int) -> None:
                 pass
 
 
+def _reap_started_processes(records: list[dict[str, Any]], *, grace_s: float = 1.0) -> bool:
+    """Stop a partially started group and confirm all owned groups are gone."""
+    for record in records:
+        _signal_process_group(record["process"], signal.SIGTERM)
+
+    deadline = time.monotonic() + max(0.0, grace_s)
+    while time.monotonic() < deadline:
+        if all(record["process"].poll() is not None for record in records):
+            return True
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+    for record in records:
+        if record["process"].poll() is None:
+            _signal_process_group(record["process"], signal.SIGKILL)
+
+    kill_deadline = time.monotonic() + max(0.0, grace_s)
+    while time.monotonic() < kill_deadline:
+        if all(record["process"].poll() is not None for record in records):
+            return True
+        time.sleep(min(0.05, max(0.0, kill_deadline - time.monotonic())))
+    return all(record["process"].poll() is not None for record in records)
+
+
 class NativeOfficialBackend:
     """Drop-in lifecycle backend used by OfficialRunManager without Docker."""
 
@@ -247,11 +275,14 @@ class NativeOfficialBackend:
 
     def _recover_groups(self) -> None:
         for manifest in (ROOT / "logs" / "rl").glob("official_run_*/native_group_*.json"):
+            records = []
+            opened_logs = []
             try:
                 payload = json.loads(manifest.read_text(encoding="utf-8"))
-                records = []
                 for item in payload["records"]:
                     log_path = Path(item["log"])
+                    log = log_path.open("ab", buffering=0) if log_path.exists() else open(os.devnull, "ab")
+                    opened_logs.append(log)
                     records.append({
                         "role": item["role"],
                         "process": _RecoveredProcess(
@@ -264,8 +295,28 @@ class NativeOfficialBackend:
                         "original_process_handle_class": item.get("process_handle_class"),
                         "launch_parent_pid": item.get("launch_parent_pid"),
                         "launch_command": item.get("launch_command"),
-                        "log": log_path.open("ab", buffering=0) if log_path.exists() else open(os.devnull, "ab"),
+                        "log": log,
                     })
+                # Manifests are also retained as terminal evidence. Do not let
+                # a fully exited group reserve its old ROS domain forever.
+                # _RecoveredProcess only reports exited after its process
+                # identity and isolated process group are both confirmed gone;
+                # uncertainty therefore keeps the group adopted.
+                if records and all(record["process"].poll() is not None for record in records):
+                    role = str(payload.get("Labels", {}).get("aicar.role", "unknown"))
+                    terminal = manifest.with_name(f"native_terminal_manifest_{role}.json")
+                    if terminal.exists():
+                        terminal = manifest.with_name(
+                            f"native_terminal_manifest_{role}-{uuid.uuid4().hex[:8]}.json"
+                        )
+                    # Preserve the manifest as terminal evidence and remove it
+                    # from the active recovery glob. This prevents later PID
+                    # reuse from reviving a conclusively dead owner.
+                    os.replace(manifest, terminal)
+                    for log in opened_logs:
+                        log.close()
+                    opened_logs.clear()
+                    continue
                 group = {
                     **payload, "records": records, "manifest": manifest,
                     "recovered_by_backend_instance_id": self.backend_instance_id,
@@ -280,6 +331,11 @@ class NativeOfficialBackend:
                         "Labels": {"aicar.run_id": run_id},
                     }
             except (OSError, ValueError, KeyError, TypeError):
+                for log in opened_logs:
+                    try:
+                        log.close()
+                    except OSError:
+                        pass
                 continue
 
     def _native_policy_command(self, command: list[str]) -> list[str]:
@@ -425,6 +481,9 @@ class NativeOfficialBackend:
             "--race-laps", value("AICAR_TRAIN_RACE_LAPS", "10"),
             "--warmup-laps", value("AICAR_TRAIN_WARMUP_LAPS", "0"),
             "--time-cost-per-simulated-second", value("AICAR_TRAIN_TIME_COST", "0"),
+            "--frontier-pace-bonus-strength", value("AICAR_TRAIN_FRONTIER_PACE_BONUS_STRENGTH", "0"),
+            "--frontier-pace-target-mps", value("AICAR_TRAIN_FRONTIER_PACE_TARGET_MPS", "6"),
+            "--centerline-shaping-strength", value("AICAR_TRAIN_CENTERLINE_SHAPING_STRENGTH", "0"),
             "--frontier-stagnation-s", value("AICAR_TRAIN_FRONTIER_STAGNATION_S", "5"),
             "--automatic-evaluation-mode", value("AICAR_AUTO_EVALUATION_MODE", "competitive"),
             "--cooperative-pause-enabled", value("AICAR_COOPERATIVE_PAUSE_ENABLED", "1"),
@@ -534,7 +593,9 @@ class NativeOfficialBackend:
                 if role == "api" or role.startswith("api-"):
                     index = 0 if role == "api" else int(role.rsplit("-", 1)[1])
                     relay_port = int((published_ports or {}).get("4568", 49152 + index))
-                    allocated_domain = self._allocate_ros_domain()
+                    domain_base = int(child_env.get("AICAR_ROS_DOMAIN_ID_BASE", "0"))
+                    expected_domain = domain_base + index
+                    allocated_domain = self._allocate_ros_domain(expected_domain)
                     allocated_port = self._allocate_devkit_port()
                     # The bridge and relay share the allocated domain, and the
                     # policy/evaluator process must join that same domain to
@@ -582,17 +643,20 @@ class NativeOfficialBackend:
                 else:
                     raise ValueError(f"unsupported native official role: {role}")
         except Exception:
-            if allocated_domain is not None:
-                self._reserved_ros_domains.discard(allocated_domain)
-            if allocated_port is not None:
-                self._reserved_devkit_ports.discard(allocated_port)
+            reaped = _reap_started_processes(records)
             for record in records:
-                process = record["process"]
-                _signal_process_group(process, signal.SIGTERM)
                 try:
                     record["log"].close()
                 except OSError:
                     pass
+            # Keep allocations reserved if a process group could not be
+            # confirmed dead; reusing its DDS domain or listening port would
+            # make the failed startup contaminate a later run.
+            if reaped:
+                if allocated_domain is not None:
+                    self._reserved_ros_domains.discard(allocated_domain)
+                if allocated_port is not None:
+                    self._reserved_devkit_ports.discard(allocated_port)
             raise
 
         identity = f"native-{run_id}-{role}-{uuid.uuid4().hex[:8]}"
@@ -619,7 +683,7 @@ class NativeOfficialBackend:
             self._persist_group(group)
         return identity
 
-    def _allocate_ros_domain(self) -> int:
+    def _allocate_ros_domain(self, expected_domain: int | None = None) -> int:
         base = int(os.environ.get("AICAR_ROS_DOMAIN_ID_BASE", "0"))
         if not 0 <= base <= 232:
             raise ValueError("AICAR_ROS_DOMAIN_ID_BASE must be between 0 and 232")
@@ -636,6 +700,18 @@ class NativeOfficialBackend:
                             except ValueError:
                                 continue
             used.update(self._reserved_ros_domains)
+            if expected_domain is not None:
+                if not 0 <= expected_domain <= 232:
+                    raise ValueError(
+                        f"expected ROS domain {expected_domain} is outside the supported range 0..232"
+                    )
+                if expected_domain in used:
+                    raise RuntimeError(
+                        f"ROS domain {expected_domain} required by this environment is already reserved; "
+                        "refusing to start its bridge on a different domain"
+                    )
+                self._reserved_ros_domains.add(expected_domain)
+                return expected_domain
             candidates = (*range(base, 233), *range(0, base))
             for domain in candidates:
                 if domain not in used:
@@ -754,6 +830,11 @@ class NativeOfficialBackend:
                         "log": relay_log})
 
         deadline = time.monotonic() + self.startup_timeout_s
+        ros_setup = (
+            f"set +u; source {shlex.quote(str(ros_setup_script))}; "
+            f"source {shlex.quote(str(self.ros_workspace / 'install' / 'setup.bash'))}; set -u; "
+            "ros2 node list --no-daemon"
+        )
         while time.monotonic() < deadline:
             for record in records:
                 process = record["process"]
@@ -766,11 +847,33 @@ class NativeOfficialBackend:
                         f"{record['role']} exited during startup with code {process.returncode}: {detail}"
                     )
             try:
-                with socket.create_connection(("127.0.0.1", relay_port), timeout=0.2):
-                    return
+                connection = socket.create_connection(("127.0.0.1", relay_port), timeout=0.2)
+                try:
+                    # Relay only starts serving after its Socket.IO connection
+                    # to Devkit succeeds. Also verify that the official ROS
+                    # node is discoverable in this environment's DDS domain;
+                    # an open socket alone cannot prove the publisher is on
+                    # the domain that the policy process will join.
+                    remaining = max(0.1, deadline - time.monotonic())
+                    probe = subprocess.run(
+                        ["bash", "-lc", ros_setup], cwd=ROOT, env=bridge_env,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, text=True,
+                        timeout=min(2.0, remaining), check=False,
+                    )
+                    if _devkit_node_is_visible(probe.returncode, probe.stdout):
+                        return
+                finally:
+                    connection.close()
             except OSError:
-                time.sleep(0.2)
-        raise TimeoutError(f"native official bridge for environment {index} did not listen on port {relay_port}")
+                pass
+            except subprocess.TimeoutExpired:
+                pass
+            time.sleep(0.2)
+        raise TimeoutError(
+            f"native official bridge for environment {index} did not become DDS-visible "
+            f"on ROS domain {domain} before startup deadline (relay port {relay_port})"
+        )
 
     def _run_prelaunch_neutral_barrier(
         self, *, run_id: str, run_dir: Path, environment_count: int,

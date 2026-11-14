@@ -131,3 +131,58 @@ Interpretation:
 - Current PPO telemetry: `logs/rl/official_run_4a394bb27503/latest_telemetry.json`
 - Current PPO lap/collision events: `logs/rl/official_run_4a394bb27503/race_metrics.jsonl`
 - Current PPO trainer log: `logs/rl/official_run_4a394bb27503/hub_train.log`
+
+## Standard PPO CUDA continuation — 2026-11-06
+
+The conservative standard-PPO continuation was resumed from the verified BC
+lineage, moved to the CUDA learner, and stopped cleanly after optimizer update
+45 at global step 782,190. Cooperative pause remained disabled for the
+six-environment learner; post-update checkpoints and immutable snapshots were
+still written.
+
+The branch recorded 984 valid laps and 90 clean episodes with zero collision
+events. Its best single lap was 31.881 seconds and its best clean ten-lap time
+was 328.266 seconds (32.827 seconds/lap). Recent laps were approximately
+33.6 seconds on average, indicating a speed plateau under the speed-neutral
+official training reward.
+
+Checkpoint held before the reward experiment:
+
+`logs/rl/official_run_4b01951505ec/checkpoints/post_optimizer_update_00000045_steps_000000782190.zip`
+
+SHA-256:
+
+`f91077ad8e235ef709517778e47c9365756f380681db726f9744b76d8fd9667d`
+
+## Frontier-pace reward experiment
+
+The next independent continuation uses the same checkpoint and enables the
+existing quadratic frontier-pace multiplier at the conservative strength
+`0.5`. The target frontier pace remains 6 m/s and the source remains the
+episode-average frontier speed. This caps the progress multiplier at 1.5x
+while keeping the fixed 200-point collision/failure penalty above the maximum
+shaped progress budget.
+
+## Controlled reward sweep from PPO step 966,510 — 2026-11-06
+
+Run `11e94f5da0ce` was stopped before the reward sweep. All candidates use its
+last fully audited update 15 checkpoint at step 966,510 (SHA-256
+`8527be92e5e08b2d9edd323b47c0846e87cac6574f620f7681b540b5a7c215b5`).
+The final stop-time save includes a partial rollout and is not the common seed.
+
+Final telemetry for the stopped pace-0.5 branch recorded 402 valid laps,
+36 clean episodes, a best single lap of 29.5034 seconds and best ten-lap
+time 312.9752 seconds (31.2975 seconds/lap). Earlier chat conclusions that
+this reward had failed were premature; the branch improved before stopping.
+These whole-branch bests are not necessarily measurements of the exact
+966,510-step checkpoint, which receives its own fresh baseline evaluation.
+
+See `docs/reward-sweep-966510.md` for the six reward combinations, identical
+250-point safety penalties, zero centerline shaping, 53,248-transition budgets,
+evaluation gates and eventual unbounded six-environment winner continuation.
+
+The first baseline probe (`9d9900fefa134686`) used the existing competition
+training-probe protocol and collided before a lap; it is excluded from Porto
+reward rankings. Porto practice diagnostics now accept authenticated PPO
+descendants as well as BC. The corrected shared baseline is evaluation
+`2b978ace17ff4964` (three fresh attempts of three laps each).

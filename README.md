@@ -1,5 +1,8 @@
 # AutoDRIVE RoboRacer — AiCar
 
+**Replaying the Porto checkpoint on your PC?** Start with the
+[Porto PC handoff](docs/porto-pc-handoff.md) for the model bundle and comparison steps.
+
 **Moving to a Linux GPU server?** Follow [the migration guide](docs/server-migration.md)
 to transfer uncommitted code and trained artifacts, run without a physical monitor,
 and access Mission Control over SSH.
@@ -285,10 +288,12 @@ Render a clip after a run (MP4 requires ffmpeg; GIF uses Pillow):
 ```bash
 python scripts/render_trajectory_video.py \
   runs/<run>/trajectory_clips/clip-000001.jsonl \
-  --map-image simulator/maps/porto/occupancy/Porto.pgm \
-  --map-yaml simulator/maps/porto/occupancy/Porto.yaml \
   --output comparison.mp4
 ```
+
+New clips record their `map_id`, so the renderer resolves the repository map
+automatically. `--map-image` and `--map-yaml` remain available as overrides
+for custom or externally stored maps.
 
 Use `--tail 100` to show only each car's recent trail. The JSONL files can
 also be analyzed directly to compare policies without rendering a video.

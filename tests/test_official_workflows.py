@@ -465,7 +465,7 @@ def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_pa
     backend.ros_workspace = tmp_path / "ros_ws"
     backend._reserved_ros_domains = set()
     backend._reserved_devkit_ports = set()
-    backend._allocate_ros_domain = lambda: 7
+    backend._allocate_ros_domain = lambda expected_domain: expected_domain
     backend._allocate_devkit_port = lambda: 4577
     backend.startup_timeout_s = 1
     backend._evaluation_command = lambda _env: ["evaluate"]
@@ -480,10 +480,12 @@ def test_native_backend_starts_policy_process_in_its_allocated_ros_domain(tmp_pa
 
     (tmp_path / "logs" / "rl" / "official_run_a1b2c3d4e5f6").mkdir(parents=True)
     with patch("src.layer4.hub.native_official_backend.subprocess.Popen", side_effect=fake_popen), \
-         patch("src.layer4.hub.native_official_backend.socket.create_connection", return_value=MagicMock()):
+         patch("src.layer4.hub.native_official_backend.socket.create_connection", return_value=MagicMock()), \
+         patch("src.layer4.hub.native_official_backend.subprocess.run",
+               return_value=SimpleNamespace(returncode=0, stdout="/autodrive_bridge\n")):
         backend.create_official_run_container(
             run_id="a1b2c3d4e5f6", role="api", image="unused", network_name="unused",
-            env=["AICAR_MODE=evaluate"], metadata_labels={
+            env=["AICAR_MODE=evaluate", "ROS_DOMAIN_ID=7", "AICAR_ROS_DOMAIN_ID_BASE=7"], metadata_labels={
                 "aicar.output_dir": str(tmp_path / "logs" / "rl" / "official_run_a1b2c3d4e5f6"),
                 "aicar.run_id": "a1b2c3d4e5f6", "aicar.role": "api",
             },

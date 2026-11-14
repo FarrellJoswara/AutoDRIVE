@@ -229,10 +229,37 @@ class HubTelemetryCallback(BaseCallback):
         self._clock_lap_count_by_env: Dict[int, int] = {}
         self._clock_lap_comparisons: List[Dict[str, float]] = []
         self._trajectory_recorder = None
+        self._reward_experiment_recorder = None
+        if self.run_dir is not None and os.environ.get(
+            "AICAR_REWARD_EXPERIMENT_METRICS", ""
+        ).strip() == "1":
+            from src.layer3.reward_experiment_metrics import RewardExperimentMetricsRecorder
+
+            self._reward_experiment_recorder = RewardExperimentMetricsRecorder(
+                self.run_dir, self.run_id, self.runtime
+            )
         if self.run_dir is not None:
             from src.layer3.trajectory_recorder import TrajectoryRecorder
+            map_id = os.environ.get("AICAR_MAP_ID", "").strip() or "none"
+            try:
+                config = json.loads((self.run_dir / "config.json").read_text(encoding="utf-8"))
+                map_id = str(config.get("env_kwargs", {}).get("map_id", map_id))
+            except (OSError, TypeError, ValueError):
+                pass
+            if map_id == "none":
+                for metadata_path in sorted(self.run_dir.glob("native_group_api*.json")):
+                    try:
+                        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        labels = metadata.get("group_manifest_snapshot", {}).get("labels", {})
+                        candidate = str(labels.get("aicar.map_id", "")).strip()
+                        if candidate:
+                            map_id = candidate
+                            break
+                    except (OSError, TypeError, ValueError):
+                        continue
             self._trajectory_recorder = TrajectoryRecorder(
                 self.run_dir / "trajectory_clips",
+                map_id=map_id,
                 interval_s=_env_float("AICAR_TRAJECTORY_INTERVAL_S", 300.0),
                 duration_s=_env_float("AICAR_TRAJECTORY_DURATION_S", 20.0),
             )
@@ -477,6 +504,8 @@ class HubTelemetryCallback(BaseCallback):
             self._last_fleet_t = now
             fleet = self._build_fleet_sample(infos, dones, episode_collision_counts)
             if fleet is not None:
+                if self._reward_experiment_recorder is not None:
+                    self._reward_experiment_recorder.record(fleet)
                 if self._trajectory_recorder is not None:
                     self._trajectory_recorder.submit(fleet)
                 self._pub.enqueue(fleet)
@@ -617,22 +646,40 @@ class HubTelemetryCallback(BaseCallback):
                         "env_id": i,
                         "pose": None,
                         "yaw": None,
-                        "collision": False,
+                        "collision": bool(info.get("collision_event", False)),
                         "collision_count": episode_collision_counts[i]
                         if i < len(episode_collision_counts)
                         else 0,
-                        "speed": None,
+                        "speed": info.get("watch_speed_mps", info.get("true_speed")),
+                        "speed_source": (
+                            "lidar_estimate" if "watch_speed_mps" in info
+                            else "wheel_encoder" if self.runtime == "official"
+                            else "simulator"
+                        ),
+                        "v_long": info.get("v_long"),
+                        "throttle_command": info.get("throttle_command", info.get("throttle")),
+                        "steering_command": info.get("steering_command", info.get("steering")),
                         "episode_return": None,
-                        "frontier_line": None,
-                        "frontier_progress_m": None,
-                        "current_progress_line": None,
-                        "current_progress_m": None,
-                        "signed_route_delta_m": None,
-                        "current_route_speed_mps": None,
-                        "route_projection_valid": False,
-                        "reward_components": None,
-                        "time_since_frontier_push_s": None,
-                        "frontier_speed_mps": None,
+                        "frontier_line": info.get("frontier_line"),
+                        "frontier_progress_m": info.get("frontier_progress_m"),
+                        "current_progress_line": info.get("current_progress_line"),
+                        "current_progress_m": info.get("current_progress_m"),
+                        "signed_route_delta_m": info.get("signed_route_delta_m"),
+                        "current_route_speed_mps": info.get("current_route_speed_mps"),
+                        "route_projection_valid": info.get("route_projection_valid"),
+                        "reward_components": info.get("reward_components"),
+                        "neutral_fallback_count": info.get("neutral_fallback_count"),
+                        "neutral_fallback_diagnostic": info.get("neutral_fallback_diagnostic"),
+                        "command_expiry_diagnostic": info.get("command_expiry_diagnostic"),
+                        "_fault_fields_available": any(
+                            key in info for key in (
+                                "neutral_fallback_count",
+                                "neutral_fallback_diagnostic",
+                                "command_expiry_diagnostic",
+                            )
+                        ),
+                        "time_since_frontier_push_s": info.get("time_since_frontier_push_s"),
+                        "frontier_speed_mps": info.get("frontier_speed_mps"),
                         **_lap_fields(info),
                         "lidar": [],
                         "reset": True,
@@ -690,8 +737,8 @@ class HubTelemetryCallback(BaseCallback):
                     else "simulator"
                 ),
                 "v_long": info.get("v_long"),
-                "throttle_command": info.get("throttle_command"),
-                "steering_command": info.get("steering_command"),
+                "throttle_command": info.get("throttle_command", info.get("throttle")),
+                "steering_command": info.get("steering_command", info.get("steering")),
                 "episode_return": (
                     float(self._ep_returns[i])
                     if self._ep_returns is not None and i < len(self._ep_returns)
@@ -706,6 +753,16 @@ class HubTelemetryCallback(BaseCallback):
                 "current_route_speed_mps": info.get("current_route_speed_mps"),
                 "route_projection_valid": bool(info.get("route_projection_valid", False)),
                 "reward_components": info.get("reward_components"),
+                "neutral_fallback_count": info.get("neutral_fallback_count"),
+                "neutral_fallback_diagnostic": info.get("neutral_fallback_diagnostic"),
+                "command_expiry_diagnostic": info.get("command_expiry_diagnostic"),
+                "_fault_fields_available": any(
+                    key in info for key in (
+                        "neutral_fallback_count",
+                        "neutral_fallback_diagnostic",
+                        "command_expiry_diagnostic",
+                    )
+                ),
                 "time_since_frontier_push_s": info.get("time_since_frontier_push_s"),
                 "frontier_speed_mps": info.get("frontier_speed_mps"),
                 **_lap_fields(info),

@@ -59,3 +59,41 @@ def close_official_vec_env(env):
     for remote in env.remotes:
         remote.close()
     env.closed = True
+
+
+def wait_for_official_sensor_readiness(env, *, timeout_s: float = 180.0, poll_s: float = 0.25):
+    """Wait for every simulator domain to deliver fresh required callbacks.
+
+    Subprocess workers are polled against the deadline before responses are
+    collected, so a dead or wedged domain cannot hang training startup.
+    """
+    import time
+
+    if timeout_s <= 0 or poll_s <= 0:
+        raise ValueError("readiness timeouts must be positive")
+    deadline = time.monotonic() + timeout_s
+    last = []
+    while time.monotonic() < deadline:
+        if callable(getattr(env, "env_method_async", None)) and getattr(env, "remotes", None):
+            env.env_method_async("get_sensor_readiness")
+            remaining = max(0.0, deadline - time.monotonic())
+            responses_ready = True
+            for remote in env.remotes:
+                if not remote.poll(max(0.0, deadline - time.monotonic())):
+                    responses_ready = False
+                    break
+            if not responses_ready:
+                raise TimeoutError(
+                    "official sensor readiness RPC timed out; last per-domain diagnostics: "
+                    + __import__("json").dumps(last, sort_keys=True)
+                )
+            last = env.env_method_wait()
+        else:
+            last = env.env_method("get_sensor_readiness")
+        if last and all(bool(item.get("ready")) for item in last):
+            return last
+        time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+    raise TimeoutError(
+        "official sensor readiness timed out; per-domain callback diagnostics: "
+        + __import__("json").dumps(last, sort_keys=True)
+    )

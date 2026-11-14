@@ -1,0 +1,76 @@
+{
+  "trace_disabled": {
+    "evaluation_id": "2f8d0b8d9a9c426a",
+    "checkpoint_sha256": "eb0b921a7133ff0ee20cc33564c15f5d93aa2d11ca43d473cd7043a455e6b70f",
+    "attempts": [
+      {
+        "run_id": "2f68147fe50d",
+        "stop_reason": "collision_detected",
+        "laps": [
+          38.31760025024414
+        ],
+        "control_ms": 74.57031297963113,
+        "camera_age_ms": 27.298626250059097,
+        "incoming_frame_interval_ms": 67.26126253604889,
+        "relay_devkit_roundtrip_ms": 13.848321497440338,
+        "relay_response_to_next_frame_ms": 53.190333008766174
+      },
+      {
+        "run_id": "a1b1d5a49638",
+        "stop_reason": "collision_detected",
+        "laps": [],
+        "control_ms": 76.04281301610172,
+        "camera_age_ms": 29.809911612647813,
+        "incoming_frame_interval_ms": 67.87157100439072,
+        "relay_devkit_roundtrip_ms": 14.465194046497345,
+        "relay_response_to_next_frame_ms": 52.9886554479599
+      },
+      {
+        "run_id": "02bc45f90b18",
+        "stop_reason": "collision_detected",
+        "laps": [],
+        "control_ms": 70.45917556388304,
+        "camera_age_ms": 28.974746787551815,
+        "incoming_frame_interval_ms": 67.93452298641205,
+        "relay_devkit_roundtrip_ms": 14.685405969619751,
+        "relay_response_to_next_frame_ms": 53.97202408313751
+      }
+    ]
+  },
+  "trace_500": {
+    "evaluation_id": "03fff842fa844ed4",
+    "checkpoint_sha256": "eb0b921a7133ff0ee20cc33564c15f5d93aa2d11ca43d473cd7043a455e6b70f",
+    "attempts": [
+      {
+        "run_id": "e8843ae0e395",
+        "stop_reason": "collision_detected",
+        "laps": [],
+        "control_ms": 73.40799493249506,
+        "camera_age_ms": 27.594709951829696,
+        "incoming_frame_interval_ms": 65.41443997621536,
+        "relay_devkit_roundtrip_ms": 13.816252529621124,
+        "relay_response_to_next_frame_ms": 52.046839475631714
+      },
+      {
+        "run_id": "f2bcae3c3a3d",
+        "stop_reason": "collision_detected",
+        "laps": [],
+        "control_ms": 70.65738004166633,
+        "camera_age_ms": 26.55951224582931,
+        "incoming_frame_interval_ms": 65.39391648769379,
+        "relay_devkit_roundtrip_ms": 13.014886021614075,
+        "relay_response_to_next_frame_ms": 53.032465517520905
+      },
+      {
+        "run_id": "13d8e71e5852",
+        "stop_reason": "collision_detected",
+        "laps": [],
+        "control_ms": 73.19947890937328,
+        "camera_age_ms": 29.183625703217924,
+        "incoming_frame_interval_ms": 67.56839692592621,
+        "relay_devkit_roundtrip_ms": 14.48990797996521,
+        "relay_response_to_next_frame_ms": 53.534106969833374
+      }
+    ]
+  }
+}

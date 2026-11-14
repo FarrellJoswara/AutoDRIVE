@@ -8,6 +8,7 @@ the documented reset topic; neither capability is enabled for policy runtime.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -58,6 +59,9 @@ class OfficialRaceEnv(gym.Env):
         training_mode: bool = False,
         training_timeout_s: float = 600.0,
         training_time_cost_per_simulated_second: float = 0.0,
+        training_frontier_pace_bonus_strength: float = 0.0,
+        training_frontier_pace_target_mps: float = 6.0,
+        training_centerline_shaping_strength: float = 0.0,
         training_collision_penalty_magnitude: float = 200.0,
         training_collision_reward_percent: float = 0.0,
         training_lap_completion_reward: float = 0.0,
@@ -80,12 +84,23 @@ class OfficialRaceEnv(gym.Env):
 
         self.training_mode = bool(training_mode)
         self._pause_cancel_event = None
+        pace_strength = float(training_frontier_pace_bonus_strength)
+        pace_target = float(training_frontier_pace_target_mps)
+        if not math.isfinite(pace_target) or not 0.5 <= pace_target <= 10.0:
+            raise ValueError("frontier pace target must be finite and in [0.5, 10] m/s")
+        centerline_strength = float(training_centerline_shaping_strength)
+        if not math.isfinite(pace_strength) or pace_strength < 0:
+            raise ValueError("frontier pace bonus strength must be finite and non-negative")
+        if not math.isfinite(centerline_strength) or centerline_strength < 0:
+            raise ValueError("centerline shaping strength must be finite and non-negative")
+        max_positive_reward = max(120.0, 100.0 * (1.0 + pace_strength) + centerline_strength)
         if self.training_mode and (
-            float(training_collision_penalty_magnitude) <= 120.0
-            or float(training_failure_penalty) <= 120.0
+            float(training_collision_penalty_magnitude) <= max_positive_reward
+            or float(training_failure_penalty) <= max_positive_reward
         ):
             raise ValueError(
-                "official terminal penalties must exceed the 120-point progress and centerline reward cap"
+                "official terminal penalties must strictly exceed the maximum positive frontier and centerline reward budget "
+                f"({max_positive_reward:g})"
             )
         if self.training_mode and float(training_lap_completion_reward) != 0.0:
             raise ValueError(
@@ -110,6 +125,8 @@ class OfficialRaceEnv(gym.Env):
         self.training_time_cost_per_simulated_second = max(
             0.0, float(training_time_cost_per_simulated_second)
         )
+        self.training_frontier_pace_bonus_strength = pace_strength
+        self.training_frontier_pace_target_mps = pace_target
         self.training_collision_penalty_magnitude = max(0.0, float(training_collision_penalty_magnitude))
         self.training_collision_reward_percent = max(0.0, float(training_collision_reward_percent))
         self.training_lap_completion_reward = max(0.0, float(training_lap_completion_reward))
@@ -156,11 +173,10 @@ class OfficialRaceEnv(gym.Env):
         )
         self.warmup_laps = int(warmup_laps)
         self.race_laps = int(race_laps)
-        # Normalize per-metre reward so the full configured lap target pays at
-        # most 100 points. A 200-point terminal penalty therefore keeps every
-        # collision/stall life negative while making each safe metre valuable.
+        # Normalize per-metre base reward so the full target pays at most 100
+        # before the bounded pace multiplier and centerline potential.
         self.training_frontier_reward_cap = 100.0
-        self.training_centerline_potential_cap = 20.0
+        self.training_centerline_potential_cap = centerline_strength
         target_frontier_m = (
             self.route_progress.length_m * self.race_laps
             if self.training_mode and self.route_progress is not None else 0.0
@@ -291,7 +307,7 @@ class OfficialRaceEnv(gym.Env):
                     1.0, initial_lateral / self.route_progress.max_lateral_m
                 )
                 self._centerline_potential = (
-                    -getattr(self, "training_centerline_potential_cap", 20.0)
+                    -getattr(self, "training_centerline_potential_cap", 0.0)
                     * lateral_ratio * lateral_ratio
                 )
         self._last_snap = snap
@@ -333,6 +349,11 @@ class OfficialRaceEnv(gym.Env):
     def get_transport_status(self) -> Dict[str, Any]:
         """Expose read-only sensor freshness for supervised pause handshakes."""
         return self.racer.transport_status()
+
+    def get_sensor_readiness(self) -> Dict[str, Any]:
+        """Expose callback-level sensor readiness for bounded startup checks."""
+        status = self.racer.transport_status()
+        return {"ready": bool(status.get("topic_fresh")), **status}
 
     def step(self, action: np.ndarray):
         throttle, steering = transform_policy_action(
@@ -574,7 +595,7 @@ class OfficialRaceEnv(gym.Env):
                         1.0, lateral / self.route_progress.max_lateral_m
                     )
                     next_potential = (
-                        -getattr(self, "training_centerline_potential_cap", 20.0)
+                        -getattr(self, "training_centerline_potential_cap", 0.0)
                         * lateral_ratio * lateral_ratio
                     )
                     centerline_shaping = next_potential - self._centerline_potential
@@ -636,10 +657,10 @@ class OfficialRaceEnv(gym.Env):
                 steering=float(steering),
                 cfg=RewardConfig(
                     route_progress_scale=reward_per_m,
-                    frontier_pace_target_mps=6.0,
+                    frontier_pace_target_mps=self.training_frontier_pace_target_mps,
                     # Fixed distance reward and a bounded life budget make
                     # surviving farther better than an early terminal crash.
-                    frontier_pace_bonus_strength=0.0,
+                    frontier_pace_bonus_strength=self.training_frontier_pace_bonus_strength,
                     frontier_pace_source="episode_average",
                     time_penalty_per_second=self.training_time_cost_per_simulated_second,
                     backward_speed_penalty_scale=self.training_backward_speed_penalty_scale,
@@ -689,7 +710,7 @@ class OfficialRaceEnv(gym.Env):
             info["training_frontier_reward_cap"] = reward_cap
             info["training_centerline_shaping"] = centerline_shaping
             info["training_centerline_potential_cap"] = (
-                getattr(self, "training_centerline_potential_cap", 20.0)
+                getattr(self, "training_centerline_potential_cap", 0.0)
             )
             info["training_success"] = training_goal_reached
             info["episode_won"] = training_goal_reached

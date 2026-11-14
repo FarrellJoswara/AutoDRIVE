@@ -581,6 +581,9 @@ def train_official(
     race_laps: int = 10,
     warmup_laps: int = 0,
     time_cost_per_simulated_second: float = 0.0,
+    frontier_pace_bonus_strength: float = 0.0,
+    frontier_pace_target_mps: float = 6.0,
+    centerline_shaping_strength: float = 0.0,
     collision_penalty_magnitude: float = 200.0,
     collision_reward_percent: float = 0.0,
     lap_completion_reward: float = 0.0,
@@ -729,8 +732,20 @@ def train_official(
         raise ValueError("plateau_window_episodes must be >= 2 and plateau_patience >= 1")
     if min(plateau_min_timesteps, max_duration_hours) < 0:
         raise ValueError("plateau_min_timesteps and max_duration_hours must be non-negative")
-    if collision_penalty_magnitude <= 120 or failed_episode_penalty <= 120:
-        raise ValueError("official terminal penalties must exceed the 120-point progress and centerline reward cap")
+    if not math.isfinite(float(frontier_pace_bonus_strength)) or frontier_pace_bonus_strength < 0:
+        raise ValueError("frontier pace bonus strength must be finite and non-negative")
+    if not math.isfinite(float(frontier_pace_target_mps)) or not 0.5 <= frontier_pace_target_mps <= 10.0:
+        raise ValueError("frontier pace target must be finite and in [0.5, 10] m/s")
+    if not math.isfinite(float(centerline_shaping_strength)) or centerline_shaping_strength < 0:
+        raise ValueError("centerline shaping strength must be finite and non-negative")
+    max_positive_reward = max(
+        120.0, 100.0 * (1.0 + frontier_pace_bonus_strength) + centerline_shaping_strength
+    )
+    if collision_penalty_magnitude <= max_positive_reward or failed_episode_penalty <= max_positive_reward:
+        raise ValueError(
+            "official terminal penalties must strictly exceed the maximum positive frontier and centerline reward "
+            f"budget ({max_positive_reward:g})"
+        )
     if lap_completion_reward != 0:
         raise ValueError("official lap-learning reward uses verified lap completion as a terminal goal, not a lap bonus")
 
@@ -758,7 +773,10 @@ def train_official(
         OperatorStopCallback,
         PostOptimizerAuditCallback,
     )
-    from src.layer3.official_envs import make_official_vec_env, close_official_vec_env
+    from src.layer3.official_envs import (
+        make_official_vec_env, close_official_vec_env,
+        wait_for_official_sensor_readiness,
+    )
     from src.layer3.hub_callback import maybe_hub_callback
     from src.layer3.official_policy import resume_ppo_checkpoint
     from src.layer3.train import make_model
@@ -1032,11 +1050,22 @@ def train_official(
             training_backward_speed_penalty_scale=backward_speed_penalty_scale,
             training_failure_reward_percent=episode_failure_reward_percent,
             training_time_cost_per_simulated_second=time_cost_per_simulated_second,
+            training_frontier_pace_bonus_strength=frontier_pace_bonus_strength,
+            training_frontier_pace_target_mps=frontier_pace_target_mps,
+            training_centerline_shaping_strength=centerline_shaping_strength,
             training_collision_penalty_magnitude=collision_penalty_magnitude,
             training_collision_reward_percent=collision_reward_percent,
             training_lap_completion_reward=lap_completion_reward,
             training_frontier_stagnation_s=frontier_stagnation_s,
             frontier_path=selected_frontier_path,
+        )
+        sensor_readiness = wait_for_official_sensor_readiness(
+            vec_env, timeout_s=timeout_s
+        )
+        print(
+            "Official ROS sensor readiness verified before startup work: "
+            + json.dumps(sensor_readiness, sort_keys=True),
+            flush=True,
         )
         if behavior_cloning_collect_only:
             from src.layer3.behavior_cloning import (
@@ -1559,18 +1588,19 @@ def train_official(
             "training_only_reward": {
                 "time_cost_per_simulated_second": time_cost_per_simulated_second,
                 "elapsed_time_source": "ROS LaserScan header timestamps when advancing; monotonic receipt-clock fallback",
-                "positive_reward": "new high-water route frontier distance; normalized to a 100-point cap at the configured lap target; no pace multiplier or lap bonus",
+                "positive_reward": "new high-water route frontier distance; normalized to a 100-point base cap at the configured lap target and multiplied by the pace factor; no lap bonus",
                 "frontier_progress_per_m": "100 / (frontier_route_length_m * race_laps)",
                 "frontier_reward_cap": 100.0,
-                "centerline_potential_cap": 20.0,
-                "maximum_shaped_progress_return": 120.0,
-                "pace_target_mps": 6.0,
-                "pace_bonus_strength": 0.0,
-                "pace_source": "disabled; each new frontier metre has fixed reward",
+                "centerline_potential_cap": centerline_shaping_strength,
+                "maximum_frontier_reward": 100.0 * (1.0 + frontier_pace_bonus_strength),
+                "maximum_shaped_progress_return": max_positive_reward,
+                "pace_target_mps": frontier_pace_target_mps,
+                "pace_bonus_strength": frontier_pace_bonus_strength,
+                "pace_source": "episode average frontier speed, clamped to target pace; squared normalized pace scales the multiplier",
                 "backward_speed_penalty_per_m": backward_speed_penalty_scale,
                 "backward_speed_deadband_mps": 0.1,
-                "collision_cost": f"{collision_penalty_magnitude:g} fixed; no frontier clawback; maximum shaped progress return is 120",
-                "non_collision_failure_cost": f"{failed_episode_penalty:g} fixed; no frontier clawback; maximum shaped progress return is 120",
+                "collision_cost": f"{collision_penalty_magnitude:g} fixed; no frontier clawback; maximum shaped progress return is {max_positive_reward:g}",
+                "non_collision_failure_cost": f"{failed_episode_penalty:g} fixed; no frontier clawback; maximum shaped progress return is {max_positive_reward:g}",
                 "frontier_stall": f"end and reset life after {frontier_stagnation_s:g} seconds without frontier progress; apply the configured fixed non-collision failure penalty",
                 "slip_penalty": 0.0,
                 "steering_change_penalty": 0.0,
@@ -1858,6 +1888,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--race-laps", type=int, default=10)
     parser.add_argument("--warmup-laps", type=int, default=0)
     parser.add_argument("--time-cost-per-simulated-second", type=float, default=0.0)
+    parser.add_argument("--frontier-pace-bonus-strength", type=float, default=0.0)
+    parser.add_argument("--frontier-pace-target-mps", type=float, default=6.0)
+    parser.add_argument("--centerline-shaping-strength", type=float, default=0.0)
     parser.add_argument("--collision-penalty-magnitude", type=float, default=200.0)
     parser.add_argument("--collision-reward-percent", type=float, default=0.0)
     parser.add_argument("--lap-completion-reward", type=float, default=0.0)
@@ -1927,6 +1960,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         race_laps=args.race_laps,
         warmup_laps=args.warmup_laps,
         time_cost_per_simulated_second=args.time_cost_per_simulated_second,
+        frontier_pace_bonus_strength=args.frontier_pace_bonus_strength,
+        frontier_pace_target_mps=args.frontier_pace_target_mps,
+        centerline_shaping_strength=args.centerline_shaping_strength,
         collision_penalty_magnitude=args.collision_penalty_magnitude,
         collision_reward_percent=args.collision_reward_percent,
         lap_completion_reward=args.lap_completion_reward,

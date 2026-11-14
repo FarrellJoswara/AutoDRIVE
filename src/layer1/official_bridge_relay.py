@@ -15,7 +15,10 @@ import argparse
 import asyncio
 import inspect
 import json
+import os
 import signal
+import stat
+import time
 from typing import Any, Dict, Optional
 
 
@@ -61,6 +64,7 @@ class OfficialBridgeRelay:
         devkit_url: str = "http://127.0.0.1:4567",
         response_timeout_s: float = 2.0,
         connect_timeout_s: float = 30.0,
+        port: int = 4568,
     ) -> None:
         import socketio
         from socketio import packet as socketio_packet
@@ -69,6 +73,35 @@ class OfficialBridgeRelay:
         self._socketio_packet = socketio_packet
         self.response_timeout_s = float(response_timeout_s)
         self.connect_timeout_s = float(connect_timeout_s)
+        # The sentinel is intentionally host local and checked only once. This
+        # lets a replay relay opt in without changing the environment inherited
+        # from a long-running hub.
+        uid = os.getuid()
+        sentinel = f"/tmp/aicar-relay-timing-{uid}.enable"
+        sentinel_enabled = False
+        try:
+            sentinel_stat = os.lstat(sentinel)
+            sentinel_enabled = (
+                stat.S_ISREG(sentinel_stat.st_mode)
+                and sentinel_stat.st_uid == uid
+                and not (sentinel_stat.st_mode & 0o077)
+            )
+        except OSError:
+            pass
+        self._timing_file = None
+        self._timing_frame_id = 0
+        self._timing_enabled = os.environ.get("AICAR_RELAY_TIMING") == "1" or sentinel_enabled
+        if self._timing_enabled:
+            timing_path = f"/tmp/aicar-relay-timing-{uid}-{int(port)}-{os.getpid()}.jsonl"
+            try:
+                fd = os.open(timing_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                self._timing_file = os.fdopen(fd, "a", encoding="utf-8", buffering=1)
+            except OSError as exc:
+                self._timing_enabled = False
+                print(json.dumps({"event": "relay_timing_unavailable", "error": str(exc)}), flush=True)
+            else:
+                print(json.dumps({"event": "relay_timing_enabled", "path": timing_path,
+                                  "clock": "time.monotonic_ns"}), flush=True)
         self.sio = socketio.AsyncServer(
             async_mode="aiohttp",
             cors_allowed_origins="*",
@@ -76,6 +109,7 @@ class OfficialBridgeRelay:
         )
         self.upstream = socketio.AsyncClient(reconnection=False)
         self.pending: Dict[str, asyncio.Future[Any]] = {}
+        self._pending_timing: Dict[str, tuple[int, str]] = {}
         self._warned_missing: set[tuple[str, ...]] = set()
         self._forwarded_frames = 0
         self._commands_received = 0
@@ -105,8 +139,11 @@ class OfficialBridgeRelay:
             # The official bridge broadcasts its actuator response to connected
             # Socket.IO clients. Only forward the command to the pending sim.
             self._commands_received += 1
-            for response in tuple(self.pending.values()):
+            for sid, response in tuple(self.pending.items()):
                 if not response.done():
+                    timing = self._pending_timing.get(sid)
+                    if timing is not None:
+                        self._timing_row(timing[0], timing[1], "devkit_reply_received")
                     response.set_result(command)
                 if self._commands_received == 1:
                     print(json.dumps({
@@ -141,6 +178,11 @@ class OfficialBridgeRelay:
 
         @self.sio.on("Bridge")
         async def on_simulator_frame(sid: str, payload: Any) -> None:
+            frame_id = 0
+            if self._timing_enabled:
+                self._timing_frame_id += 1
+                frame_id = self._timing_frame_id
+                self._timing_row(frame_id, sid, "simulator_frame_received")
             missing = missing_devkit_fields(payload)
             if missing:
                 self._incomplete_frames += 1
@@ -156,6 +198,8 @@ class OfficialBridgeRelay:
                 return
 
             response = asyncio.get_running_loop().create_future()
+            if self._timing_enabled:
+                self._pending_timing[sid] = (frame_id, sid)
             self.pending[sid] = response
             try:
                 # Do not decode, rewrite, or inspect values. The official Devkit
@@ -174,14 +218,22 @@ class OfficialBridgeRelay:
                         "event": "first_complete_frame_forwarded",
                         "keys": sorted(payload),
                     }), flush=True)
+                if self._timing_enabled:
+                    self._timing_row(frame_id, sid, "forward_emit_start")
                 await self.upstream.emit("Bridge", payload)
+                if self._timing_enabled:
+                    self._timing_row(frame_id, sid, "forward_emit_complete")
                 if self._forwarded_frames == 1:
                     print(json.dumps({
                         "event": "upstream_emit_returned",
                     }), flush=True)
                 command = await asyncio.wait_for(response, timeout=self.response_timeout_s)
                 if isinstance(command, dict):
+                    if self._timing_enabled:
+                        self._timing_row(frame_id, sid, "simulator_response_emit_start")
                     await self.sio.emit("Bridge", data=command, to=sid)
+                    if self._timing_enabled:
+                        self._timing_row(frame_id, sid, "simulator_response_emit_complete")
                     session = self._simulator_sessions.get(sid)
                     if session is not None:
                         session["devkit_commands"] += 1
@@ -207,6 +259,7 @@ class OfficialBridgeRelay:
             finally:
                 if self.pending.get(sid) is response:
                     self.pending.pop(sid, None)
+                self._pending_timing.pop(sid, None)
 
         # AutoDRIVE's Unity client can emit its first Bridge event before it
         # sends the Socket.IO namespace-connect packet. AutoDRIVE's own Race
@@ -223,6 +276,17 @@ class OfficialBridgeRelay:
             return result
 
         self.sio.eio.handlers["message"] = compat_message
+
+    def _timing_row(self, frame_id: int, sid: str, stage: str, **details: Any) -> None:
+        if self._timing_file is None:
+            return
+        row = {"frame_id": frame_id, "sid": sid, "stage": stage,
+               "monotonic_ns": time.monotonic_ns(), **details}
+        try:
+            self._timing_file.write(json.dumps(row, separators=(",", ":")) + "\n")
+        except OSError:
+            # Timing must never interrupt or delay relay behavior on a disk error.
+            self._timing_file = None
 
     async def _ensure_socketio_namespace_for_event(self, eio_sid: str, data: Any) -> None:
         try:
@@ -359,6 +423,9 @@ class OfficialBridgeRelay:
             finally:
                 await self.upstream.disconnect()
                 await runner.cleanup()
+                if self._timing_file is not None:
+                    self._timing_file.close()
+                    self._timing_file = None
 
 
 def main() -> int:
@@ -377,6 +444,7 @@ def main() -> int:
     relay = OfficialBridgeRelay(
         response_timeout_s=args.response_timeout_s,
         connect_timeout_s=args.connect_timeout_s,
+        port=args.port,
     )
     asyncio.run(relay.serve(args.host, args.port, args.devkit_url))
     return 0

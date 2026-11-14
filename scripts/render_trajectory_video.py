@@ -19,15 +19,57 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 def load_clip(path: Path):
+    metadata = {}
     samples = []
     with path.open(encoding="utf-8") as stream:
         for line in stream:
             item = json.loads(line)
-            if item.get("kind") == "sample":
+            if item.get("kind") == "trajectory_clip":
+                metadata = item
+            elif item.get("kind") == "sample":
                 samples.append(item)
     if not samples:
         raise ValueError(f"clip contains no samples: {path}")
-    return samples
+    return metadata, samples
+
+
+def resolve_map(map_id: str, clip_path: Path | None = None):
+    if (not map_id or map_id == "none") and clip_path is not None:
+        run_dir = clip_path.parent.parent
+        for metadata_path in sorted(run_dir.glob("native_group_api*.json")):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                labels = metadata.get("group_manifest_snapshot", {}).get("labels", {})
+                candidate = str(labels.get("aicar.map_id", "")).strip()
+                if candidate:
+                    map_id = candidate
+                    break
+            except (OSError, TypeError, ValueError):
+                continue
+        if not map_id or map_id == "none":
+            track_profile = run_dir / "track_profile.json"
+            try:
+                source = json.loads(track_profile.read_text(encoding="utf-8")).get("metadata", {}).get("source_centerline", "")
+                candidate = Path(source).parts
+                if "maps" in candidate:
+                    map_id = candidate[candidate.index("maps") + 1]
+            except (OSError, TypeError, ValueError):
+                pass
+    if not map_id or map_id == "none":
+        return None, None
+    maps_root = Path(__file__).resolve().parents[1] / "simulator" / "maps" / map_id / "occupancy"
+    yaml_files = sorted(maps_root.glob("*.yaml")) + sorted(maps_root.glob("*.yml"))
+    if not yaml_files:
+        raise FileNotFoundError(f"could not find occupancy YAML for map '{map_id}'")
+    yaml_path = yaml_files[0]
+    text = yaml_path.read_text(encoding="utf-8")
+    match = re.search(r"^image:\s*(\S+)", text, re.MULTILINE)
+    candidates = [maps_root / match.group(1)] if match else []
+    candidates += [maps_root / name for name in (f"{map_id}.pgm", f"{map_id}.png", f"{map_id}.jpg", "preview.png")]
+    image_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if image_path is None:
+        raise FileNotFoundError(f"could not find occupancy image for map '{map_id}'")
+    return image_path, yaml_path
 
 
 def _map_transform(yaml_path: Path, image: Image.Image, crop_origin=(0, 0), original_height=None):
@@ -42,12 +84,40 @@ def _map_transform(yaml_path: Path, image: Image.Image, crop_origin=(0, 0), orig
 
 
 def render(path: Path, output: Path, fps: int, tail: int, map_image: Path | None = None, map_yaml: Path | None = None) -> None:
-    samples = load_clip(path)
+    metadata, samples = load_clip(path)
     env_ids = sorted({int(car["env_id"]) for row in samples for car in row.get("cars", [])})
     if not env_ids:
         raise ValueError("clip contains no cars")
+    if map_image is None and map_yaml is None:
+        map_image, map_yaml = resolve_map(str(metadata.get("map_id", "none")), path)
     if (map_image is None) != (map_yaml is None):
         raise ValueError("--map-image and --map-yaml must be supplied together")
+    alignment = None
+    if map_image is not None:
+        try:
+            map_meta = json.loads((map_image.parent / "meta.json").read_text(encoding="utf-8"))
+            alignment = map_meta.get("official_world_alignment")
+        except (OSError, TypeError, ValueError):
+            alignment = None
+
+    def to_map_pose(pose):
+        if not alignment:
+            return [float(pose[0]), float(pose[1])]
+        c = math.cos(float(alignment.get("rotation_rad", 0.0)))
+        s = math.sin(float(alignment.get("rotation_rad", 0.0)))
+        x = float(pose[0]) - float(alignment.get("translation_x_m", 0.0))
+        z = float(pose[1]) - float(alignment.get("translation_z_m", 0.0))
+        return [c * x + s * z, -s * x + c * z]
+
+    def to_map_yaw(yaw):
+        if yaw is None or not alignment:
+            return yaw
+        c = math.cos(float(alignment.get("rotation_rad", 0.0)))
+        s = math.sin(float(alignment.get("rotation_rad", 0.0)))
+        dx = math.sin(float(yaw))
+        dz = math.cos(float(yaw))
+        return math.atan2(c * dx + s * dz, -s * dx + c * dz)
+
     base = Image.open(map_image).convert("RGB") if map_image else None
     original_map_height = base.height if base is not None else None
     crop_origin = (0, 0)
@@ -79,7 +149,7 @@ def render(path: Path, output: Path, fps: int, tail: int, map_image: Path | None
                 Image.Resampling.NEAREST,
             )
         transform = lambda pose: tuple(round(value * display_scale) for value in raw_transform(pose))
-    all_points = [car["pose"] for row in samples for car in row.get("cars", []) if car.get("pose")]
+    all_points = [to_map_pose(car["pose"]) for row in samples for car in row.get("cars", []) if car.get("pose")]
     if not all_points:
         raise ValueError("clip contains no car poses")
     if base is None:
@@ -111,7 +181,7 @@ def render(path: Path, output: Path, fps: int, tail: int, map_image: Path | None
             draw.text((base.width + 12, 14), "LAP TELEMETRY", fill="white", font=font)
             for car in sample.get("cars", []):
                 env = int(car["env_id"])
-                pose = car.get("pose")
+                pose = to_map_pose(car.get("pose")) if car.get("pose") else None
                 if not pose or len(pose) < 2:
                     continue
                 point = transform(pose)
@@ -122,7 +192,7 @@ def render(path: Path, output: Path, fps: int, tail: int, map_image: Path | None
                     draw.line(visible, fill=color, width=2)
                 radius = 5
                 draw.ellipse((point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius), fill=color, outline="white", width=1)
-                yaw = car.get("yaw")
+                yaw = to_map_yaw(car.get("yaw"))
                 if yaw is not None:
                     heading = (point[0] + int(14 * math.sin(float(yaw))), point[1] - int(14 * math.cos(float(yaw))))
                     draw.line((point, heading), fill="white", width=2)

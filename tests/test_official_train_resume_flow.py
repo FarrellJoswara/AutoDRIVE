@@ -65,6 +65,18 @@ class _ResumeModel:
 class _FakeEnv:
     num_envs = 1
 
+    def env_method(self, method_name, *args, **kwargs):
+        # Mirror the readiness RPC exposed by the real VecEnv workers while
+        # keeping this resume-flow test independent of ROS and SB3 internals.
+        assert method_name == "get_sensor_readiness"
+        return [{
+            "ready": True,
+            "required_topics": ["scan", "imu", "throttle", "steering", "left_encoder", "right_encoder", "camera"],
+            "callback_count": {},
+            "topic_age_s": {},
+            "bridge_identity": {"ros_domain_id": "test"},
+        }]
+
 
 @pytest.mark.parametrize(
     "profile,expected_preset,expected_learning_rate",

@@ -183,6 +183,7 @@ def rollout(
     )
     recorder = TrajectoryRecorder(
         trajectory_root,
+        map_id=str(env_kwargs.get("map_id") or os.environ.get("AICAR_MAP_ID", "none")),
         interval_s=trajectory_interval,
         duration_s=trajectory_duration,
     )

@@ -256,6 +256,7 @@ def test_inherited_native_lifecycle_uses_local_relay_and_keeps_linux_backend(tmp
         def poll(self): return self.returncode
         def terminate(self): self.returncode = 0
     monkeypatch.setattr("src.layer4.hub.native_official_backend.subprocess.Popen", lambda args, **kw: calls.append((args, kw)) or Proc(args))
+    monkeypatch.setattr("src.layer4.hub.native_official_backend.subprocess.run", lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout="/autodrive_bridge\n"))
     monkeypatch.setattr("src.layer4.hub.native_official_backend.socket.create_connection", lambda *_a, **_k: MagicMock(__enter__=lambda _s: None, __exit__=lambda *_a: None))
     monkeypatch.setattr(backend, "_read_process_identity", lambda _pid: None)
     monkeypatch.setattr(backend, "_persist_group", lambda _group: None)

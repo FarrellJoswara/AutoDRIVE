@@ -8,7 +8,7 @@ from typing import Literal, Optional
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.layer4.settings import ROOT
 
@@ -123,15 +123,33 @@ class OfficialTrainSettings(BaseModel):
     race_laps: int = Field(default=10, ge=1, le=100)
     warmup_laps: int = Field(default=0, ge=0, le=20)
     time_cost_per_simulated_second: float = Field(default=0.0, ge=0)
-    collision_penalty_magnitude: float = Field(default=200.0, ge=121)
+    frontier_pace_bonus_strength: float = Field(default=0.0, ge=0, le=1)
+    frontier_pace_target_mps: float = Field(default=6.0, ge=0.5, le=10.0, allow_inf_nan=False)
+    centerline_shaping_strength: float = Field(default=0.0, ge=0, le=20)
+    collision_penalty_magnitude: float = Field(default=200.0, gt=0)
     collision_reward_percent: float = Field(default=0.0, ge=0, le=100)
     lap_completion_reward: float = Field(default=0.0, ge=0, le=0)
-    failed_episode_penalty: float = Field(default=200.0, ge=121)
+    failed_episode_penalty: float = Field(default=200.0, gt=0)
     backward_speed_penalty_scale: float = Field(default=10.0, ge=0)
     episode_failure_reward_percent: float = Field(default=0.0, ge=0, le=100)
     observation_profile: Literal[
         "official_sensors", "official_sensors_history", "official_sensors_camera"
     ] = Field(default_factory=_default_observation_profile)
+
+    @model_validator(mode="after")
+    def validate_reward_budget(self) -> "OfficialTrainSettings":
+        strengths = (self.frontier_pace_bonus_strength, self.centerline_shaping_strength)
+        if any(not math.isfinite(float(value)) or value < 0 for value in strengths):
+            raise ValueError("reward strengths must be finite and non-negative")
+        reward_budget = max(
+            120.0, 100.0 * (1.0 + self.frontier_pace_bonus_strength) + self.centerline_shaping_strength
+        )
+        if self.collision_penalty_magnitude <= reward_budget or self.failed_episode_penalty <= reward_budget:
+            raise ValueError(
+                "terminal penalties must strictly exceed the maximum positive frontier and centerline reward "
+                f"budget ({reward_budget:g})"
+            )
+        return self
     steering_action_scale: float = Field(default=1.0, ge=0, le=1)
     straight_throttle_gain: float = Field(default=1.0, ge=1, le=2)
     straight_throttle_steering_threshold: float = Field(default=0.15, ge=0, le=1)
@@ -186,6 +204,9 @@ class OfficialTrainSettings(BaseModel):
             "AICAR_TRAIN_RACE_LAPS": str(self.race_laps),
             "AICAR_TRAIN_WARMUP_LAPS": str(self.warmup_laps),
             "AICAR_TRAIN_TIME_COST": str(self.time_cost_per_simulated_second),
+            "AICAR_TRAIN_FRONTIER_PACE_BONUS_STRENGTH": str(self.frontier_pace_bonus_strength),
+            "AICAR_TRAIN_FRONTIER_PACE_TARGET_MPS": str(self.frontier_pace_target_mps),
+            "AICAR_TRAIN_CENTERLINE_SHAPING_STRENGTH": str(self.centerline_shaping_strength),
             "AICAR_TRAIN_COLLISION_PENALTY_MAGNITUDE": str(self.collision_penalty_magnitude),
             "AICAR_TRAIN_COLLISION_REWARD_PERCENT": str(self.collision_reward_percent),
             "AICAR_TRAIN_LAP_COMPLETION_REWARD": str(self.lap_completion_reward),
@@ -289,21 +310,25 @@ def load_official_train_settings(path: Path = OFFICIAL_SETTINGS_PATH) -> Officia
                 "episode_failure_reward_percent": 0.0,
                 "frontier_stagnation_s": 5.0,
             })
+        reward_budget = max(
+            120.0,
+            100.0 * (1.0 + float(raw.get("frontier_pace_bonus_strength", 0.0)))
+            + float(raw.get("centerline_shaping_strength", 0.0)),
+        )
         incompatible_reward_settings = (
-            float(raw.get("collision_penalty_magnitude", 200.0)) <= 120.0
-            or float(raw.get("failed_episode_penalty", 200.0)) <= 120.0
+            float(raw.get("collision_penalty_magnitude", 200.0)) <= reward_budget
+            or float(raw.get("failed_episode_penalty", 200.0)) <= reward_budget
             or float(raw.get("collision_reward_percent", 0.0)) > 0.0
             or float(raw.get("episode_failure_reward_percent", 0.0)) > 0.0
             or float(raw.get("lap_completion_reward", 0.0)) > 0.0
         )
-        # A previous run config can carry 100-point penalties and 100% return
-        # clawback. The current safe-progress objective needs a fixed cost above
-        # its bounded 120-point progress and centerline budget, with progress
-        # left credited to the life that earned it.
-        if float(raw.get("collision_penalty_magnitude", 200.0)) <= 120.0:
-            raw["collision_penalty_magnitude"] = 200.0
-        if float(raw.get("failed_episode_penalty", 200.0)) <= 120.0:
-            raw["failed_episode_penalty"] = 200.0
+        # Older configs may have terminal costs below the active bounded
+        # frontier and centerline reward budget.
+        migration_penalty = max(200.0, reward_budget + 1.0)
+        if float(raw.get("collision_penalty_magnitude", 200.0)) <= reward_budget:
+            raw["collision_penalty_magnitude"] = migration_penalty
+        if float(raw.get("failed_episode_penalty", 200.0)) <= reward_budget:
+            raw["failed_episode_penalty"] = migration_penalty
         if incompatible_reward_settings:
             raw["time_cost_per_simulated_second"] = 0.0
             raw["collision_reward_percent"] = 0.0
