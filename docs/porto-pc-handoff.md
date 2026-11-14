@@ -1,5 +1,25 @@
 # Controlled Porto evaluation on a PC
 
+## PPO restart point after the PC tests
+
+Resume the next PPO run from the **966,510-step** save (optimizer update 15).
+This file is already included as an ancestor in the checkpoint bundle:
+
+```text
+logs/rl/official_run_11e94f5da0ce/checkpoints/post_optimizer_update_00000015_steps_000000966510.zip
+SHA-256 8527be92e5e08b2d9edd323b47c0846e87cac6574f620f7681b540b5a7c215b5
+```
+
+The reported PC replays gave this save nine clean laps and zero collisions,
+with lap times of 30.4–34.5 s. The 1,089,390-step save also completed nine
+clean laps but was slower (32.8–37.1 s). The 1,195,886-step save collided
+in all three attempts. The PC comparison also measured slower control at
+1,195,886, so it doesn't isolate the contribution of training from timing.
+
+Select the 966,510-step ZIP as the resume model when starting a fresh PPO run.
+Keep the later checkpoints and evaluation records for comparison. The
+instructions below reproduce the 1,195,886-step diagnostic for that study.
+
 The public release asset is `porto-pc-checkpoint.zip`. Install it into a fresh
 checkout using the repository installer below; it verifies the bundle manifest
 and relocates the checkpoint and its run metadata under `logs/rl`.
